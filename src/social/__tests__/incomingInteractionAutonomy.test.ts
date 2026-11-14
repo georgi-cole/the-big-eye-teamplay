@@ -1,0 +1,1008 @@
+import { describe, expect, it } from 'vitest'
+import {
+  ELIGIBLE_PHASES,
+  chooseIncomingInteractionType,
+  evaluateIncomingInteractionEnqueueDecision,
+  scheduleIncomingInteractionsForPhase,
+  type AutonomyContext,
+  type AutonomyStore,
+} from '../incomingInteractionAutonomy'
+import { getInteractionDedupeReason } from '../incomingInteractionScheduler'
+import { createRealityAlliance } from '../reality/relationshipForms'
+import { createDirectedRelationship, createInitialRealityDomainState } from '../reality/state'
+import { addRealityFact, learnRealityFact } from '../reality/knowledge'
+import type { RealityFact } from '../reality/types'
+import { makeIntelMemory } from '../intelligenceSystem'
+import type { IncomingInteraction, ScheduledIncomingInteraction } from '../types'
+
+function buildContext(overrides: Partial<AutonomyContext> = {}): AutonomyContext {
+  return {
+    phase: 'week_start',
+    week: 2,
+    dramaMode: true,
+    relationships: {
+      ally: { user: { affinity: 65, tags: [] } },
+      enemy: { user: { affinity: -55, tags: ['betrayal'] } },
+      nominee: { user: { affinity: 30, tags: [] } },
+    },
+    socialMemory: {},
+    players: [
+      { id: 'user', name: 'You', status: 'loh', isUser: true },
+      { id: 'ally', name: 'Ally', status: 'active' },
+      { id: 'enemy', name: 'Enemy', status: 'active' },
+      { id: 'nominee', name: 'Nominee', status: 'nominated' },
+    ],
+    nomineeIds: [],
+    votes: {},
+    ...overrides,
+  }
+}
+
+function makeInteraction(overrides: Partial<IncomingInteraction> = {}): IncomingInteraction {
+  return {
+    id: 'i-1',
+    fromId: 'ally',
+    type: 'check_in',
+    text: 'Checking in.',
+    payload: { scenarioKey: 'generic_check_in', phase: 'week_start' },
+    createdAt: 100,
+    createdWeek: 2,
+    expiresAtWeek: 3,
+    read: false,
+    requiresResponse: false,
+    resolved: false,
+    ...overrides,
+  }
+}
+
+function buildStore(context: AutonomyContext): AutonomyStore & {
+  actions: unknown[]
+  social: {
+    incomingInteractions: IncomingInteraction[]
+    scheduledIncomingInteractions: ScheduledIncomingInteraction[]
+    incomingInteractionDelivery: {
+      lastDeliveryPhase: string | null
+      lastDeliveryWeek: number | null
+      deliveredThisPhase: number
+    }
+    relationships: AutonomyContext['relationships']
+    socialMemory: NonNullable<AutonomyContext['socialMemory']>
+  }
+} {
+  const actions: unknown[] = []
+  const social = {
+    incomingInteractions: [] as IncomingInteraction[],
+    scheduledIncomingInteractions: [] as ScheduledIncomingInteraction[],
+    incomingInteractionDelivery: {
+      lastDeliveryPhase: null,
+      lastDeliveryWeek: null,
+      deliveredThisPhase: 0,
+    },
+    relationships: context.relationships,
+    socialMemory: context.socialMemory ?? {},
+  }
+
+  return {
+    actions,
+    social,
+    dispatch(action: unknown) {
+      actions.push(action)
+      if (
+        typeof action === 'object' &&
+        action !== null &&
+        'type' in action &&
+        'payload' in action &&
+        (action as { type?: string }).type === 'social/scheduleIncomingInteraction'
+      ) {
+        social.scheduledIncomingInteractions.push(
+          (action as { payload: ScheduledIncomingInteraction }).payload
+        )
+      }
+      return action
+    },
+    getState() {
+      return {
+        social,
+        game: {
+          players: context.players,
+          week: context.week,
+          seed: context.seed ?? 0,
+          lohId: context.lohId ?? null,
+          nomineeIds: context.nomineeIds ?? [],
+          posWinnerId: context.posWinnerId ?? null,
+          povSavedId: context.povSavedId ?? null,
+          prevHohId: context.prevHohId ?? null,
+          votes: context.votes ?? {},
+          pendingEviction: context.pendingEvictionId
+            ? { evicteeId: context.pendingEvictionId }
+            : null,
+          doubleEviction: { weekActive: context.isDoubleEviction === true },
+          specialVeto: { activeType: context.specialVeto ?? null },
+        },
+      }
+    },
+  }
+}
+
+describe('incomingInteractionAutonomy thematic routing', () => {
+  it.each([false, true])(
+    'keeps a known tip separate from a relationship dispute (%s)',
+    (dispute) => {
+      const reality = createInitialRealityDomainState()
+      const fact: RealityFact = {
+        id: 'fact:blue-and-aria',
+        sourceEventId: 'event:blue-and-aria',
+        propositionType: 'SECRET_MEETING',
+        subjectIds: ['blue', 'aria'],
+        value: true,
+        day: 4,
+        phase: 'social_2',
+        visibility: 'PAIR_ONLY',
+        participantIds: ['blue', 'aria'],
+        witnessIds: ['dex'],
+        viewerVisible: false,
+        publicVisible: false,
+        juryVisible: false,
+      }
+      addRealityFact(reality, fact)
+      learnRealityFact(reality, {
+        ownerId: 'dex',
+        factId: fact.id,
+        memory: makeIntelMemory({
+          ownerId: 'dex',
+          fact,
+          sourceType: 'DIRECT',
+          sourceChain: ['blue'],
+          confidence: 0.9,
+          day: 4,
+          phase: 'social_2',
+        }),
+      })
+      if (dispute) {
+        const edge = createDirectedRelationship('dex', 'user', -20)
+        edge.resentment = 50
+        reality.relationships.dex = { user: edge }
+        reality.relationshipAutonomy.provocateurSeason = {
+          targetId: 'user',
+          roles: [],
+          observedThroughSequence: 0,
+          lastSceneDay: 4,
+        }
+      }
+      const context = buildContext({
+        phase: 'social_2',
+        week: 4,
+        dramaMode: dispute,
+        players: [
+          { id: 'user', name: 'You', status: 'active', isUser: true },
+          { id: 'dex', name: 'Dex', status: 'active' },
+          { id: 'blue', name: 'Blue', status: 'active' },
+          { id: 'aria', name: 'Aria', status: 'active' },
+        ],
+        relationships: { dex: { user: { affinity: -32, tags: [] } } },
+        reality,
+        random: () => 0,
+      })
+      const store = buildStore(context)
+      scheduleIncomingInteractionsForPhase(context.phase, store, context)
+      const entry = store.social.scheduledIncomingInteractions.find(
+        ({ interaction }) => interaction.fromId === 'dex'
+      )?.interaction
+      if (dispute) {
+        expect(entry?.payload).toMatchObject({
+          scenarioKey: 'relationship_frustration_follow_up',
+          relationshipIntent: 'CONFRONT',
+        })
+        expect(entry?.payload?.intelFactId).toBeUndefined()
+        expect(entry?.text).not.toMatch(/compare notes in private|backup plan|collecting votes/i)
+      } else {
+        expect(entry?.payload).toMatchObject({
+          scenarioKey: 'private_intel_lead',
+          intelFactId: fact.id,
+          subjectId: 'blue',
+        })
+        expect(entry?.text).toContain('Blue and Aria')
+        expect(entry?.payload?.relationshipBeatId).toBeUndefined()
+      }
+    }
+  )
+
+  it('does not add Vox-only Final 3 contacts to Classic', () => {
+    const context = buildContext({ phase: 'final3_comp1' })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('final3_comp1', store, context)
+
+    expect(store.social.scheduledIncomingInteractions).toEqual([])
+  })
+
+  it('routes an at-risk hubmate to a plea before the LOH locks nominations', () => {
+    const context = buildContext({
+      phase: 'nominations',
+      lohId: 'user',
+      nomineeIds: [],
+      relationships: { nominee: { user: { affinity: -60, tags: [] } } },
+    })
+
+    expect(chooseIncomingInteractionType('nominee', 'user', context)).toBe('nomination_plea')
+    expect(
+      chooseIncomingInteractionType('nominee', 'user', { ...context, nomineeIds: ['nominee'] })
+    ).not.toBe('nomination_plea')
+  })
+
+  it('lets a nominee react directly to the human LOH after nominations are revealed', () => {
+    const context = buildContext({
+      phase: 'nomination_results',
+      lohId: 'user',
+      nomineeIds: ['nominee'],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('nomination_results', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'nominee'
+    )?.interaction
+    expect(interaction?.type).toBe('check_in')
+    expect(interaction?.payload?.scenarioKey).toBe('nominee_understands_loh')
+  })
+
+  it.each([
+    ['nomination_results', 'INITIAL'],
+    ['pos_ceremony_results', 'REPLACEMENT'],
+  ] as const)(
+    'recognizes an unavoidable %s nomination in the incoming reaction',
+    (phase, stage) => {
+      const context = buildContext({
+        phase,
+        lohId: 'user',
+        nomineeIds: ['nominee'],
+        replacementNomineeIds: stage === 'REPLACEMENT' ? ['nominee'] : [],
+        gameState: {
+          nominationDecisionReasons: {
+            forced: {
+              week: 2,
+              lohId: 'user',
+              nomineeId: 'nominee',
+              stage,
+              primaryReason: 'FORCED_BY_RULES',
+            },
+          },
+        } as unknown as AutonomyContext['gameState'],
+        random: () => 0,
+      })
+      const store = buildStore(context)
+
+      scheduleIncomingInteractionsForPhase(phase, store, context)
+
+      const interaction = store.social.scheduledIncomingInteractions.find(
+        (entry) => entry.interaction.fromId === 'nominee'
+      )?.interaction
+      expect(interaction?.payload?.scenarioKey).toBe('unavoidable_nominee_reaction')
+      expect(interaction?.text).toMatch(/only choice|no other|rule|safety/i)
+      expect(interaction?.text).not.toMatch(/you chose|you put me up|your move/i)
+    }
+  )
+
+  it('attributes an automatic last-place nomination to the rule before LOH conflict logic', () => {
+    const context = buildContext({
+      phase: 'nomination_results',
+      lohId: 'user',
+      nomineeIds: ['nominee'],
+      autoNomineeId: 'nominee',
+      relationships: {
+        nominee: { user: { affinity: -70, tags: ['betrayal', 'target'] } },
+      },
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('nomination_results', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'nominee'
+    )?.interaction
+    expect(interaction?.type).toBe('check_in')
+    expect(interaction?.payload?.scenarioKey).toBe('automatic_nominee_reaction')
+    expect(interaction?.text).toMatch(/finishing last|competition result|finished last/i)
+    expect(interaction?.text).not.toMatch(/you nominated me|you put me|your move/i)
+  })
+
+  it('routes nominees to deal offers when the player holds veto power', () => {
+    const context = buildContext({
+      phase: 'pos_results',
+      players: [
+        { id: 'user', name: 'You', status: 'pos', isUser: true },
+        { id: 'nominee', name: 'Nominee', status: 'nominated' },
+      ],
+      nomineeIds: ['nominee'],
+      posWinnerId: 'user',
+    })
+
+    expect(chooseIncomingInteractionType('nominee', 'user', context)).toBe('deal_offer')
+  })
+
+  it('has an AI Safety winner consult the human LOH before the ceremony', () => {
+    const context = buildContext({
+      phase: 'pos_results',
+      lohId: 'user',
+      posWinnerId: 'holder',
+      relationships: { holder: { user: { affinity: 10, tags: [] } } },
+      players: [
+        { id: 'user', name: 'You', status: 'loh', isUser: true },
+        { id: 'holder', name: 'Holder', status: 'pos' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('pos_results', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions[0]?.interaction
+    expect(interaction?.type).toBe('deal_offer')
+    expect(interaction?.payload?.scenarioKey).toBe('safety_holder_consults_loh')
+  })
+  it('has the AI LOH consult a human Safety holder with the real nominees', () => {
+    const context = buildContext({
+      phase: 'pos_results',
+      seed: 0,
+      lohId: 'loh',
+      posWinnerId: 'user',
+      nomineeIds: ['nomineeA', 'nomineeB'],
+      relationships: { loh: { user: { affinity: 5, tags: [] } } },
+      players: [
+        { id: 'user', name: 'You', status: 'pos', isUser: true },
+        { id: 'loh', name: 'Leader', status: 'loh' },
+        { id: 'nomineeA', name: 'Nominee A', status: 'nominated' },
+        { id: 'nomineeB', name: 'Nominee B', status: 'nominated' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('pos_results', store, context)
+
+    const consultation = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'loh'
+    )?.interaction
+    expect(consultation?.type).toBe('deal_offer')
+    expect(consultation?.payload?.scenarioKey).toBe('loh_consults_safety_holder')
+    expect(consultation?.payload?.nomineeNames).toEqual(['Nominee A', 'Nominee B'])
+    expect(consultation?.payload?.preferredSafetyAdvice).toBe('hold')
+  })
+
+  it('does not route nominee vote pitches to the human LOH', () => {
+    const context = buildContext({
+      phase: 'live_vote',
+      lohId: 'user',
+      nomineeIds: ['nominee'],
+      players: [
+        { id: 'user', name: 'You', status: 'loh', isUser: true },
+        { id: 'nominee', name: 'Nominee', status: 'nominated' },
+      ],
+      relationships: { nominee: { user: { affinity: 20, tags: [] } } },
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('live_vote', store, context)
+
+    expect(
+      store.social.scheduledIncomingInteractions.some(
+        (entry) => entry.interaction.payload?.scenarioKey === 'live_vote_pitch'
+      )
+    ).toBe(false)
+  })
+
+  it('routes allied co-nominees to a check-in instead of asking each other for a vote', () => {
+    const context = buildContext({
+      phase: 'live_vote',
+      nomineeIds: ['user', 'nominee'],
+      relationships: {
+        nominee: { user: { affinity: 90, tags: ['alliance'] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'nominated', isUser: true },
+        { id: 'nominee', name: 'Dex', status: 'nominated' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('live_vote', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'nominee'
+    )?.interaction
+    expect(interaction?.type).toBe('check_in')
+    expect(interaction?.payload?.scenarioKey).toBe('co_nominee_check_in')
+    expect(interaction?.text).toMatch(/both|neither|block|danger/i)
+    expect(interaction?.text).not.toMatch(/need your vote|keep me|cast your vote/i)
+  })
+
+  it('lets an allied nominee campaign for the human vote without claiming a ballot', () => {
+    const players = [
+      { id: 'user', name: 'You', status: 'active', isUser: true },
+      { id: 'nominee', name: 'Ali', status: 'nominated' },
+    ]
+    const reality = createInitialRealityDomainState()
+    const pact = createRealityAlliance(reality, {
+      id: 'nominee-campaign-pact',
+      founderIds: ['user'],
+      memberIds: ['nominee'],
+      purpose: 'Stand together',
+      at: { day: 4, phase: 'social_1' },
+      kind: 'PACT',
+    })
+    pact.status = 'ACTIVE'
+    const context = buildContext({
+      phase: 'live_vote',
+      week: 4,
+      lohId: 'enemy',
+      nomineeIds: ['nominee'],
+      players,
+      reality,
+      relationships: { nominee: { user: { affinity: 70, tags: ['alliance'] } } },
+      gameState: {
+        players,
+        lohId: 'enemy',
+        nomineeIds: ['nominee'],
+        posWinnerId: null,
+        seed: 11,
+        week: 4,
+      } as unknown as NonNullable<AutonomyContext['gameState']>,
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('live_vote', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'nominee'
+    )?.interaction
+    expect(interaction?.payload?.scenarioKey).toBe('live_vote_pitch')
+    expect(interaction?.text).toMatch(/support|keep|stay|vote/i)
+    expect(interaction?.text).not.toMatch(/my vote|i am voting|i'm voting|still voting/i)
+  })
+
+  it('uses a concrete plan check-in for a pact member when the human is LOH', () => {
+    const reality = createInitialRealityDomainState()
+    const pact = createRealityAlliance(reality, {
+      id: 'loh-plan-pact',
+      founderIds: ['user'],
+      memberIds: ['ally'],
+      purpose: 'Share strategy',
+      at: { day: 2, phase: 'social_1' },
+      kind: 'PACT',
+    })
+    pact.status = 'ACTIVE'
+    const context = buildContext({
+      phase: 'social_1',
+      lohId: 'user',
+      players: [
+        { id: 'user', name: 'You', status: 'loh', isUser: true },
+        { id: 'ally', name: 'Rae', status: 'active' },
+      ],
+      relationships: { ally: { user: { affinity: 70, tags: ['alliance'] } } },
+      reality,
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('social_1', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'ally'
+    )?.interaction
+    expect(interaction?.type).toBe('check_in')
+    expect(interaction?.payload?.scenarioKey).toBe('allied_loh_plan_check_in')
+    expect(interaction?.text).toMatch(/this week|plan|nominations|targets/i)
+    expect(interaction?.text).not.toMatch(/promise.*vote|vote.*promise|protect me/i)
+  })
+
+  it('queues both nominee pitches when the human holds Safety, while delivery remains paced', () => {
+    const context = buildContext({
+      phase: 'pos_results',
+      posWinnerId: 'user',
+      nomineeIds: ['nomineeA', 'nomineeB'],
+      relationships: {
+        nomineeA: { user: { affinity: 0, tags: [] } },
+        nomineeB: { user: { affinity: 0, tags: [] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'pos', isUser: true },
+        { id: 'nomineeA', name: 'Nominee A', status: 'nominated' },
+        { id: 'nomineeB', name: 'Nominee B', status: 'nominated' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('pos_results', store, context)
+
+    const scheduled = store.social.scheduledIncomingInteractions
+    expect(scheduled).toHaveLength(2)
+    expect(
+      scheduled.every((entry) => entry.interaction.payload?.scenarioKey === 'nominee_veto_pitch')
+    ).toBe(true)
+    expect(new Set(scheduled.map((entry) => entry.interaction.text)).size).toBe(2)
+  })
+
+  it('keeps alliance-tagged relationships from turning hostile', () => {
+    const context = buildContext({
+      phase: 'loh_results',
+      lohId: 'user',
+      relationships: {
+        ally: { user: { affinity: -20, tags: ['alliance'] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'loh', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+    })
+
+    expect(chooseIncomingInteractionType('ally', 'user', context)).not.toBe('warning')
+    expect(chooseIncomingInteractionType('ally', 'user', context)).not.toBe('snide_remark')
+  })
+
+  it('keeps betrayal ahead of survivor gratitude after an eviction vote', () => {
+    const context = buildContext({
+      phase: 'eviction_results',
+      nomineeIds: ['ally', 'evictee'],
+      pendingEvictionId: 'evictee',
+      relationships: {
+        ally: { user: { affinity: 55, tags: ['alliance', 'betrayal'] } },
+        evictee: { user: { affinity: 0, tags: [] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'nominated' },
+        { id: 'evictee', name: 'Evictee', status: 'nominated' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('eviction_results', store, context)
+
+    const interaction = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.fromId === 'ally'
+    )?.interaction
+    expect(interaction?.type).toBe('warning')
+    expect(interaction?.payload?.scenarioKey).toBe('betrayal_warning')
+  })
+
+  it('does not repropose an alliance when a formal Reality alliance already exists', () => {
+    const reality = createInitialRealityDomainState()
+    createRealityAlliance(reality, {
+      id: 'formal-pact',
+      founderIds: ['user'],
+      memberIds: ['ally'],
+      purpose: 'Mutual protection',
+      at: { day: 2, phase: 'week_start' },
+    })
+    const context = buildContext({
+      phase: 'week_start',
+      reality,
+      relationships: {
+        ally: { user: { affinity: 80, tags: [] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+      random: () => 0,
+    })
+
+    expect(chooseIncomingInteractionType('ally', 'user', context)).not.toBe('alliance_proposal')
+
+    const store = buildStore(context)
+    scheduleIncomingInteractionsForPhase('week_start', store, context)
+    expect(
+      store.social.scheduledIncomingInteractions.some(
+        (entry) => entry.interaction.type === 'alliance_proposal'
+      )
+    ).toBe(false)
+  })
+
+  it('does not let a stale alliance tag keep a dormant Reality alliance active', () => {
+    const reality = createInitialRealityDomainState()
+    const alliance = createRealityAlliance(reality, {
+      id: 'dormant-pact',
+      founderIds: ['user'],
+      memberIds: ['ally'],
+      purpose: 'Old protection deal',
+      at: { day: 2, phase: 'week_start' },
+    })
+    alliance.status = 'DORMANT'
+    const context = buildContext({
+      phase: 'week_start',
+      reality,
+      relationships: {
+        ally: { user: { affinity: 80, tags: ['alliance'] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+      random: () => 0,
+    })
+
+    expect(chooseIncomingInteractionType('ally', 'user', context)).toBe('alliance_proposal')
+  })
+
+  it('authors clear terms for an AI personal pact offer', () => {
+    const context = buildContext({
+      phase: 'week_start',
+      relationships: { ally: { user: { affinity: 80, tags: [] } } },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('week_start', store, context)
+
+    const offer = store.social.scheduledIncomingInteractions.find(
+      (entry) => entry.interaction.type === 'alliance_proposal'
+    )?.interaction
+    expect(offer?.payload?.personalPactPlan).toMatch(/share strategic reads/i)
+  })
+
+  it('recognizes a renewed live pact after an older pact dissolved', () => {
+    const reality = createInitialRealityDomainState()
+    const oldPact = createRealityAlliance(reality, {
+      id: 'old-pact',
+      founderIds: ['user'],
+      memberIds: ['ally'],
+      purpose: 'Old protection deal',
+      at: { day: 1, phase: 'week_start' },
+    })
+    oldPact.status = 'DISSOLVED'
+    createRealityAlliance(reality, {
+      id: 'renewed-pact',
+      founderIds: ['user'],
+      memberIds: ['ally'],
+      purpose: 'Renewed protection deal',
+      at: { day: 3, phase: 'week_start' },
+    })
+    const context = buildContext({
+      reality,
+      relationships: { ally: { user: { affinity: 80, tags: [] } } },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+    })
+    expect(chooseIncomingInteractionType('ally', 'user', context)).not.toBe('alliance_proposal')
+  })
+
+  it.each([
+    {
+      strategy: 'direct' as const,
+      targetId: 'lux',
+      openingNomineeIds: ['lux', 'remy'],
+      expectedText: 'I want Lux to leave',
+    },
+    {
+      strategy: 'backdoor' as const,
+      targetId: 'lux',
+      openingNomineeIds: ['remy', 'nova'],
+      expectedText: 'If Safety changes the block, Lux would be my replacement option.',
+    },
+  ])(
+    'uses the canonical $strategy nomination plan in an AI LOH alliance huddle',
+    ({ strategy, targetId, openingNomineeIds, expectedText }) => {
+      const reality = createInitialRealityDomainState()
+      createRealityAlliance(reality, {
+        id: 'loh-alliance',
+        kind: 'GROUP',
+        founderIds: ['echo', 'user', 'ally'],
+        memberIds: [],
+        purpose: 'Coordinate nominations',
+        at: { day: 4, phase: 'social_1' },
+      })
+      const players = [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'echo', name: 'Echo', status: 'loh' },
+        { id: 'ally', name: 'Ally', status: 'active' },
+        { id: 'lux', name: 'Lux', status: 'active' },
+        { id: 'remy', name: 'Remy', status: 'active' },
+        { id: 'nova', name: 'Nova', status: 'active' },
+      ]
+      const context = buildContext({
+        phase: 'social_1',
+        week: 4,
+        lohId: 'echo',
+        dramaMode: true,
+        relationships: {},
+        reality,
+        players,
+        gameState: {
+          week: 4,
+          seed: 13,
+          gameId: 'loh-huddle-regression',
+          dramaSocialMode: true,
+          lohId: 'echo',
+          nomineeIds: [],
+          players: players.map((player) => ({
+            ...player,
+            stats: { lohWins: 0, posWins: 0, timesNominated: 0 },
+          })),
+          strategicRelationships: {},
+          lohNominationPlan: {
+            week: 4,
+            lohId: 'echo',
+            targetId,
+            backupTargetId: 'dex',
+            pawnIds: openingNomineeIds.filter((id) => id !== targetId),
+            initialNomineeIds: openingNomineeIds,
+            strategy,
+            status: 'planned',
+            selectionBasis: 'strategy',
+            targetScore: 10,
+            backdoorChance: strategy === 'backdoor' ? 0.4 : 0,
+          },
+        } as unknown as AutonomyContext['gameState'],
+        random: () => 0,
+      })
+      const store = buildStore(context)
+
+      scheduleIncomingInteractionsForPhase('social_1', store, context)
+      scheduleIncomingInteractionsForPhase('social_1', store, context)
+
+      const huddles = store.social.scheduledIncomingInteractions.filter(
+        (entry) => entry.interaction.payload?.allianceGroupHuddle === true
+      )
+      const huddle = huddles.find((entry) => entry.interaction.fromId === 'echo')?.interaction
+      expect(huddles).toHaveLength(1)
+      expect(huddle?.payload?.scenarioKey).toBe('alliance_power_nomination_huddle')
+      expect(huddle?.payload?.subjectId).toBe(targetId)
+      expect(huddle?.text).toContain(expectedText)
+      expect(huddle?.payload?.allianceMemberTargetPreferences).toMatchObject({ echo: targetId })
+    }
+  )
+
+  it('does not create private alliance elimination pitches when Vox Populi owns the vote', () => {
+    const reality = createInitialRealityDomainState()
+    createRealityAlliance(reality, {
+      id: 'public-vote-alliance',
+      kind: 'GROUP',
+      founderIds: ['echo', 'user', 'ally'],
+      memberIds: [],
+      purpose: 'Coordinate the week',
+      at: { day: 4, phase: 'social_1' },
+    })
+    const players = [
+      { id: 'user', name: 'You', status: 'active', isUser: true },
+      { id: 'echo', name: 'Echo', status: 'loh' },
+      { id: 'ally', name: 'Ally', status: 'active' },
+      { id: 'target', name: 'Target', status: 'active' },
+    ]
+    const context = buildContext({
+      phase: 'social_1',
+      week: 4,
+      dramaMode: true,
+      voxPopuliActive: true,
+      lohId: 'echo',
+      reality,
+      players,
+      gameState: {
+        week: 4,
+        phase: 'social_1',
+        seed: 13,
+        gameId: 'public-vote-regression',
+        dramaSocialMode: true,
+        lohId: 'echo',
+        nomineeIds: [],
+        voxPopuli: { status: 'active' },
+        doubleEviction: { weekActive: false },
+        players: players.map((player) => ({
+          ...player,
+          stats: { lohWins: 0, posWins: 0, timesNominated: 0 },
+        })),
+        strategicRelationships: {},
+      } as unknown as AutonomyContext['gameState'],
+      random: () => 0,
+    })
+
+    for (const actorId of ['echo', 'ally']) {
+      const decision = evaluateIncomingInteractionEnqueueDecision(actorId, 'user', context, [])
+      expect(decision.plan?.scenarioKey).not.toMatch(
+        /^alliance_(nomination|vox_ballot|vote)_pitch$/
+      )
+    }
+  })
+
+  it('treats gratitude after a save or survival as thanks rather than an alliance offer', () => {
+    const relationships = { ally: { user: { affinity: 85, tags: [] } } }
+    const players = [
+      { id: 'user', name: 'You', status: 'loh', isUser: true },
+      { id: 'ally', name: 'Ally', status: 'nominated' },
+    ]
+    const survivor = buildContext({
+      phase: 'eviction_results',
+      relationships,
+      players,
+      nomineeIds: ['ally'],
+    })
+    const saved = buildContext({
+      phase: 'pos_ceremony_results',
+      relationships,
+      players,
+      nomineeIds: ['ally'],
+      povSavedId: 'ally',
+      lohId: 'user',
+    })
+
+    expect(chooseIncomingInteractionType('ally', 'user', survivor)).toBe('compliment')
+    expect(chooseIncomingInteractionType('ally', 'user', saved)).toBe('compliment')
+  })
+
+  it('adds the new thematic phases to eligible scheduling', () => {
+    expect(ELIGIBLE_PHASES.has('social_1')).toBe(true)
+    expect(ELIGIBLE_PHASES.has('nomination_results')).toBe(true)
+    expect(ELIGIBLE_PHASES.has('pos_ceremony_results')).toBe(true)
+    expect(ELIGIBLE_PHASES.has('social_2')).toBe(true)
+  })
+
+  it('dedupes repeated scenarios from the same actor in the same phase', () => {
+    const pending = [
+      makeInteraction({
+        fromId: 'nominee',
+        type: 'nomination_plea',
+        payload: { scenarioKey: 'nominee_hoh_plea', phase: 'nominations' },
+      }),
+    ]
+
+    const dedupeReason = getInteractionDedupeReason({
+      interaction: makeInteraction({
+        id: 'i-2',
+        fromId: 'nominee',
+        type: 'nomination_plea',
+        payload: { scenarioKey: 'nominee_hoh_plea', phase: 'nominations' },
+      }),
+      priority: 'high',
+      pendingInteractions: pending,
+      week: 2,
+    })
+
+    expect(dedupeReason).toBe('deduped_same_scenario')
+  })
+
+  it('dedupes interactions from the same actor that reuse the same variant family within the cooldown window', () => {
+    // Use different interaction types so the sameTypeCooldownWeeks check does not
+    // fire before reaching the family-level dedupe check.
+    const pending = [
+      makeInteraction({
+        fromId: 'ally',
+        type: 'compliment',
+        createdWeek: 2,
+        payload: {
+          scenarioKey: 'generic_check_in',
+          phase: 'week_start',
+          variantFamilyId: 'gci_casual',
+        },
+      }),
+    ]
+
+    const dedupeReason = getInteractionDedupeReason({
+      interaction: makeInteraction({
+        id: 'i-2',
+        fromId: 'ally',
+        type: 'check_in',
+        createdWeek: 2,
+        payload: {
+          scenarioKey: 'generic_check_in',
+          phase: 'social_1',
+          variantFamilyId: 'gci_casual',
+        },
+      }),
+      priority: 'medium',
+      pendingInteractions: pending,
+      week: 2,
+    })
+
+    expect(dedupeReason).toBe('deduped_same_family')
+  })
+
+  it('does not dedupe the same variant family when outside the cooldown window', () => {
+    const pending = [
+      makeInteraction({
+        fromId: 'ally',
+        type: 'compliment',
+        createdWeek: 1,
+        payload: {
+          scenarioKey: 'generic_check_in',
+          phase: 'week_start',
+          variantFamilyId: 'gci_casual',
+        },
+      }),
+    ]
+
+    // familyCooldownWeeks defaults to 1; createdWeek=1, current week=3 → 2 weeks apart → outside window
+    const dedupeReason = getInteractionDedupeReason({
+      interaction: makeInteraction({
+        id: 'i-2',
+        fromId: 'ally',
+        type: 'check_in',
+        createdWeek: 3,
+        payload: {
+          scenarioKey: 'generic_check_in',
+          phase: 'social_1',
+          variantFamilyId: 'gci_casual',
+        },
+      }),
+      priority: 'medium',
+      pendingInteractions: pending,
+      week: 3,
+    })
+
+    expect(dedupeReason).toBeNull()
+  })
+
+  it('schedules contextual text and payload for HOH pleas', () => {
+    const context = buildContext({
+      phase: 'nominations',
+      lohId: 'user',
+      nomineeIds: [],
+      relationships: { nominee: { user: { affinity: -60, tags: [] } } },
+      players: [
+        { id: 'user', name: 'Jordan', status: 'loh', isUser: true },
+        { id: 'nominee', name: 'Rae', status: 'active' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('nominations', store, context)
+
+    expect(store.social.scheduledIncomingInteractions).toHaveLength(1)
+    const interaction = store.social.scheduledIncomingInteractions[0]?.interaction
+    expect(interaction?.type).toBe('nomination_plea')
+    expect(interaction?.payload?.scenarioKey).toBe('nominee_hoh_plea')
+    expect(interaction?.text).toContain('Jordan')
+  })
+
+  it('does not manufacture generic check-ins for neutral players without a trigger', () => {
+    const context = buildContext({
+      phase: 'week_start',
+      relationships: { neutral: { user: { affinity: 0, tags: [] } } },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'neutral', name: 'Neutral', status: 'active' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('week_start', store, context)
+
+    expect(store.social.scheduledIncomingInteractions).toHaveLength(0)
+  })
+
+  it('creates only the highest-ranked contact at a single checkpoint', () => {
+    const context = buildContext({
+      phase: 'week_start',
+      relationships: {
+        closeAlly: { user: { affinity: 90, tags: ['alliance'] } },
+        ally: { user: { affinity: 65, tags: ['alliance'] } },
+      },
+      players: [
+        { id: 'user', name: 'You', status: 'active', isUser: true },
+        { id: 'closeAlly', name: 'Close Ally', status: 'active' },
+        { id: 'ally', name: 'Ally', status: 'active' },
+      ],
+      random: () => 0,
+    })
+    const store = buildStore(context)
+
+    scheduleIncomingInteractionsForPhase('week_start', store, context)
+
+    expect(store.social.scheduledIncomingInteractions).toHaveLength(1)
+    expect(store.social.scheduledIncomingInteractions[0]?.interaction.fromId).toBe('closeAlly')
+  })
+})

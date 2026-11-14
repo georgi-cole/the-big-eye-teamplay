@@ -1,0 +1,47 @@
+name: Minigame Certification
+
+on:
+  schedule:
+    # GitHub Actions schedules use UTC. This runs at 04:00–05:00 in Sofia.
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: minigame-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: UI, logic, visual, and AI audit
+    runs-on: ubuntu-latest
+    # The visual audit covers every minigame on three viewport projects sequentially.
+    # Keep full coverage while allowing the suite to complete on hosted runners.
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run minigame certification
+        env:
+          VISUAL_AUDIT_PROJECTS: desktop-chromium,mobile-chromium,narrow-chromium
+        run: npm run audit:minigames
+      - name: Run seeded complete-gameplay matrix
+        run: npx playwright test --grep @full-playthrough --project=desktop-chromium
+      - name: Upload minigame evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minigame-audit-evidence
+          path: |
+            docs/visual-audit/
+            playwright-report/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 14

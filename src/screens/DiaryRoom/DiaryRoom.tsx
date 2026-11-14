@@ -1,0 +1,2339 @@
+import { claimMissionBox } from '../../store/missionPowerActions'
+import { MISSION_POWER_LABELS, missionPowerDetail, isMissionPower } from '../../bb/missionPowers'
+import { isCurrentAlliance } from '../../social/reality/allianceIdentity'
+/**
+ * DiaryRoom — private player confessional / game log screen.
+ *
+ * Privacy guarantee: verbatim messages exchanged in the Confess tab are stored
+ * only in sessionStorage (key: `bb_dr_chat_<playerId>`) and are never dispatched to the
+ * global tvFeed.  A single generic summary event is emitted to the tvFeed once
+ * when the component unmounts after at least one message was sent — the summary
+ * does NOT contain any private content.  The summary flag is persisted in
+ * sessionStorage (key: `bb_dr_summary_emitted_<playerId>`) so it survives
+ * tab navigations within the same session. A compact AI-authored memory ledger
+ * is kept locally per game so The Big Eye can maintain continuity across visits;
+ * it never contains the full transcript and is never shown on the TV feed.
+ */
+
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  type CSSProperties,
+  type FormEvent,
+} from 'react'
+import GameBackButton from '../../components/ui/GameBackButton/GameBackButton'
+import { useBlocker, useNavigate } from 'react-router'
+import { useStore } from 'react-redux'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import {
+  addTvEvent,
+  selfEvict,
+  offerSecretMission,
+  acceptSecretMission,
+  declineSecretMission,
+  claimMissionReward,
+  recordSecretMissionEasterEgg,
+  submitTwinShockAnswer,
+  selectAlivePlayers,
+  consumeBroadcastEvent,
+  recordConfessionalMisconduct,
+} from '../../store/gameSlice'
+import { selectActiveConfessionalDecision } from '../../store/confessionalDecisionSelectors'
+import ConfessionalDecisionPanel from './ConfessionalDecisionPanel'
+import ConfessionalWallet from './ConfessionalWallet'
+import { getConfessionalDecisionPresentation } from './confessionalDecisionPresentation'
+import { CONFESSIONAL_DOOR_SRC, CONFESSIONAL_PAINTING_STYLE } from './diaryRoomAssets'
+import { getSecretMissionEasterEggByIntent } from '../../bb/secretMissionEasterEggs'
+import { retrieveHistoricalFacts } from '../../bb/confessionalHistory'
+import {
+  SECRET_MISSION_BOX_REWARDS,
+  getSecretMissionBoxRewards,
+  findSecretMissionTaskReference,
+  getSecretMissionTaskHint,
+  pickMissionImmunityDuration,
+  type SecretMissionBoxRewardType,
+} from '../../bb/secretMission'
+import { classifyTwinShockAnswer, resolveTwinShockTurn } from '../../bb/twinShock'
+import {
+  buildBigEyeWorldSnapshot,
+  getSalientConfessionalObservation,
+  type BigEyeWorldSnapshot,
+} from '../../bb/confessionalSalience'
+import { applyInfluenceDelta } from '../../social/socialSlice'
+import {
+  createInitialBigEyeState,
+  generateBigBrotherReply,
+  type BigEyeConversationState,
+  type BigEyePerformance,
+  type BigEyeWorldContext,
+} from '../../services/bigBrother'
+import {
+  assessLocalConfessionalInput,
+  getConfessionalMisconductResponse,
+  isConfessionalMisconductCode,
+} from '../../bb/localConfessionalSafety'
+import {
+  BigEyeVipError,
+  getBigEyeVipStatus,
+  isBigEyeVipConfigured,
+  requestBigEyeVipReply,
+  type BigEyeVipStatus,
+} from '../../services/bigEyeVip'
+import ConfirmExitModal from '../../components/ConfirmExitModal/ConfirmExitModal'
+import AdPrompt from '../../components/AdPrompt/AdPrompt'
+import { useConfessionalTicTacToeTrigger } from './useConfessionalTicTacToeTrigger'
+import {
+  buildEvictionVoteBreakdownPlayerNamesById,
+  buildEvictionVoteBreakdownRows,
+  clearEvictionVoteBreakdownUnlock,
+  isEvictionVoteBreakdownActive,
+  loadEvictionVoteBreakdownUnlock,
+  updateEvictionVoteBreakdownStatus,
+  type EvictionVoteBreakdownUnlock,
+} from '../../features/evictionVoteBreakdownStorage'
+import {
+  buildVoxNominationRevealRows,
+  consumeVoxNominationRevealEducationPending,
+  isVoxNominationRevealActive,
+  isVoxNominationRevealPhrase,
+  loadVoxNominationReveal,
+  updateVoxNominationRevealStatus,
+  type VoxNominationReveal,
+} from '../../features/voxNominationRevealStorage'
+import { recordAdShown } from '../../store/adsSlice'
+import { showRewarded } from '../../services/ads/adsService'
+import type { RootState } from '../../store/store'
+import './DiaryRoom.css'
+
+/** Delivery status of a user-sent message. */
+type MessageStatus = 'sending' | 'delivered' | 'seen'
+type TicTacToeMark = 'X' | 'O'
+type TicTacToeCell = TicTacToeMark | null
+
+export const DIARY_ROOM_ENTRY_OVERLAY_MS = 1320
+const CONFESSIONAL_LOCKED_DOOR_SRC = CONFESSIONAL_DOOR_SRC
+const BIG_EYE_DECISION_CONFIRMATION = 'Your choice has been recorded. The ceremony will proceed.'
+
+/** A single message in the private chat. */
+interface ChatMessage {
+  id: string
+  role: 'user' | 'bb'
+  text: string
+  timestamp: number
+  /** Only present on user messages. */
+  status?: MessageStatus
+  /** Present when a Big Eye message is the active confessional decision node. */
+  decisionKey?: string
+  /** Stable identity for an automatic prompt, independent of its wording. */
+  contextKey?: string
+  /** Director cues attached to the response for delivery styling and timing. */
+  performance?: BigEyePerformance
+  /** True when this dialogue was generated by the optional Cloudflare VIP director. */
+  vip?: boolean
+}
+
+// ─── Summary message pool (10 generic messages, no private content) ───────────
+const SUMMARY_POOL = [
+  '{name} whispered secrets in the Confessional. The feeds perked up.',
+  '{name} had a heart-to-heart with The Big Eye. No cameras allowed.',
+  'The Confessional door just closed behind {name}. What was said stays in there.',
+  '{name} just left the Confessional looking... thoughtful.',
+  'The Big Eye called {name} to the Confessional. The other players noticed.',
+  '{name} spent some quality time in the Confessional. Drama incoming?',
+  'Sources close to the Confessional report {name} was very talkative today.',
+  '{name} and The Big Eye had words. The Hub will never know what.',
+  'The Confessional light is off — {name} just wrapped up a private session.',
+  '{name} visited the Confessional. Whatever was said, it stays private.',
+]
+
+const FIRST_VISIT_GREETING = 'Hello, {name}. What is on your mind?'
+
+const RETURNING_VISIT_GREETINGS = [
+  'Back again. What changed?',
+  'What do you want to talk through?',
+  'Where would you like to start?',
+  'The door is closed. Your turn.',
+]
+
+// ─── Secret immunity reward messages ──────────────────────────────────────────
+
+const REWARD_PENDING_MSG =
+  'Mission complete. Four reward boxes await. Choose one to reveal your prize. 🎁'
+const MISSION_OFFER_MSG =
+  'I have a secret mission for you. Accept to see the objectives, or decline.'
+const VOX_REVEAL_EDUCATION_MSG =
+  'After today’s secret nominations, type “Reveal nominations” here to uncover the ballots.'
+
+const VOTE_BREAKDOWN_DECLINED_TV_MESSAGE = "It's getting quiet in the Hub. Sandman on the way?"
+
+const TIC_TAC_TOE_LINES: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
+]
+
+function createEmptyTicTacToeBoard(): TicTacToeCell[] {
+  return Array.from({ length: 9 }, () => null)
+}
+
+function getTicTacToeWinner(board: TicTacToeCell[]): TicTacToeMark | null {
+  for (const [a, b, c] of TIC_TAC_TOE_LINES) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return board[a]
+    }
+  }
+
+  return null
+}
+
+function findTicTacToeLineMove(board: TicTacToeCell[], mark: TicTacToeMark): number | null {
+  for (const [a, b, c] of TIC_TAC_TOE_LINES) {
+    const line = [board[a], board[b], board[c]]
+    const markCount = line.filter((cell) => cell === mark).length
+    const emptyCount = line.filter((cell) => cell === null).length
+
+    if (markCount === 2 && emptyCount === 1) {
+      if (board[a] === null) return a
+      if (board[b] === null) return b
+      return c
+    }
+  }
+
+  return null
+}
+
+function pickBigEyeTicTacToeMove(board: TicTacToeCell[]): number | null {
+  const winningMove = findTicTacToeLineMove(board, 'O')
+  if (winningMove !== null) return winningMove
+
+  const blockingMove = findTicTacToeLineMove(board, 'X')
+  if (blockingMove !== null) return blockingMove
+
+  const fallbackOrder = [4, 0, 2, 6, 8, 1, 3, 5, 7]
+  return fallbackOrder.find((index) => board[index] === null) ?? null
+}
+
+/** Select a summary message deterministically from the pool. */
+function pickSummary(name: string, seed: number): string {
+  const idx = seed % SUMMARY_POOL.length
+  return SUMMARY_POOL[idx].replace('{name}', name)
+}
+
+/** Labels for a claimed power that is still waiting for future use. */
+const REWARD_LABELS: Record<string, string> = {
+  doubleVote: 'Double Vote',
+  voteDeduction: 'Vote Deduction',
+  immunity: 'Secret Immunity',
+}
+
+const REWARD_REVEAL_COPY: Partial<
+  Record<SecretMissionBoxRewardType, (week: number, durationDays?: number) => string>
+> = {
+  plus1000Influence: () => 'The Big Eye grants you 1,000 Influence. Spend it wisely.',
+  resourceCache: () =>
+    'The Big Eye has stocked your arsenal: +25 Social Energy, +500 Influence and +1,000 Information. Use them wisely.',
+  doubleVote: () =>
+    'The Big Eye grants you a Double Vote. It will be offered automatically at your next eligible live vote.',
+  voteDeduction: () =>
+    'The Big Eye grants you Vote Deduction. If you are on the block at an eligible elimination, you may cut one vote from your total.',
+  immunity: (week, durationDays = 1) =>
+    `The Big Eye grants you temporary immunity for ${durationDays} day${durationDays === 1 ? '' : 's'}. It may be used during the Safety Ceremony while nominated and expires after Day ${week + durationDays - 1}.`,
+}
+
+// ─── sessionStorage helpers ───────────────────────────────────────────────────
+
+function chatKey(playerId: string): string {
+  return `bb_dr_chat_${playerId}`
+}
+
+function summaryKey(playerId: string): string {
+  return `bb_dr_summary_emitted_${playerId}`
+}
+
+function conversationStateKey(gameId: string, playerId: string): string {
+  return `big_eye_state_${gameId}_${playerId}`
+}
+
+function worldSnapshotKey(gameId: string, playerId: string): string {
+  return `big_eye_world_snapshot_${gameId}_${playerId}`
+}
+
+function visitCountKey(playerId: string): string {
+  return `bb_dr_visit_count_${playerId}`
+}
+
+function memoryKey(gameId: string, playerId: string): string {
+  return `big_eye_memory_${gameId}_${playerId}`
+}
+
+function loadBigEyeMemory(gameId: string, playerId: string): string {
+  try {
+    return localStorage.getItem(memoryKey(gameId, playerId))?.slice(0, 1800) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function saveBigEyeMemory(gameId: string, playerId: string, memory: string): void {
+  try {
+    const compact = memory.trim().slice(0, 1800)
+    if (compact) localStorage.setItem(memoryKey(gameId, playerId), compact)
+  } catch {
+    // Local continuity is an enhancement; conversation remains functional without it.
+  }
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
+async function getChatCryptoKey(playerId: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder()
+  const material = `${playerId}:${window.location.origin}:diary-room-chat`
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(material))
+  return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+}
+
+async function encryptChatPayload(playerId: string, plaintext: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await getChatCryptoKey(playerId)
+  const encoded = new TextEncoder().encode(plaintext)
+  const cipherBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded)
+  const cipherBytes = new Uint8Array(cipherBuffer)
+  return `${toBase64(iv)}:${toBase64(cipherBytes)}`
+}
+
+// Encryption can finish out of order. Only the latest write in a live visit owns storage.
+const chatWriteVersions = new Map<string, number>()
+function saveChat(playerId: string, messages: ChatMessage[]): void {
+  const version = (chatWriteVersions.get(playerId) ?? 0) + 1
+  chatWriteVersions.set(playerId, version)
+  try {
+    const serialized = JSON.stringify(messages)
+    void encryptChatPayload(playerId, serialized)
+      .then((encrypted) => {
+        if (chatWriteVersions.get(playerId) !== version) return
+        sessionStorage.setItem(chatKey(playerId), encrypted)
+      })
+      .catch(() => {
+        // sessionStorage may be unavailable in some contexts — fail silently
+      })
+  } catch {
+    // sessionStorage may be unavailable in some contexts — fail silently
+  }
+}
+
+function loadConversationState(gameId: string, playerId: string): BigEyeConversationState {
+  const fallback = createInitialBigEyeState()
+  try {
+    const raw = localStorage.getItem(conversationStateKey(gameId, playerId))
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as Partial<BigEyeConversationState>
+    return {
+      ...fallback,
+      ...parsed,
+      recentIntents: Array.isArray(parsed.recentIntents) ? parsed.recentIntents.slice(-6) : [],
+      thread: parsed.thread ?? null,
+      rapport: { ...fallback.rapport, ...(parsed.rapport ?? {}) },
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function saveConversationState(
+  gameId: string,
+  playerId: string,
+  state: BigEyeConversationState
+): void {
+  try {
+    localStorage.setItem(conversationStateKey(gameId, playerId), JSON.stringify(state))
+  } catch {
+    // Local character continuity is optional.
+  }
+}
+
+function loadWorldSnapshot(gameId: string, playerId: string): BigEyeWorldSnapshot | null {
+  try {
+    const raw = localStorage.getItem(worldSnapshotKey(gameId, playerId))
+    return raw ? (JSON.parse(raw) as BigEyeWorldSnapshot) : null
+  } catch {
+    return null
+  }
+}
+
+function saveWorldSnapshot(gameId: string, playerId: string, snapshot: BigEyeWorldSnapshot): void {
+  try {
+    localStorage.setItem(worldSnapshotKey(gameId, playerId), JSON.stringify(snapshot))
+  } catch {
+    // Salience callbacks are optional.
+  }
+}
+
+function clearConversationSession(playerId: string): void {
+  chatWriteVersions.set(playerId, (chatWriteVersions.get(playerId) ?? 0) + 1)
+  try {
+    // The visible transcript remains session-only and is intentionally cleared
+    // between visits. Semantic thread/rapport state lives separately per season.
+    sessionStorage.removeItem(chatKey(playerId))
+  } catch {
+    // fail silently
+  }
+}
+
+function recordConfessionalVisit(playerId: string): number {
+  try {
+    const raw = sessionStorage.getItem(visitCountKey(playerId))
+    const current = raw ? parseInt(raw, 10) : 0
+    const next = Number.isFinite(current) && current > 0 ? current + 1 : 1
+    sessionStorage.setItem(visitCountKey(playerId), String(next))
+    return next
+  } catch {
+    return 1
+  }
+}
+
+function buildEntryGreeting(
+  playerName: string,
+  seed: number,
+  visitCount: number,
+  observation?: string | null
+): ChatMessage {
+  const text =
+    observation ||
+    (visitCount <= 1
+      ? FIRST_VISIT_GREETING.replace('{name}', playerName)
+      : // Second visit should use the first returning line, so offset the
+        // visit count by two before applying the seeded rotation.
+        RETURNING_VISIT_GREETINGS[(seed + visitCount - 2) % RETURNING_VISIT_GREETINGS.length])
+
+  return {
+    id: crypto.randomUUID(),
+    role: 'bb',
+    text,
+    timestamp: Date.now(),
+    contextKey: 'entry',
+  }
+}
+
+function getBigEyeTypingDelay(text: string): number {
+  const normalizedLength = text.trim().length
+  return Math.max(420, Math.min(1180, 260 + normalizedLength * 12))
+}
+
+function hasSummaryEmitted(playerId: string): boolean {
+  try {
+    return sessionStorage.getItem(summaryKey(playerId)) === '1'
+  } catch {
+    // sessionStorage may be unavailable; treat as "not emitted"
+    return false
+  }
+}
+
+function markSummaryEmitted(playerId: string): void {
+  try {
+    sessionStorage.setItem(summaryKey(playerId), '1')
+  } catch {
+    // fail silently
+  }
+}
+
+// ─── Chat bubbles component ───────────────────────────────────────────────────
+
+interface ChatBubblesProps {
+  msgs: ChatMessage[]
+  playerName: string
+  endRef: React.RefObject<HTMLDivElement | null>
+  activeDecisionKey?: string | null
+  activeDecisionPanel?: React.ReactNode
+  visualEyeReactions?: boolean
+}
+
+/** Renders the status indicator for a user message. */
+function MessageStatusIcon({ status }: { status?: MessageStatus }) {
+  if (!status) return null
+  if (status === 'sending') {
+    return (
+      <span className="diary-room__status diary-room__status--sending" aria-label="Sending">
+        <span className="diary-room__status-dot" />
+      </span>
+    )
+  }
+  return (
+    <span
+      className={`diary-room__status diary-room__status--${status}`}
+      aria-label={status === 'seen' ? 'Seen' : 'Delivered'}
+    />
+  )
+}
+
+/** Renders private chat messages as styled bubbles. */
+function ChatBubbles({
+  msgs,
+  playerName,
+  endRef,
+  activeDecisionKey,
+  activeDecisionPanel,
+  visualEyeReactions = true,
+}: ChatBubblesProps) {
+  const [earlierMessageCount, setEarlierMessageCount] = useState(0)
+  const visibleCount = 12 + earlierMessageCount
+  const visibleMessages = msgs.slice(-visibleCount)
+  return (
+    <div className="diary-room__chat" aria-live="polite" aria-label="Confessional chat">
+      {msgs.length > visibleCount && (
+        <button
+          type="button"
+          className="diary-room__mission-btn"
+          onClick={() => setEarlierMessageCount((count) => count + 12)}
+        >
+          Show earlier messages
+        </button>
+      )}
+      {msgs.length === 0 ? (
+        <p className="diary-room__empty">No messages yet. Speak freely.</p>
+      ) : (
+        visibleMessages.map((msg) => {
+          const isActiveDecision = Boolean(
+            msg.role === 'bb' &&
+            msg.decisionKey &&
+            activeDecisionKey &&
+            msg.decisionKey === activeDecisionKey
+          )
+
+          return (
+            <div
+              key={msg.id}
+              className={`diary-room__bubble diary-room__bubble--${msg.role}${isActiveDecision ? ' diary-room__bubble--decision' : ''}${msg.performance ? ` diary-room__bubble--${msg.performance.delivery}` : ''}`}
+              data-emotion={msg.performance?.emotion}
+              data-eye-state={visualEyeReactions ? msg.performance?.eyeState : undefined}
+              style={
+                visualEyeReactions && msg.performance
+                  ? ({
+                      '--big-eye-intensity': msg.performance.intensity,
+                    } as CSSProperties)
+                  : undefined
+              }
+              data-testid={isActiveDecision ? 'confessional-decision-message' : undefined}
+            >
+              <span className="diary-room__bubble-author">
+                {msg.role === 'user' ? playerName : '📺 The Big Eye'}
+                {msg.role === 'bb' && msg.vip && <span className="diary-room__vip-badge">VIP</span>}
+              </span>
+              <span className="diary-room__bubble-text">{msg.text}</span>
+              {isActiveDecision && activeDecisionPanel}
+              <div className="diary-room__bubble-footer">
+                <time className="diary-room__bubble-time">
+                  {new Date(msg.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </time>
+                {msg.role === 'user' && <MessageStatusIcon status={msg.status} />}
+              </div>
+            </div>
+          )
+        })
+      )}
+      <div ref={endRef} />
+    </div>
+  )
+}
+
+export default function DiaryRoom() {
+  const navigate = useNavigate()
+  const dispatch = useAppDispatch()
+  const reduxStore = useStore<RootState>()
+  const gameState = useAppSelector((s) => s.game)
+  const socialRelationships = useAppSelector((s) => s.social.relationships)
+  const realityDomain = useAppSelector((s) => s.social.reality)
+  const phase = useAppSelector((s) => s.game.phase)
+  const seed = useAppSelector((s) => s.game.seed)
+  const userPlayer = useAppSelector((s) => s.game.players.find((p) => p.isUser))
+  const playerName = userPlayer?.name ?? 'Hubmate'
+  const playerId = userPlayer?.id ?? 'user'
+  const secretMission = useAppSelector((s) => s.game.secretMission)
+  const missionPayout = useAppSelector((s) => {
+    const id = s.game.secretMission?.rewardSet?.id
+    return id ? s.social.missionResourcePayouts?.[id] : undefined
+  })
+  const currentWeekForMission = useAppSelector((s) => s.game.week)
+  const players = useAppSelector((s) => s.game.players)
+  const alivePlayers = useAppSelector(selectAlivePlayers)
+  const confessionalLocked = userPlayer?.status === 'evicted' || userPlayer?.status === 'jury'
+  const voxPopuliActive = gameState.voxPopuli?.status === 'active'
+  const visualEyeReactions =
+    useAppSelector((s) => s.remoteConfig?.config?.confessional?.features?.visualEyeReactions) !==
+    false
+
+  // ── Active ceremony decision routed to the confessional ───────────────────
+  // When non-null the player must complete the decision before leaving.
+  const activeConfessionalDecision = useAppSelector(selectActiveConfessionalDecision)
+  const confessionalDecisionPending = activeConfessionalDecision !== null
+  const twinShockResponseRequired =
+    activeConfessionalDecision?.type === 'twin_shock' && Boolean(gameState.twinShock?.promptStage)
+  const navigationBlocker = useBlocker(confessionalDecisionPending)
+  const navigationBlockerState = navigationBlocker.state
+  const resetNavigationBlocker = navigationBlocker.reset
+
+  const [activeView, setActiveView] = useState<'confess' | 'wallet'>('confess')
+  const [entry, setEntry] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [bbTyping, setBbTyping] = useState(false)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [memorySummary, setMemorySummary] = useState(() =>
+    loadBigEyeMemory(gameState.gameId, playerId)
+  )
+  const [showEntryAnimation, setShowEntryAnimation] = useState(false)
+  const [showSelfEvictConfirm, setShowSelfEvictConfirm] = useState(false)
+  const [voteBreakdownUnlock, setVoteBreakdownUnlock] =
+    useState<EvictionVoteBreakdownUnlock | null>(() => loadEvictionVoteBreakdownUnlock())
+  const [voxNominationReveal, setVoxNominationReveal] = useState<VoxNominationReveal | null>(() =>
+    loadVoxNominationReveal()
+  )
+  const [showVoxNominationAdPrompt, setShowVoxNominationAdPrompt] = useState(false)
+  const [voxNominationAdPending, setVoxNominationAdPending] = useState(false)
+  const [conversationState, setConversationState] = useState<BigEyeConversationState>(() =>
+    loadConversationState(gameState.gameId, playerId)
+  )
+  const [vipStatus, setVipStatus] = useState<BigEyeVipStatus | null>(null)
+  const [vipSelected, setVipSelected] = useState(false)
+  const [vipNotice, setVipNotice] = useState<string | null>(null)
+  const [missionExpanded, setMissionExpanded] = useState(secretMission?.status === 'rewardPending')
+
+  const {
+    active: ticTacToeActive,
+    launchTicTacToe,
+    dismissTicTacToe,
+  } = useConfessionalTicTacToeTrigger()
+  const [ticTacToeBoard, setTicTacToeBoard] = useState<TicTacToeCell[]>(() =>
+    createEmptyTicTacToeBoard()
+  )
+  const [ticTacToeNextTurn, setTicTacToeNextTurn] = useState<TicTacToeMark>('X')
+  const [ticTacToeThinking, setTicTacToeThinking] = useState(false)
+  const activeVoteBreakdown =
+    !confessionalDecisionPending &&
+    gameState.voxPopuli?.status !== 'active' &&
+    isEvictionVoteBreakdownActive(
+      voteBreakdownUnlock,
+      currentWeekForMission,
+      phase,
+      gameState.gameId
+    )
+      ? voteBreakdownUnlock
+      : null
+  const voteBreakdownPlayerNamesById = useMemo(
+    () => buildEvictionVoteBreakdownPlayerNamesById(players),
+    [players]
+  )
+  const voteBreakdownRows = activeVoteBreakdown
+    ? buildEvictionVoteBreakdownRows(activeVoteBreakdown.votes, voteBreakdownPlayerNamesById)
+    : []
+  const activeVoxNominationReveal =
+    gameState.voxPopuli?.status === 'active' &&
+    isVoxNominationRevealActive(voxNominationReveal, currentWeekForMission, phase)
+      ? voxNominationReveal
+      : null
+  const voxNominationRows = activeVoxNominationReveal
+    ? buildVoxNominationRevealRows(activeVoxNominationReveal.ballots, voteBreakdownPlayerNamesById)
+    : []
+  const vipConfigured = isBigEyeVipConfigured()
+  const vipSeasonId = `${gameState.gameId ?? 'local'}:${gameState.season}`
+
+  const playerNameById = useMemo(() => new Map(players.map((p) => [p.id, p.name])), [players])
+
+  const bigEyeWorld = useMemo<BigEyeWorldContext>(() => {
+    const relationshipRows = Object.entries(socialRelationships[playerId] ?? {})
+      .map(([targetId, relationship]) => ({
+        name: playerNameById.get(targetId) ?? targetId,
+        affinity: relationship.affinity,
+        tags: [...(relationship.tags ?? [])],
+      }))
+      .sort((left, right) => Math.abs(right.affinity) - Math.abs(left.affinity))
+      .slice(0, 20)
+    const nameFor = (id: string | null | undefined) => (id ? (playerNameById.get(id) ?? id) : null)
+
+    const formalAlliances = Object.values(realityDomain.alliances ?? {})
+      .filter((alliance) => isCurrentAlliance(alliance) && alliance.memberIds.includes(playerId))
+      .map((alliance) => ({
+        id: alliance.id,
+        name: alliance.name?.trim() || null,
+        memberNames: alliance.memberIds.map((id) => nameFor(id) ?? id),
+        status: alliance.status,
+      }))
+
+    const alliances = formalAlliances
+
+    // tvFeed is newest-first; keep the current board context instead of stale
+    // events from the beginning of a long season.
+    const publicFeed = gameState.tvFeed.slice(0, 12).map((event) => event.text.slice(0, 280))
+    const recentEvictedNames: string[] = []
+    const pendingEvicteeName = nameFor(gameState.pendingEviction?.evicteeId)
+    if (pendingEvicteeName) recentEvictedNames.push(pendingEvicteeName)
+    for (const eventText of publicFeed) {
+      const normalized = eventText.toLowerCase()
+      if (
+        !normalized.includes('evicted') &&
+        !normalized.includes('eliminated') &&
+        !normalized.includes('went home') &&
+        !normalized.includes('left the hub')
+      ) {
+        continue
+      }
+      const matched = players.find((player) => normalized.includes(player.name.toLowerCase()))
+      if (matched && !recentEvictedNames.includes(matched.name))
+        recentEvictedNames.push(matched.name)
+      if (recentEvictedNames.length >= 2) break
+    }
+
+    return {
+      season: gameState.season,
+      week: gameState.week,
+      phase: gameState.phase,
+      playerStatus: userPlayer?.status ?? 'active',
+      leaderName: nameFor(gameState.lohId),
+      nomineeNames: gameState.nomineeIds.map((id) => nameFor(id) ?? id),
+      safetyWinnerName: nameFor(gameState.posWinnerId),
+      remainingHousemates: players
+        .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+        .map((player) => player.name),
+      playerStats: {
+        leaderWins: userPlayer?.stats?.lohWins ?? 0,
+        safetyWins: userPlayer?.stats?.posWins ?? 0,
+        timesNominated: userPlayer?.stats?.timesNominated ?? 0,
+      },
+      closestRelationships: relationshipRows,
+      alliances,
+      recentEvictedNames,
+      recentPublicEvents: publicFeed.slice(0, 8),
+      secretMission: gameState.secretMission
+        ? {
+            status: gameState.secretMission.status,
+            endDay: gameState.secretMission.endDay,
+            tasks: gameState.secretMission.tasks.map((task) => ({
+              description: task.description,
+              completed: task.completed,
+            })),
+          }
+        : null,
+    }
+  }, [
+    gameState.lohId,
+    gameState.nomineeIds,
+    gameState.pendingEviction,
+    gameState.phase,
+    gameState.posWinnerId,
+    gameState.season,
+    gameState.secretMission,
+    gameState.tvFeed,
+    gameState.week,
+    playerId,
+    playerNameById,
+    players,
+    realityDomain.alliances,
+    socialRelationships,
+    userPlayer,
+  ])
+
+  const bigEyeWorldRef = useRef(bigEyeWorld)
+  useEffect(() => {
+    bigEyeWorldRef.current = bigEyeWorld
+  }, [bigEyeWorld])
+
+  useEffect(() => {
+    setMemorySummary(loadBigEyeMemory(gameState.gameId, playerId))
+    setConversationState(loadConversationState(gameState.gameId, playerId))
+  }, [gameState.gameId, playerId])
+
+  useEffect(() => {
+    if (!vipConfigured) {
+      setVipStatus(null)
+      setVipSelected(false)
+      return
+    }
+
+    let cancelled = false
+    void getBigEyeVipStatus(vipSeasonId)
+      .then((status) => {
+        if (!cancelled) setVipStatus(status)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVipStatus(null)
+          setVipSelected(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [vipConfigured, vipSeasonId])
+
+  const activeDecisionPresentation = useMemo(() => {
+    if (!activeConfessionalDecision) return null
+    return getConfessionalDecisionPresentation(activeConfessionalDecision, gameState, alivePlayers)
+  }, [activeConfessionalDecision, alivePlayers, gameState])
+
+  const deliveryEpochRef = useRef(0)
+  const turnInFlightRef = useRef(false)
+  const authoredTwinTurnRef = useRef(false)
+  const allowAutomaticRewardRef = useRef(true)
+  const activeDecisionKey = activeDecisionPresentation?.key
+  const hasUserMessageRef = useRef(false)
+  useEffect(() => {
+    deliveryEpochRef.current += 1
+    turnInFlightRef.current = false
+    authoredTwinTurnRef.current = false
+    setLoading(false)
+    setBbTyping(false)
+    return () => {
+      deliveryEpochRef.current += 1
+      turnInFlightRef.current = false
+    }
+  }, [confessionalLocked, gameState.gameId, gameState.week, phase, playerId])
+  useEffect(() => {
+    if (activeDecisionKey) allowAutomaticRewardRef.current = false
+    if (!turnInFlightRef.current || authoredTwinTurnRef.current) return
+    deliveryEpochRef.current += 1
+    turnInFlightRef.current = false
+    setLoading(false)
+    setBbTyping(false)
+  }, [activeDecisionKey])
+
+  const pushBigEyeMessage = useCallback(
+    (text: string) => {
+      const nextMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text,
+        timestamp: Date.now(),
+      }
+      setMessages((prev) => {
+        const updated = [...prev, nextMessage]
+        saveChat(playerId, updated)
+        return updated
+      })
+    },
+    [playerId]
+  )
+
+  const appendBigEyeReply = useCallback(
+    async (lines: string[], isCurrent: () => boolean) => {
+      const text = [...new Set(lines.map((line) => line.trim()).filter(Boolean))].join(' ')
+      if (!text || !isCurrent()) return
+      setBbTyping(true)
+      await new Promise<void>((resolve) => setTimeout(resolve, getBigEyeTypingDelay(text)))
+      if (!isCurrent()) return
+      setBbTyping(false)
+      pushBigEyeMessage(text)
+    },
+    [pushBigEyeMessage]
+  )
+
+  const rewardMissionKey = secretMission
+    ? `${secretMission.missionNumber ?? 1}:${secretMission.triggeredDay}`
+    : 'none'
+  const completedMissionTasks = secretMission?.tasks.filter((task) => task.completed).length ?? 0
+  const totalMissionTasks = secretMission?.tasks.length ?? 0
+  const missionDeadlineDay =
+    secretMission?.targetDeadlineDay ?? secretMission?.endDay ?? secretMission?.survivalWindowEndDay
+  const missionProgressLabel =
+    secretMission?.status === 'rewardPending'
+      ? 'Complete — reward ready'
+      : totalMissionTasks > 0
+        ? `${completedMissionTasks}/${totalMissionTasks} objectives complete`
+        : 'In progress'
+
+  useEffect(() => {
+    if (secretMission?.status === 'rewardPending') {
+      setMissionExpanded(true)
+    }
+  }, [rewardMissionKey, secretMission?.status])
+
+  const dispatchRef = useRef(dispatch)
+  useEffect(() => {
+    dispatchRef.current = dispatch
+  }, [dispatch])
+  useEffect(() => {
+    if (
+      !confessionalDecisionPending &&
+      navigationBlockerState === 'blocked' &&
+      resetNavigationBlocker
+    ) {
+      resetNavigationBlocker()
+    }
+  }, [confessionalDecisionPending, navigationBlockerState, resetNavigationBlocker])
+
+  useEffect(() => {
+    if (confessionalDecisionPending && showSelfEvictConfirm) {
+      setShowSelfEvictConfirm(false)
+    }
+  }, [confessionalDecisionPending, showSelfEvictConfirm])
+
+  useEffect(() => {
+    if (confessionalDecisionPending && activeView !== 'confess') {
+      setActiveView('confess')
+    }
+  }, [activeView, confessionalDecisionPending])
+
+  useEffect(() => {
+    if (!confessionalDecisionPending || voteBreakdownUnlock?.status !== 'revealed') return
+    // A mandatory Big Eye decision takes priority over an optional vote reveal.
+    // Consume the local copy too, so the chart cannot reappear after the reply.
+    clearEvictionVoteBreakdownUnlock()
+    setVoteBreakdownUnlock(null)
+  }, [confessionalDecisionPending, voteBreakdownUnlock?.status])
+
+  // Stable refs for summary calculation (avoid stale closure on unmount)
+  const playerNameRef = useRef(playerName)
+  useEffect(() => {
+    playerNameRef.current = playerName
+  }, [playerName])
+  const playerIdRef = useRef(playerId)
+  useEffect(() => {
+    playerIdRef.current = playerId
+  }, [playerId])
+  const seedRef = useRef(seed)
+  useEffect(() => {
+    seedRef.current = seed
+  }, [seed])
+
+  // Scroll ref for the chat panel
+  const confessEndRef = useRef<HTMLDivElement>(null)
+
+  const initializedEntryRef = useRef<string | null>(null)
+  // Reset and reinitialize once per visit, including under effect replay.
+  useEffect(() => {
+    const entryScope = `${gameState.gameId}:${playerId}:${confessionalLocked}`
+    if (initializedEntryRef.current === entryScope) return
+    initializedEntryRef.current = entryScope
+    clearConversationSession(playerId)
+    hasUserMessageRef.current = false
+
+    if (confessionalLocked) {
+      setMessages([])
+      setConversationState(createInitialBigEyeState())
+      return
+    }
+
+    const storedConversationState = loadConversationState(gameState.gameId, playerId)
+    // A fresh visit replaces the visible question. Keep semantic memory and
+    // rapport, but never interpret "yes" as consent to an unseen old action.
+    const loadedConversationState = {
+      ...storedConversationState,
+      lastQuestion: null,
+      thread: storedConversationState.thread
+        ? { ...storedConversationState.thread, lastEyeQuestion: null, questionKind: null }
+        : null,
+    }
+    const entryObservation = getSalientConfessionalObservation({
+      previous: loadWorldSnapshot(gameState.gameId, playerId),
+      current: bigEyeWorldRef.current,
+      playerName: playerNameRef.current,
+    })
+    const requiredDecision = selectActiveConfessionalDecision(reduxStore.getState())
+    allowAutomaticRewardRef.current = !requiredDecision
+    const mission = reduxStore.getState().game.secretMission
+    const shouldOfferMission =
+      !requiredDecision &&
+      mission &&
+      currentWeekForMission <= mission.endDay &&
+      mission.offerCount < 2 &&
+      (mission.status === 'available' ||
+        (mission.status === 'declined' &&
+          mission.declinedDay !== null &&
+          currentWeekForMission > mission.declinedDay))
+    if (shouldOfferMission) dispatch(offerSecretMission(currentWeekForMission))
+    const entryMission = reduxStore.getState().game.secretMission
+    const visitCount = recordConfessionalVisit(playerId)
+    let entryMessage: ChatMessage | null = null
+    if (!requiredDecision) {
+      const missionKey = entryMission
+        ? `${entryMission.missionNumber ?? 1}:${entryMission.triggeredDay}`
+        : 'none'
+      const prompt =
+        entryMission?.status === 'rewardPending'
+          ? { text: REWARD_PENDING_MSG, contextKey: `reward:${missionKey}` }
+          : entryMission?.status === 'offered'
+            ? { text: MISSION_OFFER_MSG, contextKey: `offer:${missionKey}` }
+            : voxPopuliActive && consumeVoxNominationRevealEducationPending()
+              ? { text: VOX_REVEAL_EDUCATION_MSG, contextKey: 'vox-education' }
+              : null
+      entryMessage = prompt
+        ? { id: crypto.randomUUID(), role: 'bb', timestamp: Date.now(), ...prompt }
+        : buildEntryGreeting(
+            playerNameRef.current,
+            seedRef.current ?? 0,
+            visitCount,
+            entryObservation?.text
+          )
+    }
+    const nextConversationState =
+      entryObservation && entryMessage?.contextKey === 'entry'
+        ? {
+            ...loadedConversationState,
+            thread: {
+              topic: `entry:${entryObservation.event}`,
+              focusPlayer: null,
+              questionKind: 'entry_observation',
+              depth: 1,
+              lastEyeQuestion: null,
+              lastEyeStatement: entryObservation.text,
+              contextReason: entryObservation.text,
+            },
+          }
+        : loadedConversationState
+    setConversationState(nextConversationState)
+    saveConversationState(gameState.gameId, playerId, nextConversationState)
+    const nextMessages = entryMessage ? [entryMessage] : []
+    setMessages(nextMessages)
+    saveChat(playerId, nextMessages)
+    saveWorldSnapshot(gameState.gameId, playerId, buildBigEyeWorldSnapshot(bigEyeWorldRef.current))
+  }, [
+    confessionalLocked,
+    currentWeekForMission,
+    dispatch,
+    gameState.gameId,
+    playerId,
+    reduxStore,
+    voxPopuliActive,
+  ])
+
+  useEffect(() => {
+    // Twin Shock has a free-text answer rather than the button panel used by
+    // ceremony decisions. Keep its prompt in the dedicated required-response
+    // card above the mission checklist; injecting it at the bottom of chat can
+    // hide the only actionable instruction behind a tall stored-reward card.
+    if (
+      confessionalLocked ||
+      !activeDecisionPresentation ||
+      activeConfessionalDecision?.type === 'twin_shock'
+    )
+      return
+    setMessages((prev) => {
+      if (prev.some((msg) => msg.decisionKey === activeDecisionPresentation.key)) return prev
+      const decisionMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text: activeDecisionPresentation.prompt,
+        timestamp: Date.now(),
+        decisionKey: activeDecisionPresentation.key,
+      }
+      const updated = [
+        ...prev.filter(
+          (msg) =>
+            msg.contextKey !== 'entry' &&
+            !msg.contextKey?.startsWith('offer:') &&
+            !msg.contextKey?.startsWith('reward:') &&
+            msg.contextKey !== 'vox-education'
+        ),
+        decisionMsg,
+      ]
+      saveChat(playerId, updated)
+      return updated
+    })
+  }, [activeConfessionalDecision?.type, activeDecisionPresentation, confessionalLocked, playerId])
+
+  useEffect(() => {
+    if (confessionalLocked) return
+    confessEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [activeDecisionPresentation, confessionalLocked, messages])
+
+  useEffect(() => {
+    if (confessionalLocked) {
+      setShowEntryAnimation(false)
+      return
+    }
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (prefersReducedMotion) return
+
+    setShowEntryAnimation(true)
+    const timeoutId = window.setTimeout(
+      () => setShowEntryAnimation(false),
+      DIARY_ROOM_ENTRY_OVERLAY_MS
+    )
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [confessionalLocked])
+
+  const ticTacToeWinner = getTicTacToeWinner(ticTacToeBoard)
+  const ticTacToeDraw = !ticTacToeWinner && ticTacToeBoard.every((cell) => cell !== null)
+
+  useEffect(() => {
+    if (!ticTacToeActive || ticTacToeNextTurn !== 'O' || ticTacToeWinner || ticTacToeDraw) {
+      setTicTacToeThinking(false)
+      return
+    }
+
+    setTicTacToeThinking(true)
+
+    const timeoutId = window.setTimeout(() => {
+      setTicTacToeBoard((prev) => {
+        const move = pickBigEyeTicTacToeMove(prev)
+        if (move === null) return prev
+
+        const nextBoard = [...prev]
+        nextBoard[move] = 'O'
+        return nextBoard
+      })
+      setTicTacToeNextTurn('X')
+      setTicTacToeThinking(false)
+    }, 420)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+      setTicTacToeThinking(false)
+    }
+  }, [ticTacToeActive, ticTacToeDraw, ticTacToeNextTurn, ticTacToeWinner])
+
+  // On unmount: emit a single generic summary to tvFeed only when the player
+  // actually sent at least one message. Track it synchronously so leaving during
+  // encryption cannot lose the summary or resurrect a cleared transcript.
+  useEffect(() => {
+    return () => {
+      const pid = playerIdRef.current
+      clearConversationSession(pid)
+      if (hasUserMessageRef.current && !hasSummaryEmitted(pid)) {
+        markSummaryEmitted(pid)
+        const text = pickSummary(playerNameRef.current, seedRef.current ?? 0)
+        dispatchRef.current(addTvEvent({ text, type: 'game' }))
+      }
+    }
+  }, [])
+
+  const assignedRewardBoxes = useMemo(
+    () =>
+      secretMission ? getSecretMissionBoxRewards(secretMission) : [...SECRET_MISSION_BOX_REWARDS],
+    [secretMission]
+  )
+
+  // ── Secret mission: inject reward-pending message on mount (PR 2) ─────────
+  // When the player returns with a completed mission, Big Eye acknowledges the
+  // success and prompts box selection. Also re-runs on lock changes so any
+  // pending reveal timeout is canceled if the player becomes ineligible.
+  useEffect(() => {
+    if (
+      confessionalLocked ||
+      !allowAutomaticRewardRef.current ||
+      confessionalDecisionPending ||
+      loading ||
+      entry.trim() ||
+      activeView !== 'confess' ||
+      ticTacToeActive ||
+      showVoxNominationAdPrompt ||
+      secretMission?.status !== 'rewardPending'
+    )
+      return
+    const contextKey = `reward:${rewardMissionKey}`
+
+    const timeoutId = window.setTimeout(() => {
+      const revealMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text: REWARD_PENDING_MSG,
+        timestamp: Date.now(),
+        contextKey,
+      }
+      setMessages((prev) => {
+        if (prev.some((message) => message.contextKey === contextKey)) return prev
+        const base = prev.some((message) => message.role === 'user') ? prev : []
+        const updated = [...base, revealMsg]
+        saveChat(playerIdRef.current, updated)
+        return updated
+      })
+    }, 1200)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [
+    activeView,
+    confessionalDecisionPending,
+    confessionalLocked,
+    entry,
+    loading,
+    rewardMissionKey,
+    secretMission?.status,
+    showVoxNominationAdPrompt,
+    ticTacToeActive,
+  ])
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (
+      confessionalLocked ||
+      loading ||
+      turnInFlightRef.current ||
+      (confessionalDecisionPending && !twinShockResponseRequired)
+    )
+      return
+    const text = entry.trim()
+    if (!text) return
+    turnInFlightRef.current = true
+    hasUserMessageRef.current = true
+    const deliveryEpoch = deliveryEpochRef.current
+    const isCurrent = () => deliveryEpochRef.current === deliveryEpoch
+    const requestVipForThisTurn = vipSelected
+    setVipSelected(false)
+    setVipNotice(null)
+
+    const msgId = crypto.randomUUID()
+    const userMsg: ChatMessage = {
+      id: msgId,
+      role: 'user',
+      text,
+      timestamp: Date.now(),
+      status: 'sending',
+    }
+
+    /**
+     * Return a new messages array with the status of the message matching `id` updated.
+     * Caller is responsible for persisting the updated array to state and sessionStorage.
+     */
+    function updateStatus(id: string, status: MessageStatus, prev: ChatMessage[]): ChatMessage[] {
+      return prev.map((m) => (m.id === id ? { ...m, status } : m))
+    }
+
+    const next = [...messages, userMsg]
+    setMessages(next)
+    saveChat(playerId, next)
+    setEntry('')
+    setLoading(true)
+    setBbTyping(false)
+
+    try {
+      // Transition: sending → delivered after a short artificial delay
+      await new Promise<void>((resolve) => setTimeout(resolve, 350))
+      if (!isCurrent()) return
+      setMessages((prev) => {
+        const updated = updateStatus(msgId, 'delivered', prev)
+        saveChat(playerId, updated)
+        return updated
+      })
+
+      // Moderate before any special prompt or game-action handler. This keeps
+      // abusive or deliberately noisy input from slipping into a side channel.
+      const safety = assessLocalConfessionalInput({
+        diaryText: text,
+        history: messages.map((message) => ({
+          role: message.role,
+          text: message.text,
+          timestamp: message.timestamp,
+        })),
+        now: Date.now(),
+      })
+      if (safety) {
+        let replyText = safety.text
+        if (isConfessionalMisconductCode(safety.code)) {
+          const currentPlayer = reduxStore
+            .getState()
+            .game.players.find((candidate) => candidate.id === playerId)
+          const currentGame = reduxStore.getState().game
+          const previousStrikes =
+            currentPlayer?.confessionalMisconduct?.season === currentGame.season
+              ? currentPlayer.confessionalMisconduct.strikes
+              : 0
+          const nextStrike = previousStrikes + 1
+          dispatch(
+            recordConfessionalMisconduct({
+              playerId,
+              violation: safety.code,
+            })
+          )
+          replyText = getConfessionalMisconductResponse(nextStrike)
+          if (nextStrike >= 3) {
+            navigate('/self-evicted')
+            return
+          }
+        }
+
+        setMessages((prev) => {
+          const withSeen = prev.map((message) =>
+            message.role === 'user' && message.status !== 'seen'
+              ? { ...message, status: 'seen' as MessageStatus }
+              : message
+          )
+          saveChat(playerId, withSeen)
+          return withSeen
+        })
+        pushBigEyeMessage(replyText)
+        return
+      }
+
+      if (voxPopuliActive && isVoxNominationRevealPhrase(text)) {
+        setMessages((prev) => {
+          const withSeen = prev.map((message) =>
+            message.role === 'user' && message.status !== 'seen'
+              ? { ...message, status: 'seen' as MessageStatus }
+              : message
+          )
+          saveChat(playerId, withSeen)
+          return withSeen
+        })
+        if (!activeVoxNominationReveal) {
+          pushBigEyeMessage(
+            'There is no nomination trail available right now. Return after today’s secret nominations are complete.'
+          )
+        } else if (activeVoxNominationReveal.status === 'revealed') {
+          pushBigEyeMessage('Today’s secret nomination trail is already open below.')
+        } else {
+          pushBigEyeMessage(
+            'I have today’s sealed ballots. Watch the short message that follows, and I will uncover the full nomination trail.'
+          )
+          setShowVoxNominationAdPrompt(true)
+        }
+        return
+      }
+
+      const latentTwinShockGuess =
+        activeConfessionalDecision?.type !== 'twin_shock' &&
+        gameState.twinShock?.status === 'day4_asked_no_correct_guess' &&
+        gameState.twinShock.promptStage == null &&
+        classifyTwinShockAnswer(text) === 'correct_twin_guess'
+
+      if (
+        gameState.twinShock &&
+        ((activeConfessionalDecision?.type === 'twin_shock' && gameState.twinShock.promptStage) ||
+          latentTwinShockGuess)
+      ) {
+        authoredTwinTurnRef.current = true
+        const currentPromptStage = gameState.twinShock.promptStage
+        const twinResult = resolveTwinShockTurn(gameState.twinShock, text, {
+          playerName,
+          liaActive: alivePlayers.some((player) => player.id === 'lia'),
+        })
+        dispatch(submitTwinShockAnswer(text))
+        setMessages((prev) => {
+          const withSeen = prev.map((m) =>
+            m.role === 'user' && m.status !== 'seen' ? { ...m, status: 'seen' as MessageStatus } : m
+          )
+          saveChat(playerId, withSeen)
+          return withSeen
+        })
+        const nextPromptWillRender =
+          twinResult.promptStage !== null && twinResult.promptStage !== currentPromptStage
+        if (!nextPromptWillRender) {
+          await appendBigEyeReply(twinResult.messages, isCurrent)
+        }
+        return
+      }
+
+      const isMissionHintRequest =
+        secretMission?.status === 'accepted' &&
+        /(?:how|hint|help|explain|more info|what (?:do|is)|gimme|give me|complete\s+(?:task|mission))/i.test(
+          text
+        )
+      const missionTaskReference = isMissionHintRequest
+        ? findSecretMissionTaskReference(text, secretMission.tasks)
+        : null
+      if (missionTaskReference) {
+        setMessages((prev) => {
+          const withSeen = prev.map((message) =>
+            message.role === 'user' && message.status !== 'seen'
+              ? { ...message, status: 'seen' as MessageStatus }
+              : message
+          )
+          saveChat(playerId, withSeen)
+          return withSeen
+        })
+        await appendBigEyeReply(
+          [getSecretMissionTaskHint(missionTaskReference.task, missionTaskReference.taskNumber)],
+          isCurrent
+        )
+        return
+      }
+
+      const requestStartedAt = Date.now()
+      setBbTyping(true)
+      const historicalWorld: BigEyeWorldContext = {
+        ...bigEyeWorld,
+        historicalFacts: retrieveHistoricalFacts({
+          question: text,
+          playerId,
+          playerName,
+          history: gameState.history,
+          tvFeed: gameState.tvFeed,
+          currentNames: Object.fromEntries(playerNameById),
+        }),
+      }
+      const resp = await generateBigBrotherReply({
+        diaryText: text,
+        playerName,
+        phase,
+        seed,
+        state: conversationState,
+        history: messages.slice(-12).map((message) => ({ role: message.role, text: message.text })),
+        memorySummary,
+        world: historicalWorld,
+        skipDirector: requestVipForThisTurn,
+      })
+      if (!isCurrent() || selectActiveConfessionalDecision(reduxStore.getState())) return
+      let replyText = resp.text
+      let vipReplyUsed = false
+      const discoveredEgg = getSecretMissionEasterEggByIntent(resp.intent)
+
+      if (requestVipForThisTurn && resp.vipEligible && !resp.action && !discoveredEgg) {
+        try {
+          const vipReply = await requestBigEyeVipReply({
+            seasonId: vipSeasonId,
+            playerName,
+            diaryText: text,
+            intent: resp.intent,
+            history: messages
+              .slice(-12)
+              .map((message) => ({ role: message.role, text: message.text })),
+            memorySummary,
+            world: historicalWorld,
+          })
+          if (!isCurrent() || selectActiveConfessionalDecision(reduxStore.getState())) return
+          replyText = vipReply.text
+          vipReplyUsed = true
+          setVipStatus({
+            available: vipReply.available,
+            plan: vipReply.plan,
+            period: vipReply.period,
+            limit: vipReply.limit,
+            used: vipReply.used,
+            remaining: vipReply.remaining,
+            resetsAt: vipReply.resetsAt,
+          })
+          setVipNotice(
+            `VIP reply used · ${vipReply.remaining} ${vipReply.period === 'day' ? 'left today' : 'left this season'}`
+          )
+        } catch (error) {
+          if (!isCurrent()) return
+          if (error instanceof BigEyeVipError && error.status) setVipStatus(error.status)
+          setVipNotice(
+            error instanceof BigEyeVipError
+              ? error.message
+              : 'VIP was unavailable. The local Eye replied and your credit was kept.'
+          )
+        }
+      } else if (requestVipForThisTurn && discoveredEgg) {
+        setVipNotice('You found an authored Easter egg, so your VIP credit was kept.')
+      } else if (requestVipForThisTurn && resp.action) {
+        setVipNotice('That was a game action, so your VIP credit was kept.')
+      } else if (requestVipForThisTurn && !resp.vipEligible) {
+        setVipNotice('The Eye could answer that directly, so your VIP credit was kept.')
+      }
+
+      // Preserve a deliberate beat without adding the full pause after a slow network response.
+      const elapsedMs = Date.now() - requestStartedAt
+      const typingDelay = Math.max(180, Math.min(900, resp.performance.pauseBeforeMs - elapsedMs))
+      await new Promise<void>((resolve) => setTimeout(resolve, typingDelay))
+      if (!isCurrent() || selectActiveConfessionalDecision(reduxStore.getState())) return
+      setBbTyping(false)
+      setConversationState(resp.nextState)
+      saveConversationState(gameState.gameId, playerId, resp.nextState)
+      setMemorySummary(resp.memorySummary)
+      saveBigEyeMemory(gameState.gameId, playerId, resp.memorySummary)
+
+      const bbMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text: replyText,
+        timestamp: Date.now(),
+        performance: resp.performance,
+        vip: vipReplyUsed,
+      }
+
+      // Mark all previous user messages as 'seen' when BB replies
+      setMessages((prev) => {
+        const withSeen = prev.map((m) =>
+          m.role === 'user' && m.status !== 'seen' ? { ...m, status: 'seen' as MessageStatus } : m
+        )
+        const withReply = [...withSeen, bbMsg]
+        saveChat(playerId, withReply)
+        return withReply
+      })
+
+      if (resp.action === 'launch_tic_tac_toe') {
+        setTicTacToeBoard(createEmptyTicTacToeBoard())
+        setTicTacToeNextTurn('X')
+        setTicTacToeThinking(false)
+        launchTicTacToe()
+      }
+      if (resp.action === 'open_self_evict_modal' && !confessionalDecisionPending) {
+        setShowSelfEvictConfirm(true)
+      }
+
+      if (discoveredEgg) {
+        dispatch(
+          recordSecretMissionEasterEgg({
+            eggId: discoveredEgg.id,
+            day: currentWeekForMission,
+          })
+        )
+      }
+    } catch (err) {
+      if (!isCurrent()) return
+      console.error('The Big Eye AI error:', err)
+      const bbErr: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text: 'I could not respond just now. Please try again.',
+        timestamp: Date.now(),
+      }
+      setMessages((prev) => {
+        const withErr = [...prev, bbErr]
+        saveChat(playerId, withErr)
+        return withErr
+      })
+    } finally {
+      if (isCurrent()) {
+        authoredTwinTurnRef.current = false
+        turnInFlightRef.current = false
+        setBbTyping(false)
+        setLoading(false)
+      }
+    }
+  }
+
+  const handleDecisionCommitted = useCallback(
+    (summary: string) => {
+      hasUserMessageRef.current = true
+      const userDecisionMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        text: summary,
+        timestamp: Date.now(),
+        status: 'seen',
+      }
+      const bigEyeConfirmationMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'bb',
+        text: BIG_EYE_DECISION_CONFIRMATION,
+        timestamp: Date.now(),
+      }
+      setMessages((prev) => {
+        const nextDecision = selectActiveConfessionalDecision(reduxStore.getState())
+        const updated = nextDecision
+          ? [...prev, userDecisionMsg]
+          : [...prev, userDecisionMsg, bigEyeConfirmationMsg]
+        saveChat(playerId, updated)
+        return updated
+      })
+    },
+    [playerId, reduxStore]
+  )
+
+  const revealVoxNominationsAfterAd = useCallback(() => {
+    setVoxNominationReveal(updateVoxNominationRevealStatus('revealed'))
+    setShowVoxNominationAdPrompt(false)
+    setVoxNominationAdPending(false)
+    pushBigEyeMessage('The seal is broken. Every secret nomination is now on the record below.')
+  }, [pushBigEyeMessage])
+
+  return (
+    <div className="diary-room">
+      {showVoxNominationAdPrompt && !confessionalLocked && (
+        <AdPrompt
+          icon="🗳️"
+          title="Unseal Today’s Ballots?"
+          description="Watch a short ad and The Big Eye will reveal which two hubmates every player nominated."
+          watchLabel="Watch Ad to Reveal"
+          skipLabel="Keep Them Secret"
+          pending={voxNominationAdPending}
+          onWatch={() => {
+            if (voxNominationAdPending) return
+            setVoxNominationAdPending(true)
+            const state = reduxStore.getState()
+            if (!window.GameAds?.showRewarded) {
+              dispatch(recordAdShown('vox_nomination_breakdown'))
+              revealVoxNominationsAfterAd()
+              return
+            }
+            const requested = showRewarded(
+              'vox_nomination_breakdown',
+              state,
+              dispatch,
+              revealVoxNominationsAfterAd
+            )
+            if (!requested) revealVoxNominationsAfterAd()
+          }}
+          onSkip={() => {
+            setShowVoxNominationAdPrompt(false)
+            setVoxNominationAdPending(false)
+            pushBigEyeMessage('Very well. Today’s nomination trail will remain behind the curtain.')
+          }}
+        />
+      )}
+      {!confessionalLocked && showEntryAnimation && (
+        <div
+          className="diary-room__entry-overlay"
+          data-testid="confessional-entry-overlay"
+          aria-hidden="true"
+          style={
+            {
+              '--diary-room-entry-overlay-ms': `${DIARY_ROOM_ENTRY_OVERLAY_MS}ms`,
+            } as CSSProperties
+          }
+        >
+          <div className="diary-room__entry-stage">
+            <div className="diary-room__entry-light" />
+            <div className="diary-room__entry-threshold" />
+            <div className="diary-room__entry-doorway">
+              <div className="diary-room__entry-header-ornament" />
+              <div className="diary-room__entry-seam" />
+              <div className="diary-room__entry-door diary-room__entry-door--left">
+                <img
+                  className="diary-room__entry-door-image diary-room__entry-door-image--left"
+                  data-testid="confessional-entry-door-image"
+                  src={CONFESSIONAL_LOCKED_DOOR_SRC}
+                  alt=""
+                />
+              </div>
+              <div className="diary-room__entry-door diary-room__entry-door--right">
+                <img
+                  className="diary-room__entry-door-image diary-room__entry-door-image--right"
+                  data-testid="confessional-entry-door-image"
+                  src={CONFESSIONAL_LOCKED_DOOR_SRC}
+                  alt=""
+                />
+              </div>
+            </div>
+          </div>
+          <div className="diary-room__entry-copy">
+            <span className="diary-room__entry-eyebrow">Confessional</span>
+            <strong>The Big Eye is ready for you.</strong>
+          </div>
+        </div>
+      )}
+
+      <div
+        className={`diary-room__shell${showEntryAnimation ? ' diary-room__shell--masked' : ''}`}
+        style={CONFESSIONAL_PAINTING_STYLE}
+        data-testid="diary-room-shell"
+      >
+        {/* Self-evict confirmation modal */}
+        <ConfirmExitModal
+          open={showSelfEvictConfirm}
+          title="Leave the Hub?"
+          description="Do you want to leave the Hub? This cannot be undone."
+          confirmLabel="Yes, Leave"
+          cancelLabel="No, Stay"
+          onConfirm={() => {
+            setShowSelfEvictConfirm(false)
+            dispatch(selfEvict(playerId))
+            navigate('/self-evicted')
+          }}
+          onCancel={() => setShowSelfEvictConfirm(false)}
+        />
+
+        {/* Header */}
+        <div className="diary-room__header">
+          {confessionalDecisionPending ? (
+            /* Decision pending — back navigation is locked until resolved. */
+            <span
+              className="diary-room__back diary-room__back--locked"
+              aria-label="Decision required — complete your choice before leaving"
+              title="You must complete your decision before leaving the Confessional."
+              data-testid="diary-room-back-locked"
+            >
+              🔒 Locked
+            </span>
+          ) : (
+            <GameBackButton className="diary-room__back" onClick={() => navigate(-1)} />
+          )}
+          <h1 className="diary-room__title">🚪 Confessional</h1>
+        </div>
+
+        <div className="diary-room__body">
+          {confessionalLocked ? (
+            <section className="diary-room__locked" aria-label="Confessional locked">
+              <div className="diary-room__locked-door" data-testid="confessional-locked-door">
+                <img
+                  className="diary-room__locked-door-image"
+                  data-testid="confessional-locked-door-image"
+                  src={CONFESSIONAL_LOCKED_DOOR_SRC}
+                  alt=""
+                />
+              </div>
+              <span className="diary-room__locked-eyebrow">Confessional</span>
+              <h2 className="diary-room__locked-title">The door is locked.</h2>
+              <p className="diary-room__locked-copy">
+                Once you are out of the game, the Big Eye will not open the Confessional again.
+              </p>
+            </section>
+          ) : (
+            <>
+              <div className="diary-room__tabs" role="tablist" aria-label="Confessional views">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeView === 'confess'}
+                  className={
+                    activeView === 'confess'
+                      ? 'diary-room__tab diary-room__tab--active'
+                      : 'diary-room__tab'
+                  }
+                  onClick={() => setActiveView('confess')}
+                >
+                  Confess
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeView === 'wallet'}
+                  className={
+                    activeView === 'wallet'
+                      ? 'diary-room__tab diary-room__tab--active'
+                      : 'diary-room__tab'
+                  }
+                  disabled={confessionalDecisionPending}
+                  title={
+                    confessionalDecisionPending
+                      ? 'Complete the current Confessional decision before opening your Wallet.'
+                      : undefined
+                  }
+                  onClick={() => setActiveView('wallet')}
+                >
+                  Wallet
+                </button>
+              </div>
+              {activeView === 'wallet' ? (
+                <ConfessionalWallet />
+              ) : (
+                <div className="diary-room__confess">
+                  <p className="diary-room__prompt">
+                    "You are now in the Confessional. No one can hear you. Speak freely."
+                  </p>
+                  {twinShockResponseRequired && activeDecisionPresentation && (
+                    <section
+                      className="diary-room__twin-shock-prompt"
+                      aria-label="Required response from The Big Eye"
+                      data-testid="twin-shock-required-response"
+                    >
+                      <span className="diary-room__twin-shock-eyebrow">📺 Response required</span>
+                      <p className="diary-room__twin-shock-question">
+                        {activeDecisionPresentation.prompt}
+                      </p>
+                      <p className="diary-room__twin-shock-hint">
+                        Reply below with your best guess. On the final call, you can also say
+                        &ldquo;I give up&rdquo; to continue the game.
+                      </p>
+                    </section>
+                  )}
+                  {ticTacToeActive && (
+                    <div className="diary-room__mini-game-card" role="status" aria-live="polite">
+                      <div className="diary-room__mini-game-copy">
+                        <div className="diary-room__mini-game-header">
+                          <div>
+                            <strong>The Big Eye opened a game.</strong>
+                            <div className="diary-room__mini-game-subtitle">
+                              Tic Tac Toe is awake. Keep your nerve.
+                            </div>
+                          </div>
+                          <div
+                            className="diary-room__mini-game-status"
+                            aria-label="Tic tac toe status"
+                          >
+                            {ticTacToeWinner === 'X'
+                              ? 'You win.'
+                              : ticTacToeWinner === 'O'
+                                ? 'The Big Eye wins.'
+                                : ticTacToeDraw
+                                  ? "It's a draw."
+                                  : ticTacToeThinking
+                                    ? 'The Big Eye is thinking…'
+                                    : 'Your turn.'}
+                          </div>
+                        </div>
+                        <div
+                          className="diary-room__tic-tac-toe-board"
+                          role="group"
+                          aria-label="Tic Tac Toe board"
+                        >
+                          {ticTacToeBoard.map((cell, index) => (
+                            <button
+                              key={index}
+                              className={`diary-room__tic-tac-toe-cell${cell ? ' diary-room__tic-tac-toe-cell--filled' : ''}`}
+                              type="button"
+                              aria-label={`Tic tac toe square ${index + 1}${cell ? `, ${cell}` : ''}`}
+                              disabled={
+                                cell !== null ||
+                                ticTacToeNextTurn !== 'X' ||
+                                ticTacToeThinking ||
+                                ticTacToeWinner !== null ||
+                                ticTacToeDraw
+                              }
+                              onClick={() => {
+                                const nextBoard = [...ticTacToeBoard]
+                                nextBoard[index] = 'X'
+                                setTicTacToeBoard(nextBoard)
+                                setTicTacToeNextTurn('O')
+                              }}
+                            >
+                              {cell ?? ''}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="diary-room__mini-game-actions">
+                          <button
+                            className="diary-room__mini-game-btn"
+                            type="button"
+                            onClick={() => {
+                              setTicTacToeBoard(createEmptyTicTacToeBoard())
+                              setTicTacToeNextTurn('X')
+                              setTicTacToeThinking(false)
+                            }}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                      <button
+                        className="diary-room__mini-game-btn"
+                        type="button"
+                        onClick={() => {
+                          setTicTacToeBoard(createEmptyTicTacToeBoard())
+                          setTicTacToeNextTurn('X')
+                          setTicTacToeThinking(false)
+                          dismissTicTacToe()
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  )}
+                  {activeVoteBreakdown?.status === 'available' && (
+                    <div className="diary-room__vote-reveal-card" aria-label="Vote reveal offer">
+                      <span className="diary-room__vote-reveal-eyebrow">📺 The Big Eye</span>
+                      <p className="diary-room__vote-reveal-copy">
+                        Are you ready to peek behind the curtain?
+                      </p>
+                      <div className="diary-room__vote-reveal-actions">
+                        <button
+                          className="diary-room__mission-btn diary-room__mission-btn--accept"
+                          type="button"
+                          onClick={() => {
+                            setVoteBreakdownUnlock({ ...activeVoteBreakdown, status: 'revealed' })
+                            // The vote chart belongs to this Confessional visit only.
+                            // Keep the current render in component state, but consume
+                            // the session record so it cannot persist through the weekend.
+                            clearEvictionVoteBreakdownUnlock()
+                            const reminder = [...gameState.tvFeed]
+                              .reverse()
+                              .find(
+                                (event) =>
+                                  event.meta?.confessionalVoteBreakdown === true &&
+                                  event.meta?.week === activeVoteBreakdown.week &&
+                                  event.meta?.broadcastConsumed !== true
+                              )
+                            if (reminder) dispatch(consumeBroadcastEvent(reminder.id))
+                            pushBigEyeMessage('Then look closely. The curtain is lifting now.')
+                          }}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          className="diary-room__mission-btn diary-room__mission-btn--decline"
+                          type="button"
+                          onClick={() => {
+                            setVoteBreakdownUnlock(updateEvictionVoteBreakdownStatus('declined'))
+                            dispatch(
+                              addTvEvent({
+                                text: VOTE_BREAKDOWN_DECLINED_TV_MESSAGE,
+                                type: 'game',
+                              })
+                            )
+                            pushBigEyeMessage(
+                              'The Hub secret is safe with me. You can leave the Confessional.'
+                            )
+                          }}
+                        >
+                          No
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {activeVoteBreakdown?.status === 'revealed' && (
+                    <section
+                      className="diary-room__vote-chart"
+                      aria-label="Elimination vote breakdown"
+                    >
+                      <div className="diary-room__vote-chart-header">
+                        <span className="diary-room__vote-reveal-eyebrow">Vote Breakdown</span>
+                        <strong>Who voted for whom</strong>
+                      </div>
+                      <div
+                        className="diary-room__vote-chart-table"
+                        role="table"
+                        aria-label="Elimination vote chart"
+                      >
+                        {voteBreakdownRows.map((row) => (
+                          <div key={row.voterKey} className="diary-room__vote-chart-row" role="row">
+                            <span className="diary-room__vote-chart-cell" role="cell">
+                              {row.voterName}
+                            </span>
+                            <span className="diary-room__vote-chart-arrow" aria-hidden="true">
+                              →
+                            </span>
+                            <span
+                              className="diary-room__vote-chart-cell diary-room__vote-chart-cell--target"
+                              role="cell"
+                            >
+                              {row.targetName}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {activeVoxNominationReveal?.status === 'revealed' && (
+                    <section
+                      className="diary-room__vote-chart"
+                      aria-label="Secret nomination breakdown"
+                    >
+                      <div className="diary-room__vote-chart-header">
+                        <span className="diary-room__vote-reveal-eyebrow">
+                          Secret Nomination Trail
+                        </span>
+                        <strong>Who nominated whom</strong>
+                      </div>
+                      <div
+                        className="diary-room__vote-chart-table"
+                        role="table"
+                        aria-label="Secret nomination chart"
+                      >
+                        {voxNominationRows.map((row) => (
+                          <div key={row.voterId} className="diary-room__vote-chart-row" role="row">
+                            <span className="diary-room__vote-chart-cell" role="cell">
+                              {row.voterName}
+                            </span>
+                            <span className="diary-room__vote-chart-arrow" aria-hidden="true">
+                              →
+                            </span>
+                            <span
+                              className="diary-room__vote-chart-cell diary-room__vote-chart-cell--target"
+                              role="cell"
+                            >
+                              {row.targetNames.join(' and ')}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {bbTyping && (
+                    <div className="diary-room__bb-typing" aria-live="polite" aria-atomic="true">
+                      <span className="diary-room__bb-typing-label">
+                        The Big Eye is forming a response
+                      </span>
+                      <span className="diary-room__typing-dot" />
+                      <span className="diary-room__typing-dot" />
+                      <span className="diary-room__typing-dot" />
+                    </div>
+                  )}
+
+                  {/* ── Secret mission offer buttons ───────────────────────────── */}
+                  {!confessionalDecisionPending && secretMission?.status === 'offered' && (
+                    <div className="diary-room__mission-offer" aria-label="Secret mission offer">
+                      <button
+                        className="diary-room__mission-btn diary-room__mission-btn--accept"
+                        type="button"
+                        disabled={loading}
+                        onClick={() => {
+                          dispatch(acceptSecretMission())
+                          setMissionExpanded(true)
+                          const acceptMsg: ChatMessage = {
+                            id: crypto.randomUUID(),
+                            role: 'bb',
+                            text: 'Your mission is ready. Complete the objectives below to earn a reward.',
+                            timestamp: Date.now(),
+                          }
+                          setMessages((prev) => {
+                            const updated = [...prev, acceptMsg]
+                            saveChat(playerId, updated)
+                            return updated
+                          })
+                        }}
+                      >
+                        ✅ Accept the mission
+                      </button>
+                      <button
+                        className="diary-room__mission-btn diary-room__mission-btn--decline"
+                        type="button"
+                        disabled={loading}
+                        onClick={() => {
+                          dispatch(declineSecretMission(currentWeekForMission))
+                          const declineMsg: ChatMessage = {
+                            id: crypto.randomUUID(),
+                            role: 'bb',
+                            text: 'Understood. The mission is declined.',
+                            timestamp: Date.now(),
+                          }
+                          setMessages((prev) => {
+                            const updated = [...prev, declineMsg]
+                            saveChat(playerId, updated)
+                            return updated
+                          })
+                        }}
+                      >
+                        ❌ Decline
+                      </button>
+                    </div>
+                  )}
+
+                  {/* ── Secret mission status card (active) ───────────────────── */}
+                  {!confessionalDecisionPending &&
+                    secretMission &&
+                    (secretMission.status === 'accepted' ||
+                      secretMission.status === 'rewardPending') && (
+                      <section
+                        className={`diary-room__mission-checklist${
+                          missionExpanded ? ' diary-room__mission-checklist--expanded' : ''
+                        }`}
+                        aria-label="Secret mission checklist"
+                      >
+                        <button
+                          className="diary-room__mission-summary"
+                          type="button"
+                          aria-expanded={missionExpanded}
+                          aria-controls="secret-mission-details"
+                          onClick={() => setMissionExpanded((expanded) => !expanded)}
+                        >
+                          <span className="diary-room__mission-summary-copy">
+                            <span className="diary-room__mission-title">🕵️ Secret Mission</span>
+                            <span className="diary-room__mission-meta">
+                              {missionProgressLabel}
+                              {typeof missionDeadlineDay === 'number'
+                                ? ` · Ends Day ${missionDeadlineDay}`
+                                : ''}
+                            </span>
+                          </span>
+                          <span className="diary-room__mission-chevron" aria-hidden="true">
+                            {missionExpanded ? '⌃' : '⌄'}
+                          </span>
+                        </button>
+
+                        {missionExpanded && (
+                          <div id="secret-mission-details" className="diary-room__mission-details">
+                            {secretMission.tasks.map((task) => {
+                              const targetName = task.targetPlayerId
+                                ? playerNameById.get(task.targetPlayerId)
+                                : undefined
+                              const displayDesc = targetName
+                                ? task.description.replace('your marked target', targetName)
+                                : task.description
+                              return (
+                                <div
+                                  key={task.id}
+                                  className={`diary-room__mission-task${task.completed ? ' diary-room__mission-task--done' : ''}`}
+                                >
+                                  <span className="diary-room__mission-task-icon">
+                                    {task.completed ? '✅' : '⬜'}
+                                  </span>
+                                  <span className="diary-room__mission-task-desc">
+                                    {displayDesc}
+                                  </span>
+                                  {!task.completed && (
+                                    <span className="diary-room__mission-task-progress">
+                                      {task.current}/{task.target}
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            })}
+
+                            {/* ── Reward claim remains prominent when actionable ─── */}
+                            {secretMission.status === 'rewardPending' && (
+                              <div
+                                className="diary-room__mystery-boxes"
+                                aria-label="Secret mission reward boxes"
+                              >
+                                <p className="diary-room__mystery-boxes-prompt">
+                                  🎁 Choose one mystery box:
+                                </p>
+                                <div className="diary-room__mystery-boxes-grid">
+                                  {assignedRewardBoxes.map((_, index) => (
+                                    <button
+                                      key={`${rewardMissionKey}:${index}`}
+                                      className="diary-room__mystery-box-btn"
+                                      type="button"
+                                      aria-label={`Open Mystery Box ${index + 1}`}
+                                      onClick={() => {
+                                        if (secretMission.rewardSet) {
+                                          dispatch(
+                                            claimMissionBox({
+                                              missionId: secretMission.rewardSet.id,
+                                              index,
+                                            })
+                                          )
+                                          return
+                                        }
+                                        const rewardType = assignedRewardBoxes[index]
+                                        if (!rewardType) return
+                                        if (rewardType === 'immunity') {
+                                          const durationDays = pickMissionImmunityDuration(
+                                            secretMission.triggeredDay,
+                                            secretMission.templateId
+                                          )
+                                          dispatch(
+                                            claimMissionReward({
+                                              claimDay: currentWeekForMission,
+                                              durationDays,
+                                            })
+                                          )
+                                          const revealMsg: ChatMessage = {
+                                            id: crypto.randomUUID(),
+                                            role: 'bb',
+                                            text: REWARD_REVEAL_COPY[rewardType]!(
+                                              currentWeekForMission,
+                                              durationDays
+                                            ),
+                                            timestamp: Date.now(),
+                                          }
+                                          setMessages((prev) => {
+                                            const updated = [...prev, revealMsg]
+                                            saveChat(playerIdRef.current, updated)
+                                            return updated
+                                          })
+                                          return
+                                        }
+                                        // Legacy rewards keep their original identifier and
+                                        // payout so old saves never reinterpret a claimed box.
+                                        if (rewardType === 'plus1000Influence') {
+                                          // This branch is only reachable from migrated reward
+                                          // state; newly generated boxes use resourceCache.
+                                          dispatch(
+                                            applyInfluenceDelta({
+                                              playerId: playerIdRef.current,
+                                              delta: 1000,
+                                            })
+                                          )
+                                        }
+                                        dispatch(claimMissionReward(rewardType))
+                                        const revealMsg: ChatMessage = {
+                                          id: crypto.randomUUID(),
+                                          role: 'bb',
+                                          text: REWARD_REVEAL_COPY[rewardType]!(
+                                            currentWeekForMission
+                                          ),
+                                          timestamp: Date.now(),
+                                        }
+                                        setMessages((prev) => {
+                                          const updated = [...prev, revealMsg]
+                                          saveChat(playerIdRef.current, updated)
+                                          return updated
+                                        })
+                                      }}
+                                    >
+                                      🎁 Mystery Box {index + 1}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </section>
+                    )}
+
+                  {/* A completed mission is history; only an actually actionable stored
+                  power remains visible here, as a separate compact status card. */}
+                  {secretMission?.status === 'rewardClaimed' &&
+                    secretMission.reward?.eligible &&
+                    !secretMission.reward.consumed &&
+                    !secretMission.reward.expired &&
+                    secretMission.reward.type !== 'plus1000Influence' &&
+                    secretMission.reward.type !== 'resourceCache' &&
+                    secretMission.reward.type !== 'emptyBox' && (
+                      <div className="diary-room__reward-claimed" aria-label="Stored secret power">
+                        <p className="diary-room__reward-claimed-active">
+                          🔮 Secret power stored:{' '}
+                          <strong>
+                            {(isMissionPower(secretMission.reward.type)
+                              ? MISSION_POWER_LABELS[secretMission.reward.type]
+                              : REWARD_LABELS[secretMission.reward.type]) ??
+                              secretMission.reward.type}
+                          </strong>
+                          {secretMission.reward.type === 'immunity' &&
+                          secretMission.reward.durationDays
+                            ? ` — ${secretMission.reward.durationDays} day${secretMission.reward.durationDays === 1 ? '' : 's'}`
+                            : ''}
+                        </p>
+                        {secretMission.reward.type === 'immunity' && (
+                          <p className="diary-room__reward-active-hint">
+                            Use it during the Safety Ceremony while nominated. Expires after Day{' '}
+                            {secretMission.reward.activeUntilDay ?? currentWeekForMission}.
+                          </p>
+                        )}
+                        {secretMission.reward.type === 'doubleVote' && (
+                          <p className="diary-room__reward-active-hint">
+                            It will be offered automatically at your next eligible live vote.
+                          </p>
+                        )}
+                        {secretMission.reward.type === 'voteDeduction' && (
+                          <p className="diary-room__reward-active-hint">
+                            If you are on the block at an eligible elimination, you may remove one
+                            vote from your total.
+                          </p>
+                        )}
+                        {secretMission.reward.type === 'immunity' &&
+                          activeConfessionalDecision?.type === 'mission_immunity_offer' && (
+                            <p className="diary-room__reward-active-hint">
+                              📺 The Big Eye is ready to ask whether you want to spend it right now.
+                            </p>
+                          )}
+                      </div>
+                    )}
+                  {secretMission?.rewardSet &&
+                    secretMission.status === 'rewardClaimed' &&
+                    secretMission.reward && (
+                      <div
+                        className="diary-room__reward-claimed"
+                        aria-label="Mission reward details"
+                      >
+                        <strong>
+                          {isMissionPower(secretMission.reward.type)
+                            ? MISSION_POWER_LABELS[secretMission.reward.type]
+                            : secretMission.reward.type}
+                        </strong>
+                        <p>Big Eye: {missionPowerDetail(secretMission.reward)}</p>
+                        {missionPayout && (
+                          <p>
+                            Your arsenal received +{missionPayout.energy} Social Energy, +
+                            {missionPayout.influence} Influence and +{missionPayout.info}{' '}
+                            Information. Your resource caps still apply.
+                          </p>
+                        )}
+                        {secretMission.allianceReveal && (
+                          <p>
+                            Big Eye confirms {secretMission.allianceReveal.name}:{' '}
+                            {secretMission.allianceReveal.memberIds
+                              .map((id) => playerNameById.get(id) ?? id)
+                              .join(', ')}
+                            . Confirmed on Day {secretMission.allianceReveal.day}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  {secretMission?.privateRewardMessages?.length ? (
+                    <div
+                      className="diary-room__reward-claimed"
+                      aria-label="Private Big Eye power messages"
+                    >
+                      {secretMission.privateRewardMessages.map((message, index) => (
+                        <p key={`${secretMission.triggeredDay}:${index}`}>{message}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                  <ChatBubbles
+                    key={`${gameState.gameId}:${playerId}`}
+                    msgs={messages}
+                    playerName={playerName}
+                    endRef={confessEndRef}
+                    activeDecisionKey={activeDecisionPresentation?.key}
+                    visualEyeReactions={visualEyeReactions}
+                    activeDecisionPanel={
+                      activeConfessionalDecision && (
+                        <ConfessionalDecisionPanel
+                          decision={activeConfessionalDecision}
+                          onDecisionCommitted={handleDecisionCommitted}
+                        />
+                      )
+                    }
+                  />
+                  <form className="diary-room__confess-form" onSubmit={handleSubmit}>
+                    <textarea
+                      className="diary-room__textarea"
+                      value={entry}
+                      onChange={(e) => setEntry(e.target.value)}
+                      placeholder={
+                        twinShockResponseRequired
+                          ? 'Reply to The Big Eye to continue…'
+                          : 'What are you thinking?'
+                      }
+                      rows={2}
+                      maxLength={500}
+                      disabled={confessionalDecisionPending && !twinShockResponseRequired}
+                      aria-label={
+                        twinShockResponseRequired
+                          ? 'Required response to The Big Eye'
+                          : 'Diary entry'
+                      }
+                    />
+                    <div className="diary-room__footer">
+                      <span className="diary-room__charcount">{entry.length}/500</span>
+                      <div className="diary-room__footer-actions">
+                        <button
+                          className={`diary-room__vip-toggle${vipSelected ? ' diary-room__vip-toggle--selected' : ''}`}
+                          type="button"
+                          aria-pressed={vipSelected}
+                          aria-label={
+                            !vipConfigured
+                              ? 'VIP replies are not connected'
+                              : vipStatus
+                                ? `Use VIP reply, ${vipStatus.remaining} remaining`
+                                : 'VIP replies are unavailable'
+                          }
+                          title={
+                            !vipConfigured
+                              ? 'Connect the Cloudflare VIP worker to enable this.'
+                              : undefined
+                          }
+                          disabled={
+                            loading ||
+                            !vipConfigured ||
+                            !vipStatus?.available ||
+                            vipStatus.remaining < 1
+                          }
+                          onClick={() => setVipSelected((selected) => !selected)}
+                        >
+                          <span aria-hidden="true">✦</span>
+                          <span>
+                            {vipSelected
+                              ? 'VIP next'
+                              : vipStatus
+                                ? `VIP · ${vipStatus.remaining}`
+                                : 'VIP'}
+                          </span>
+                        </button>
+                        <button
+                          className="diary-room__submit"
+                          type="submit"
+                          disabled={
+                            !entry.trim() ||
+                            loading ||
+                            (confessionalDecisionPending && !twinShockResponseRequired)
+                          }
+                          aria-label="Send message"
+                        >
+                          {loading ? '⏳ Waiting…' : '📣 Send'}
+                        </button>
+                      </div>
+                    </div>
+                    {vipNotice && (
+                      <p className="diary-room__vip-notice" role="status">
+                        {vipNotice}
+                      </p>
+                    )}
+                  </form>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

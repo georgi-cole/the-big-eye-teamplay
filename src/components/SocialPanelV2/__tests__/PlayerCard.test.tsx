@@ -1,0 +1,503 @@
+/**
+ * Tests for PlayerCard and PlayerList components.
+ *
+ * PlayerCard covers:
+ *  1. Renders player name and status.
+ *  2. Has role="button" and aria-pressed.
+ *  3. Calls onSelect on click.
+ *  4. Calls onSelect with additive=true when Ctrl key is held.
+ *  5. Calls onSelect with additive=true when Meta (Cmd) key is held.
+ *  6. Calls onSelect on Enter / Space keydown.
+ *  7. Does not call onSelect when disabled.
+ *  8. Renders affinity when provided (clamped to 0–100).
+ *  9. Does not render affinity when not provided.
+ * 10. [A11y] Esc key calls onSelect to deselect when card is selected.
+ * 11. [A11y] Esc key does nothing when card is not selected.
+ * 12. [A11y] Uses a semantic <button> element.
+ *
+ * PlayerList covers:
+ * 13. Renders a card for each player.
+ * 14. Single-click selects only that player.
+ * 15. Ctrl+click toggles multi-select.
+ * 16. Shift+click performs range selection.
+ * 17. Arrow key navigation moves focus.
+ * 18. onSelectionChange callback is fired.
+ */
+
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import type { Player } from '../../../types'
+import {
+  createDirectedRelationship,
+  createInitialRealityDomainState,
+} from '../../../social/reality'
+import { createRealityAlliance } from '../../../social/reality/relationshipForms'
+import PlayerCard from '../PlayerCard'
+import PlayerList from '../PlayerList'
+
+// ── Fixtures ────────────────────────────────────────────────────────────────
+
+function makePlayer(overrides?: Partial<Player>): Player {
+  return {
+    id: 'p1',
+    name: 'Alice',
+    avatar: '😀',
+    status: 'active',
+    ...overrides,
+  }
+}
+
+// ── PlayerCard ───────────────────────────────────────────────────────────────
+
+describe('PlayerCard', () => {
+  it('renders player name', () => {
+    const player = makePlayer({ name: 'Bob' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    expect(screen.getByText('Bob')).toBeDefined()
+  })
+
+  it('renders player status', () => {
+    const player = makePlayer({ status: 'nominated' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    expect(screen.getByText('Nom')).toBeDefined()
+  })
+
+  it('labels eliminated players clearly', () => {
+    const player = makePlayer({ status: 'evicted' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    expect(screen.getByText('Eliminated')).toBeDefined()
+  })
+
+  it('labels Tribunal members clearly', () => {
+    const player = makePlayer({ status: 'jury' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    expect(screen.getByText('⚖ Tribunal')).toBeDefined()
+  })
+
+  it('has role="button" and aria-pressed=false when not selected', () => {
+    const player = makePlayer()
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    const card = screen.getByRole('button', { name: /alice/i })
+    expect(card.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('has aria-pressed=true when selected', () => {
+    const player = makePlayer()
+    render(<PlayerCard player={player} selected={true} disabled={false} onSelect={() => {}} />)
+    const card = screen.getByRole('button', { name: /alice/i })
+    expect(card.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('opens the recorded betrayal evidence from the selected relationship card', () => {
+    const onOpenBetrayalEvent = vi.fn()
+    render(
+      <PlayerCard
+        player={makePlayer()}
+        selected
+        disabled={false}
+        onSelect={() => {}}
+        relationshipTags={['betrayal']}
+        onOpenBetrayalEvent={onOpenBetrayalEvent}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Betrayed · View event/i }))
+    expect(onOpenBetrayalEvent).toHaveBeenCalledOnce()
+  })
+
+  it('calls onSelect with (id, false, false) on plain click', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }))
+    expect(onSelect).toHaveBeenCalledWith('p99', false, false)
+  })
+
+  it('calls onSelect with additive=true on Ctrl+click', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }), { ctrlKey: true })
+    expect(onSelect).toHaveBeenCalledWith('p99', true, false)
+  })
+
+  it('calls onSelect with additive=true on Meta+click', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }), { metaKey: true })
+    expect(onSelect).toHaveBeenCalledWith('p99', true, false)
+  })
+
+  it('calls onSelect on Enter keydown', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: /alice/i }), { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('p99', false, false)
+  })
+
+  it('calls onSelect on Space keydown', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: /alice/i }), { key: ' ' })
+    expect(onSelect).toHaveBeenCalledWith('p99', false, false)
+  })
+
+  it('does not call onSelect when disabled', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={true} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }))
+    fireEvent.keyDown(screen.getByRole('button', { name: /alice/i }), { key: 'Enter' })
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('renders affinity when provided', () => {
+    const player = makePlayer()
+    render(
+      <PlayerCard
+        player={player}
+        selected={true}
+        disabled={false}
+        onSelect={() => {}}
+        affinity={72}
+      />
+    )
+    expect(screen.getByText('72%')).toBeDefined()
+  })
+
+  it('shows the signed relationship score without hiding strong values', () => {
+    const player = makePlayer()
+    render(
+      <PlayerCard
+        player={player}
+        selected={true}
+        disabled={false}
+        onSelect={() => {}}
+        affinity={150}
+      />
+    )
+    expect(screen.getByText('150%')).toBeDefined()
+  })
+
+  it('shows a negative relationship score instead of flattening it to zero', () => {
+    const player = makePlayer()
+    render(
+      <PlayerCard
+        player={player}
+        selected={true}
+        disabled={false}
+        onSelect={() => {}}
+        affinity={-10}
+      />
+    )
+    expect(screen.getByText('-10%')).toBeDefined()
+  })
+
+  it('renders "—" for affinity when not provided', () => {
+    const player = makePlayer()
+    render(<PlayerCard player={player} selected={true} disabled={false} onSelect={() => {}} />)
+    expect(screen.getByText('—')).toBeDefined()
+    expect(screen.queryByText(/%/)).toBeNull()
+  })
+
+  it('shows only a compact direction arrow for the recent change', () => {
+    const player = makePlayer()
+    render(
+      <PlayerCard
+        player={player}
+        selected={true}
+        disabled={false}
+        onSelect={() => {}}
+        affinity={42}
+        affinityDelta={2}
+      />
+    )
+    expect(screen.getByText('42%')).toBeDefined()
+    expect(screen.getByText('(↑)')).toBeDefined()
+    expect(screen.queryByText(/today/i)).toBeNull()
+    expect(screen.queryByText(/relationship score/i)).toBeNull()
+  })
+
+  it('calls onSelect with plain click args on Escape when selected (to deselect)', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ id: 'p99', name: 'Alice' })
+    render(<PlayerCard player={player} selected={true} disabled={false} onSelect={onSelect} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: /alice/i }), { key: 'Escape' })
+    expect(onSelect).toHaveBeenCalledWith('p99', false, false)
+  })
+
+  it('does not call onSelect on Escape when card is not selected', () => {
+    const onSelect = vi.fn()
+    const player = makePlayer({ name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={onSelect} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: /alice/i }), { key: 'Escape' })
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('renders a semantic <button> element', () => {
+    const player = makePlayer({ name: 'Alice' })
+    render(<PlayerCard player={player} selected={false} disabled={false} onSelect={() => {}} />)
+    const el = screen.getByRole('button', { name: /alice/i })
+    expect(el.tagName.toLowerCase()).toBe('button')
+  })
+})
+
+// ── PlayerList ───────────────────────────────────────────────────────────────
+
+describe('PlayerList', () => {
+  const players: Player[] = [
+    makePlayer({ id: 'a', name: 'Alice', status: 'active' }),
+    makePlayer({ id: 'b', name: 'Bob', status: 'nominated' }),
+    makePlayer({ id: 'c', name: 'Carol', status: 'loh' }),
+  ]
+
+  function renderWithFormalCommitments(kinds: Array<'PACT' | 'GROUP'>) {
+    const reality = createInitialRealityDomainState()
+    for (const kind of kinds) {
+      const alliance = createRealityAlliance(reality, {
+        id: `ui-${kind.toLowerCase()}`,
+        founderIds: ['human'],
+        memberIds: kind === 'PACT' ? ['a'] : ['a', 'c'],
+        purpose: 'Test commitment labels',
+        kind,
+        at: { day: 1, phase: 'social_1' },
+      })
+      alliance.status = 'ACTIVE'
+    }
+
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        relationships={{ human: { a: { affinity: 60, tags: ['alliance'] } } }}
+        selectedIds={new Set(['a'])}
+        playerLimitedRead
+        reality={reality}
+      />
+    )
+  }
+
+  it('renders a card for each player', () => {
+    render(<PlayerList players={players} />)
+    expect(screen.getByText('Alice')).toBeDefined()
+    expect(screen.getByText('Bob')).toBeDefined()
+    expect(screen.getByText('Carol')).toBeDefined()
+  })
+
+  it('does not leak the housemate-to-human private relationship into the visible read', () => {
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        relationships={{
+          human: {
+            a: { affinity: 60, tags: ['alliance'] },
+          },
+          a: {
+            human: { affinity: -80, tags: ['target', 'rivalry'] },
+          },
+        }}
+        selectedIds={new Set(['a'])}
+        playerLimitedRead
+      />
+    )
+
+    expect(screen.getByText('60%')).toBeInTheDocument()
+    expect(screen.getByText(/Ally/)).toBeInTheDocument()
+    expect(screen.queryByText(/Rival/)).toBeNull()
+    expect(screen.queryByText('-10%')).toBeNull()
+  })
+
+  it('labels a personal pact as Pact instead of Ally or Alliance', () => {
+    renderWithFormalCommitments(['PACT'])
+
+    const card = screen.getByRole('button', { name: /alice/i })
+    expect(
+      [...card.querySelectorAll('.pc__bond-chip--ally')].map((chip) => chip.textContent)
+    ).toEqual(['🤝 Pact'])
+  })
+
+  it('labels group membership as Alliance', () => {
+    renderWithFormalCommitments(['GROUP'])
+
+    const card = screen.getByRole('button', { name: /alice/i })
+    expect(
+      [...card.querySelectorAll('.pc__bond-chip--ally')].map((chip) => chip.textContent)
+    ).toEqual(['🤝 Alliance'])
+  })
+
+  it('shows Pact and Alliance when both formal commitments exist', () => {
+    renderWithFormalCommitments(['PACT', 'GROUP'])
+
+    const card = screen.getByRole('button', { name: /alice/i })
+    expect(
+      [...card.querySelectorAll('.pc__bond-chip--ally')].map((chip) => chip.textContent)
+    ).toEqual(['🤝 Pact', '🤝 Alliance'])
+  })
+
+  it('uses the directed Reality label when its projected affinity still falls in Neutral', () => {
+    const reality = createInitialRealityDomainState()
+    const edge = createDirectedRelationship('human', 'a', 10)
+    edge.perceivedLabel = 'FRIENDLY'
+    reality.relationships.human = { a: edge }
+
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        relationships={{ human: { a: { affinity: 10, tags: [] } } }}
+        selectedIds={new Set(['a'])}
+        playerLimitedRead
+        reality={reality}
+      />
+    )
+
+    expect(screen.getByText('Friendly')).toBeInTheDocument()
+    expect(screen.queryByText('Neutral')).toBeNull()
+  })
+
+  it('shows Still forming instead of Neutral when Reality has no relationship evidence', () => {
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        relationships={{ human: { a: { affinity: 0, tags: [] } } }}
+        selectedIds={new Set(['a'])}
+        playerLimitedRead
+        reality={createInitialRealityDomainState()}
+      />
+    )
+
+    expect(screen.getByText('Still forming')).toBeInTheDocument()
+    expect(screen.queryByText('Neutral')).toBeNull()
+    expect(screen.queryByText(/\d+%/)).toBeNull()
+  })
+
+  it('shows a short no-signal read after the opening days', () => {
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        selectedIds={new Set(['a'])}
+        playerLimitedRead
+        reality={createInitialRealityDomainState()}
+        currentDay={7}
+      />
+    )
+
+    expect(screen.getByText('No tea')).toBeInTheDocument()
+    expect(screen.queryByText('Still forming')).toBeNull()
+  })
+
+  it('preserves the mutual relationship summary outside Reality Mode', () => {
+    render(
+      <PlayerList
+        players={[players[0]]}
+        humanPlayerId="human"
+        relationships={{
+          human: {
+            a: { affinity: 60, tags: [] },
+          },
+          a: {
+            human: { affinity: -80, tags: ['rivalry'] },
+          },
+        }}
+        selectedIds={new Set(['a'])}
+      />
+    )
+
+    expect(screen.getByText('-10%')).toBeInTheDocument()
+    expect(screen.getByText(/Rival/)).toBeInTheDocument()
+  })
+
+  it('single-click selects only the clicked player', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+    fireEvent.click(screen.getByRole('button', { name: /bob/i }))
+    const lastCall = onSelectionChange.mock.calls.at(-1)?.[0] as Set<string>
+    expect(lastCall.has('b')).toBe(true)
+    expect(lastCall.size).toBe(1)
+  })
+
+  it('clicking an already-selected player deselects it (toggle-off)', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+    // First click selects Bob
+    fireEvent.click(screen.getByRole('button', { name: /bob/i }))
+    // Second click on the same player should deselect → empty selection
+    fireEvent.click(screen.getByRole('button', { name: /bob/i }))
+    const lastCall = onSelectionChange.mock.calls.at(-1)?.[0] as Set<string>
+    expect(lastCall.size).toBe(0)
+  })
+
+  it('Ctrl+click toggles a second player into multi-select', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+    // First select Alice
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }))
+    // Then Ctrl+click Bob
+    fireEvent.click(screen.getByRole('button', { name: /bob/i }), { ctrlKey: true })
+    const lastCall = onSelectionChange.mock.calls.at(-1)?.[0] as Set<string>
+    expect(lastCall.has('a')).toBe(true)
+    expect(lastCall.has('b')).toBe(true)
+    expect(lastCall.size).toBe(2)
+  })
+
+  it('calls onSelectionChange when selection changes', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+    fireEvent.click(screen.getByRole('button', { name: /carol/i }))
+    expect(onSelectionChange).toHaveBeenCalled()
+  })
+
+  it('supports shift-click range selection between players', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+
+    // First click Alice to set the selection anchor.
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }))
+
+    // Then shift-click Carol to select the contiguous range [Alice, Bob, Carol].
+    fireEvent.click(screen.getByRole('button', { name: /carol/i }), { shiftKey: true })
+
+    const lastCall = onSelectionChange.mock.calls.at(-1)?.[0] as Set<string>
+    expect(lastCall.has('a')).toBe(true)
+    expect(lastCall.has('b')).toBe(true)
+    expect(lastCall.has('c')).toBe(true)
+    expect(lastCall.size).toBe(3)
+  })
+
+  it('reports the clicked player as primaryTargetId for reverse shift selections', () => {
+    const onSelectionChange = vi.fn()
+    render(<PlayerList players={players} onSelectionChange={onSelectionChange} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /carol/i }))
+    fireEvent.click(screen.getByRole('button', { name: /alice/i }), { shiftKey: true })
+
+    const details = onSelectionChange.mock.calls.at(-1)?.[1] as { primaryTargetId: string | null }
+    expect(details.primaryTargetId).toBe('a')
+  })
+
+  it('arrow key navigation moves focus to the next card', () => {
+    render(<PlayerList players={players} />)
+    const aliceBtn = screen.getByRole('button', { name: /alice/i })
+    const bobBtn = screen.getByRole('button', { name: /bob/i })
+
+    aliceBtn.focus()
+    fireEvent.keyDown(aliceBtn.parentElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(bobBtn)
+  })
+
+  it('arrow key navigation moves focus to the previous card', () => {
+    render(<PlayerList players={players} />)
+    const aliceBtn = screen.getByRole('button', { name: /alice/i })
+    const bobBtn = screen.getByRole('button', { name: /bob/i })
+
+    bobBtn.focus()
+    fireEvent.keyDown(bobBtn.parentElement!, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(aliceBtn)
+  })
+})

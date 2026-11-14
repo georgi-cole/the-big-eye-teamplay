@@ -1,0 +1,528 @@
+import { createSlice, createSelector, type PayloadAction } from '@reduxjs/toolkit'
+import { publicOpinionConfig } from './publicOpinionConfig'
+import { createPublicNarrative } from './publicNarratives'
+import { restoreWeekendDebugSnapshot } from '../features/weekend/weekendDebugActions'
+import { applyAudienceApprovalDelta, createAudienceBreakdown } from './audienceBreakdown'
+import type {
+  PublicOpinionState,
+  PlayerPublicProfile,
+  PublicDirection,
+  PublicFeedEntry,
+} from './types'
+
+// Minimal type for selectors to avoid circular import with store.ts
+type StateWithPublicOpinion = { publicOpinion: PublicOpinionState }
+
+const initialState: PublicOpinionState = {
+  profiles: {},
+  directions: [],
+  feed: [],
+  lastUpdatedWeek: 0,
+  feedPostsThisDay: 0,
+  currentFeedDay: 0,
+}
+
+function feedPriority(reason: string, eventType?: string): number {
+  const signal = `${reason} ${eventType ?? ''}`.toLowerCase()
+  if (/evict/.test(signal)) return 5
+  if (/(nomination|nominated|public_save|pov_save|safety_save)/.test(signal)) return 4
+  if (/(direction_|betray|break_alliance|rivalry|hoh_win|pov_win|immunity_win)/.test(signal)) {
+    return 3
+  }
+  if (/(confront|conflict|rumou?r|negative_social|poor_social)/.test(signal)) return 2
+  return 1
+}
+
+function beginApprovalDay(state: PublicOpinionState, week: number): void {
+  if (state.currentFeedDay === week) return
+  for (const profile of Object.values(state.profiles)) {
+    profile.approvalAtDayStart = profile.approval
+    profile.approvalDay = week
+  }
+  state.feedPostsThisDay = 0
+  state.currentFeedDay = week
+}
+
+// ── Shared helper (used by both resolveDirection and updateMissionProgress) ───
+
+/**
+ * Marks a direction as completed and applies all associated approval rewards
+ * (counter increment, success delta, feed entry) to the player's profile.
+ * Extracted to avoid duplicating this logic across two reducers.
+ */
+function applyDirectionCompletionRewards(
+  state: PublicOpinionState,
+  direction: PublicDirection,
+  week: number
+): void {
+  direction.status = 'completed'
+  direction.completedWeek = week
+  // Once the objective is accepted as complete (including the bounded 98%
+  // damping tail), persist the canonical completed value so history and UI do
+  // not show a "completed" request stuck below 100%.
+  direction.progressPercent = 100
+
+  const profile = state.profiles[direction.playerId]
+  if (!profile) return
+
+  profile.completedDirectionCount += 1
+  const delta = publicOpinionConfig.directionRewards.success
+  const applied = applyAudienceApprovalDelta(profile, {
+    delta,
+    reason: 'direction_completed',
+    week,
+  })
+  profile.previousApproval = profile.approval
+  profile.audienceBreakdown = applied.breakdown
+  profile.approval = applied.approval
+  profile.seasonApprovals.push(applied.approval)
+  if (applied.appliedDelta > 0) {
+    profile.cumulativePositiveDelta += applied.appliedDelta
+  }
+  state.lastUpdatedWeek = week
+
+  const feedEntry: PublicFeedEntry = {
+    id: `${direction.playerId}-${week}-${Date.now()}-dir-completed`,
+    playerId: direction.playerId,
+    text: createPublicNarrative({
+      reason: 'direction_completed',
+      playerId: direction.playerId,
+      delta,
+      week,
+    }),
+    delta: applied.appliedDelta,
+    week,
+    timestamp: Date.now(),
+    reason: 'direction_completed',
+  }
+  state.feed.unshift(feedEntry)
+  if (state.feed.length > 50) {
+    state.feed = state.feed.slice(0, 50)
+  }
+}
+
+function applyDirectionFailurePenalty(
+  state: PublicOpinionState,
+  direction: PublicDirection,
+  week: number,
+  counter = false
+): void {
+  if (direction.status === 'failed') return
+  direction.status = 'failed'
+
+  const profile = state.profiles[direction.playerId]
+  if (!profile) return
+
+  const delta = counter
+    ? publicOpinionConfig.directionRewards.counter
+    : publicOpinionConfig.directionRewards.fail
+  const reason = counter ? 'direction_counter' : 'direction_failed'
+  const applied = applyAudienceApprovalDelta(profile, {
+    delta,
+    reason,
+    week,
+  })
+  profile.previousApproval = profile.approval
+  profile.audienceBreakdown = applied.breakdown
+  profile.approval = applied.approval
+  profile.seasonApprovals.push(applied.approval)
+  state.lastUpdatedWeek = week
+
+  const feedEntry: PublicFeedEntry = {
+    id: `${direction.playerId}-${week}-${Date.now()}-dir-failed`,
+    playerId: direction.playerId,
+    text: createPublicNarrative({
+      reason,
+      playerId: direction.playerId,
+      delta: applied.appliedDelta,
+      week,
+    }),
+    delta: applied.appliedDelta,
+    week,
+    timestamp: Date.now(),
+    reason,
+  }
+  state.feed.unshift(feedEntry)
+  if (state.feed.length > 50) {
+    state.feed = state.feed.slice(0, 50)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const publicOpinionSlice = createSlice({
+  name: 'publicOpinion',
+  initialState,
+  reducers: {
+    initializeProfiles(
+      state,
+      action: PayloadAction<
+        Array<
+          | string
+          | {
+              id: string
+              aiGameIdentity?: {
+                archetype?: string
+                audienceFocus?: number
+                competitionDrive?: number
+              }
+            }
+        >
+      >
+    ) {
+      for (const entry of action.payload) {
+        const playerId = typeof entry === 'string' ? entry : entry.id
+        if (!state.profiles[playerId]) {
+          state.profiles[playerId] = {
+            playerId,
+            approval: publicOpinionConfig.DEFAULT_APPROVAL,
+            previousApproval: publicOpinionConfig.DEFAULT_APPROVAL,
+            approvalAtDayStart: publicOpinionConfig.DEFAULT_APPROVAL,
+            approvalDay: 0,
+            seasonApprovals: [publicOpinionConfig.DEFAULT_APPROVAL],
+            completedDirectionCount: 0,
+            cumulativePositiveDelta: 0,
+            audienceBreakdown: createAudienceBreakdown(
+              publicOpinionConfig.DEFAULT_APPROVAL,
+              typeof entry === 'string' ? undefined : entry.aiGameIdentity
+            ),
+          }
+        }
+      }
+    },
+
+    setProfileApprovals(state, action: PayloadAction<Record<string, number>>) {
+      for (const [playerId, rawApproval] of Object.entries(action.payload)) {
+        const profile = state.profiles[playerId]
+        if (!profile) continue
+
+        const approval = Math.min(
+          publicOpinionConfig.MAX_APPROVAL,
+          Math.max(publicOpinionConfig.MIN_APPROVAL, Math.round(rawApproval))
+        )
+
+        const currentBreakdown =
+          profile.audienceBreakdown ?? createAudienceBreakdown(profile.approval)
+        const shift = approval - profile.approval
+        profile.audienceBreakdown = {
+          charisma: Math.min(100, Math.max(0, currentBreakdown.charisma + shift)),
+          gameplay: Math.min(100, Math.max(0, currentBreakdown.gameplay + shift)),
+          integrity: Math.min(100, Math.max(0, currentBreakdown.integrity + shift)),
+          recentChanges: [],
+        }
+        profile.previousApproval = approval
+        profile.approvalAtDayStart = approval
+        profile.approval = approval
+        profile.seasonApprovals = [approval]
+      }
+    },
+
+    updateApproval(
+      state,
+      action: PayloadAction<{
+        playerId: string
+        delta: number
+        reason: string
+        week: number
+        isHeadline?: boolean
+        headlineText?: string
+        /** When false, approval is updated silently without a Public Feed entry. Default: true. */
+        addToFeed?: boolean
+        /**
+         * The game event type that triggered this update (e.g. 'nomination',
+         * 'eviction', 'hoh_win', 'pov_save', 'public_save').
+         */
+        eventType?: string
+        /**
+         * ID of the player responsible for triggering this change
+         * (e.g. the LOH who nominated the subject).
+         */
+        attributedToId?: string
+        /** A small seeded audience-mood adjustment supplied by the middleware. */
+        audienceVariance?: number
+      }>
+    ) {
+      const {
+        playerId,
+        delta,
+        reason,
+        week,
+        isHeadline,
+        headlineText,
+        addToFeed = true,
+        eventType,
+        attributedToId,
+        audienceVariance = 0,
+      } = action.payload
+      const profile = state.profiles[playerId]
+      if (!profile) return
+
+      beginApprovalDay(state, week)
+
+      const applied = applyAudienceApprovalDelta(profile, {
+        delta: delta + audienceVariance,
+        reason,
+        week,
+        eventType,
+      })
+      profile.previousApproval = profile.approval
+      profile.audienceBreakdown = applied.breakdown
+      profile.approval = applied.approval
+      profile.seasonApprovals.push(applied.approval)
+      if (applied.appliedDelta > 0) {
+        profile.cumulativePositiveDelta += applied.appliedDelta
+      }
+      state.lastUpdatedWeek = week
+
+      const priority = feedPriority(reason, eventType)
+      const dailyBudget =
+        week <= 1 ? publicOpinionConfig.feedBudgetOpeningDay : publicOpinionConfig.feedBudgetPerDay
+      const lowestPriorityEntry = state.feed
+        .filter((entry) => entry.week === week && !entry.isHeadline)
+        .reduce<
+          PublicFeedEntry | undefined
+        >((lowest, entry) => (!lowest || (entry.priority ?? 1) < (lowest.priority ?? 1) ? entry : lowest), undefined)
+      const canReplaceLowerPriority =
+        !isHeadline &&
+        state.feedPostsThisDay >= dailyBudget &&
+        lowestPriorityEntry !== undefined &&
+        priority > (lowestPriorityEntry.priority ?? 1)
+      const budgetExceeded = !isHeadline && state.feedPostsThisDay >= dailyBudget
+
+      if (addToFeed && (!budgetExceeded || canReplaceLowerPriority)) {
+        if (canReplaceLowerPriority) {
+          state.feed.splice(state.feed.indexOf(lowestPriorityEntry!), 1)
+        }
+        const feedEntry: PublicFeedEntry = {
+          id: `${playerId}-${week}-${Date.now()}-${state.feed.length}`,
+          playerId,
+          text:
+            headlineText ??
+            createPublicNarrative({ reason, playerId, delta: applied.appliedDelta, week }),
+          delta: applied.appliedDelta,
+          week,
+          timestamp: Date.now(),
+          reason,
+          isHeadline: isHeadline ?? false,
+          eventType,
+          attributedToId,
+          priority,
+        }
+        state.feed.unshift(feedEntry)
+        if (state.feed.length > 50) {
+          state.feed = state.feed.slice(0, 50)
+        }
+        // Only count non-headline posts toward the daily budget; headline events
+        // (generated by PublicHeadlineService at week_start) have their own
+        // headlineEventsPerDayMin/Max budget managed by that service.
+        if (!isHeadline && !canReplaceLowerPriority) {
+          state.feedPostsThisDay += 1
+        }
+      }
+    },
+
+    addDirection(state, action: PayloadAction<PublicDirection>) {
+      state.directions.push(action.payload)
+    },
+
+    resolveDirection(
+      state,
+      action: PayloadAction<{
+        directionId: string
+        status: 'completed' | 'failed' | 'expired'
+        week: number
+        counter?: boolean
+      }>
+    ) {
+      const { directionId, status, week } = action.payload
+      const direction = state.directions.find((d) => d.id === directionId)
+      if (!direction) return
+
+      if (status === 'completed') {
+        // Guard: already completed (e.g. completed via updateMissionProgress) — no-op.
+        if (direction.status === 'completed') return
+        applyDirectionCompletionRewards(state, direction, week)
+        return
+      }
+
+      if (status === 'failed') {
+        applyDirectionFailurePenalty(state, direction, week, action.payload.counter === true)
+        return
+      }
+
+      // Expired means the world invalidated the request; it remains neutral.
+      direction.status = status
+    },
+
+    pruneExpiredDirections(state, action: PayloadAction<{ week: number }>) {
+      const { week } = action.payload
+      for (const direction of state.directions) {
+        if (direction.status === 'active' && direction.expiresAtWeek <= week) {
+          // If the request was still valid when its deadline passed, it was
+          // missed rather than invalidated. Impossible requests are expired
+          // neutrally by expireInvalidDirections before this reducer runs.
+          applyDirectionFailurePenalty(state, direction, week)
+        }
+      }
+    },
+
+    /**
+     * Reset the daily feed post counter for a new in-game day.
+     * Call at the start of each week (day) to allow a fresh budget of visible
+     * event-driven feed cards.
+     */
+    resetDailyFeedBudget(state, action: PayloadAction<{ week: number }>) {
+      beginApprovalDay(state, action.payload.week)
+    },
+
+    /** Add short-lived pregnancy buzz without changing historical approval. */
+    addTemporaryApprovalBoost(
+      state,
+      action: PayloadAction<{
+        playerId: string
+        id: string
+        delta: number
+        expiresWeek: number
+        reason: 'pregnancy_news'
+      }>
+    ) {
+      const profile = state.profiles[action.payload.playerId]
+      if (
+        !profile ||
+        profile.temporaryApprovalBoosts?.some((boost) => boost.id === action.payload.id)
+      ) {
+        return
+      }
+      profile.temporaryApprovalBoosts ??= []
+      profile.temporaryApprovalBoosts.push({
+        id: action.payload.id,
+        delta: action.payload.delta,
+        expiresWeek: action.payload.expiresWeek,
+        reason: action.payload.reason,
+      })
+    },
+
+    /**
+     * Update the progress percentage of an active mission direction.
+     * If progress reaches the completion threshold, calls the shared
+     * `applyDirectionCompletionRewards` helper so completion logic is
+     * never duplicated.
+     */
+    updateMissionProgress(
+      state,
+      action: PayloadAction<{
+        directionId: string
+        progressPercent: number
+        week: number
+        progressDelta?: number
+        progressKey?: string
+        eventType?: string
+        actionId?: string
+        targetId?: string
+      }>
+    ) {
+      const {
+        directionId,
+        progressPercent,
+        week,
+        progressDelta,
+        progressKey,
+        eventType,
+        actionId,
+        targetId,
+      } = action.payload
+      const direction = state.directions.find((d) => d.id === directionId)
+      if (!direction || direction.status !== 'active') return
+
+      direction.progressPercent = Math.min(100, Math.max(0, progressPercent))
+      if (progressDelta && progressKey && eventType) {
+        direction.progressHistory = [
+          ...(direction.progressHistory ?? []),
+          {
+            key: progressKey,
+            eventType,
+            delta: progressDelta,
+            week,
+            actionId,
+            targetId,
+          },
+        ].slice(-publicOpinionConfig.missionProgressHistoryLimit)
+      }
+
+      // A final damped action can legitimately stop at 98 even though no
+      // further repeat can earn credit. Snap only that configured rounding
+      // tail; 95–97% remains genuinely incomplete.
+      if (
+        direction.progressPercent >= publicOpinionConfig.missionCompletionThreshold ||
+        direction.progressPercent >=
+          publicOpinionConfig.missionCompletionThreshold -
+            publicOpinionConfig.missionCompletionTailTolerance
+      ) {
+        applyDirectionCompletionRewards(state, direction, week)
+      }
+    },
+
+    recordSocialStoryReceipt(state, action: PayloadAction<string | string[]>) {
+      state.socialStoryReceipts ??= {}
+      for (const key of Array.isArray(action.payload) ? action.payload : [action.payload])
+        state.socialStoryReceipts[key] = true
+      const keys = Object.keys(state.socialStoryReceipts)
+      for (const key of keys.slice(0, Math.max(0, keys.length - 2000)))
+        delete state.socialStoryReceipts[key]
+    },
+
+    hydratePublicOpinion(_state, action: PayloadAction<PublicOpinionState>) {
+      return action.payload
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(restoreWeekendDebugSnapshot, (_state, action) => action.payload.publicOpinion)
+      .addMatcher(
+        (action) => action.type === 'game/resetGame',
+        () => ({ ...initialState })
+      )
+  },
+})
+
+export const {
+  initializeProfiles,
+  setProfileApprovals,
+  updateApproval,
+  addDirection,
+  resolveDirection,
+  pruneExpiredDirections,
+  resetDailyFeedBudget,
+  addTemporaryApprovalBoost,
+  updateMissionProgress,
+  hydratePublicOpinion,
+  recordSocialStoryReceipt,
+} = publicOpinionSlice.actions
+
+export default publicOpinionSlice.reducer
+
+// Selectors
+export const selectPublicOpinion = (state: StateWithPublicOpinion): PublicOpinionState =>
+  state.publicOpinion
+
+export const selectPlayerProfile = (
+  state: StateWithPublicOpinion,
+  playerId: string
+): PlayerPublicProfile | undefined => state.publicOpinion.profiles[playerId]
+
+export const selectRankedProfiles = createSelector(
+  (state: StateWithPublicOpinion) => state.publicOpinion.profiles,
+  (profiles) => Object.values(profiles).sort((a, b) => b.approval - a.approval)
+)
+
+export const selectActiveDirections = (
+  state: StateWithPublicOpinion,
+  playerId: string
+): PublicDirection[] =>
+  state.publicOpinion.directions.filter((d) => d.playerId === playerId && d.status === 'active')
+
+export const selectAllDirections = (state: StateWithPublicOpinion): PublicDirection[] =>
+  state.publicOpinion.directions
+
+export const selectPublicFeed = (state: StateWithPublicOpinion): PublicFeedEntry[] =>
+  state.publicOpinion.feed

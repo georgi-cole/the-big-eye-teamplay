@@ -1,0 +1,204 @@
+.vip-store__bundle-icon {
+  display: grid;
+  place-items: center;
+  width: 2.7rem;
+  height: 2.7rem;
+  flex: 0 0 auto;
+  border: 1px solid rgba(224, 190, 112, 0.32);
+  border-radius: 50%;
+  color: #f0dda4;
+  background: rgba(214, 171, 85, 0.1);
+  box-shadow: 0 0 22px rgba(214, 171, 85, 0.1);
+}
+
+.vip-store__bundle-icon .store-product-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.vip-store__product {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vip-store__product:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.vip-store__product-icon {
+  color: #75e6ff;
+}
+
+.vip-store__product[data-theme='public'] .vip-store__product-icon {
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.12);
+}
+
+.vip-store__product[data-theme='tribunal'] .vip-store__product-icon {
+  color: #f7d786;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.vip-store__product[data-theme='drama'] .vip-store__product-icon {
+  color: #fda4af;
+  background: rgba(251, 113, 133, 0.11);
+}
+
+.vip-store__product[data-theme='cupid'] .vip-store__product-icon {
+  color: #ff8fb7;
+  background: linear-gradient(145deg, rgba(244, 63, 94, 0.22), rgba(190, 24, 93, 0.1));
+}
+
+.vip-store__product[data-theme='vox'] .vip-store__product-icon {
+  color: #a5b4fc;
+  background: linear-gradient(145deg, rgba(99, 102, 241, 0.24), rgba(37, 99, 235, 0.1));
+}
+
+.vip-store__product[data-theme='quiet'] .vip-store__product-icon {
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.11);
+}
+
+.vip-store__product-icon .store-product-icon {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.vip-store__product-title,
+.vip-store__product-description {
+  display: block;
+}
+
+.vip-store__product-title {
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.vip-store__product-description {
+  margin-top: 0.2rem;
+  color: rgba(226, 232, 240, 0.64);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+/* Product identity sits inside the main game's violet glass system. */
+.vip-store__product-icon {
+  border-color: rgba(151, 139, 255, 0.2);
+  background: linear-gradient(145deg, rgba(99, 102, 241, 0.2), rgba(111, 183, 255, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.vip-store__product-title {
+  color: rgba(248, 250, 255, 0.96);
+  font-weight: 900;
+}
+
+.vip-store__survival-runs {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid rgba(139, 151, 227, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(47, 49, 81, 0.45), rgba(16, 17, 30, 0.65));
+}
+
+.vip-store__survival-runs-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vip-store__survival-runs-heading .vip-store__eyebrow {
+  margin: 0 0 3px;
+  font-size: 0.6rem;
+}
+
+.vip-store__survival-runs-heading h3 {
+  margin: 0;
+  color: #eef1ff;
+  font-size: 0.95rem;
+}
+
+.vip-store__survival-runs-balance {
+  margin-left: auto;
+  color: #ced9ff;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.vip-store__survival-runs-description {
+  margin: 13px 0;
+  color: #c3c8da;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.vip-store__survival-runs-purchase {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vip-store__survival-runs-purchase strong,
+.vip-store__survival-runs-purchase small {
+  display: block;
+}
+
+.vip-store__survival-runs-purchase strong {
+  color: #f3edff;
+  font-size: 1rem;
+}
+
+.vip-store__survival-runs-purchase small {
+  margin-top: 4px;
+  color: #a1a9c4;
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.vip-store__survival-runs-purchase .vip-store__power-action {
+  align-self: center;
+  flex: 0 0 auto;
+}
+
+.vip-store__survival-runs .vip-store__notice {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vip-store__survival-runs-help {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #f0dda4;
+  background: transparent;
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.vip-store__survival-runs-help:focus-visible {
+  outline: 2px solid #f0dda4;
+  outline-offset: 3px;
+}
+
+.vip-store__survival-runs-note {
+  margin: 12px 0 0;
+  color: #969db4;
+  font-size: 0.63rem;
+  line-height: 1.45;
+}

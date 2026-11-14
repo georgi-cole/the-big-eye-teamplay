@@ -1,0 +1,302 @@
+/* GameButton — SVG-backed reusable button component */
+
+.game-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease;
+  /* Prevent text selection on rapid taps */
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.game-btn:hover:not(.game-btn--disabled) {
+  transform: scale(1.02);
+}
+
+.game-btn:active:not(.game-btn--disabled),
+.game-btn--pressed:not(.game-btn--disabled) {
+  transform: scale(0.98);
+}
+
+.game-btn--disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Keyboard focus ring — visible only for keyboard navigation */
+.game-btn:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* The original SVG carries the beveled face. The glass layers below use its
+   alpha as a mask so the transparent end follows the real button silhouette. */
+.btn-bg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  /* Ensure img covers full button area */
+  min-width: 100%;
+  min-height: 100%;
+  z-index: 1;
+  opacity: 0.32;
+  mix-blend-mode: screen;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 58%, rgba(0, 0, 0, 0.55) 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 58%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+.game-btn--primary_large:not(.game-btn--holiday)::before,
+.game-btn--secondary_medium::before,
+.game-btn--secondary_wide::before,
+.game-btn--secondary_small::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(63, 76, 120, 1) 0%,
+    rgba(63, 76, 120, 0.98) 38%,
+    rgba(64, 80, 125, 0.88) 54%,
+    rgba(46, 55, 83, 0.16) 78%,
+    rgba(10, 14, 24, 0.015) 100%
+  );
+  -webkit-mask-image: var(--button-mask);
+  mask-image: var(--button-mask);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-backdrop-filter: blur(11px) saturate(165%);
+  backdrop-filter: blur(11px) saturate(165%);
+  filter: drop-shadow(0 5px 12px rgba(5, 7, 12, 0.4));
+}
+
+.game-btn--primary_large:not(.game-btn--holiday)::before {
+  background: linear-gradient(
+    90deg,
+    rgba(111, 86, 255, 0.9) 0%,
+    rgba(111, 86, 255, 0.57) 32%,
+    rgba(43, 43, 66, 0.16) 72%,
+    rgba(10, 14, 24, 0.05) 100%
+  );
+}
+
+.game-btn--primary_large:not(.game-btn--holiday)::after,
+.game-btn--secondary_medium::after,
+.game-btn--secondary_wide::after,
+.game-btn--secondary_small::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.32) 0%,
+      rgba(255, 255, 255, 0.06) 24%,
+      transparent 46%,
+      rgba(8, 10, 28, 0.1) 58%,
+      rgba(4, 6, 18, 0.18) 66%,
+      rgba(3, 6, 18, 0.27) 82%,
+      rgba(5, 8, 20, 0.22) 100%
+    ),
+    linear-gradient(90deg, transparent 0%, transparent 68%, rgba(255, 255, 255, 0.12) 100%);
+  -webkit-mask-image: var(--button-mask);
+  mask-image: var(--button-mask);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+/* Content (icon + label) overlays above the SVG */
+.btn-content {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  padding: 12px 32px;
+  white-space: nowrap;
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--color-text, #fff);
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.btn-label {
+  line-height: 1;
+}
+
+/* Holiday artwork preserves the purple glass surface and adds theme motifs. */
+.btn-holiday-artwork {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  isolation: isolate;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.btn-holiday-artwork__glass {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  -webkit-mask-image: var(--button-mask);
+  mask-image: var(--button-mask);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-backdrop-filter: blur(11px) saturate(165%);
+  backdrop-filter: blur(11px) saturate(165%);
+  filter: drop-shadow(0 5px 12px rgba(5, 7, 12, 0.4));
+}
+
+.btn-holiday-artwork svg {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: none;
+  transition: filter 180ms ease;
+}
+
+.game-btn--holiday .btn-bg {
+  display: none;
+}
+
+.game-btn--holiday:hover:not(.game-btn--disabled) .btn-holiday-artwork svg {
+  filter: brightness(1.04);
+}
+
+.game-btn--holiday:active:not(.game-btn--disabled) .btn-holiday-artwork svg,
+.game-btn--holiday.game-btn--pressed:not(.game-btn--disabled) .btn-holiday-artwork svg {
+  filter: brightness(0.94);
+}
+
+.btn-badge {
+  position: absolute;
+  /* Sit inside the upper-right bevel: this badge is an in-button lock, not
+     an attached sticker, so it must never cross the SVG silhouette. */
+  top: 0.36rem;
+  right: 3.25rem;
+  display: block;
+  width: 1.3rem;
+  height: 1.3rem;
+  filter: drop-shadow(0 0.15rem 0.26rem rgba(10, 7, 28, 0.6));
+  transform: rotate(7deg);
+  transition:
+    filter 0.15s ease,
+    transform 0.15s ease;
+  z-index: 2;
+}
+
+/* Make room for the in-bevel lock without making the label appear off-centre. */
+.game-btn--has-badge .btn-content {
+  transform: translateX(-0.35rem);
+}
+
+.btn-badge .store-product-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: #d9b86c;
+  stroke-width: 2.2;
+}
+
+.btn-badge .store-product-icon__surface {
+  fill: rgba(32, 24, 66, 0.96);
+}
+
+.btn-badge .store-product-icon__core {
+  fill: #f0dda4;
+}
+
+.game-btn:hover:not(.game-btn--disabled) .btn-badge {
+  filter: drop-shadow(0 0 0.34rem rgba(185, 167, 255, 0.78));
+  transform: rotate(2deg) scale(1.07);
+}
+
+/* Disabled state: slightly reduce label/content opacity for extra legibility feedback */
+.game-btn--disabled .btn-content {
+  opacity: 0.7;
+}
+
+/* Variant sizing hints to maintain SVG aspect ratios */
+.game-btn--primary_large {
+  width: min(80%, 288px);
+  min-height: 60px;
+}
+
+.game-btn--holiday.game-btn--primary_large {
+  width: min(80%, 288px);
+}
+
+.game-btn--secondary_medium {
+  width: min(72%, 234px);
+  min-height: 52px;
+}
+
+.game-btn--secondary_wide {
+  width: min(78%, 270px);
+  min-height: 52px;
+}
+
+.game-btn--secondary_small {
+  width: min(65%, 198px);
+  min-height: 48px;
+}
+
+@media (max-width: 420px) {
+  .game-btn--primary_large {
+    width: min(84%, 288px);
+  }
+  .game-btn--holiday.game-btn--primary_large {
+    width: min(84%, 288px);
+  }
+  .game-btn--secondary_medium {
+    width: min(76%, 234px);
+  }
+  .game-btn--secondary_wide {
+    width: min(82%, 270px);
+  }
+  .game-btn--secondary_small {
+    width: min(70%, 198px);
+  }
+
+  .btn-content {
+    padding: 10px 20px;
+    font-size: 1rem;
+  }
+}

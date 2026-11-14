@@ -1,0 +1,292 @@
+import { acts, says, subject } from './incomingOutcomeMatrixUtils'
+import type { ScenarioOutcomeMatrix } from './incomingOutcomeMatrixUtils'
+
+export const POWER_OUTCOME_MATRIX: ScenarioOutcomeMatrix = {
+  direct_nomination_pitch: {
+    'back the nomination recommendation': (context) =>
+      `${context.fromName} takes your support for nominating ${subject(context)} into account. The slate is still open.`,
+    'ask what makes them a target': (context) =>
+      `${context.fromName} explains why they want ${subject(context)} on the block.`,
+    'push back on that nomination': acts(
+      'hears your objection and stops pressing for that nomination.'
+    ),
+    'end the pitch': acts('leaves the nomination decision with you.'),
+  },
+  loh_target_inquiry: {
+    'discuss what i’m weighing': acts(
+      'hears your priorities and waits to see which names you choose.'
+    ),
+    'ask why they want to know': acts(
+      'explains what they are trying to prepare for before nominations.'
+    ),
+    'keep my slate private': acts('backs off and waits for the nomination ceremony.'),
+    'end the discussion': acts('drops the question about your slate.'),
+  },
+  nomination_advice_inquiry: {
+    'talk through possible nominees': acts('weighs your advice while deciding whom to nominate.'),
+    'ask what they’re weighing': acts('explains what they are looking for in a nomination.'),
+    'keep my read private': acts('accepts your boundary and keeps working on their slate.'),
+    'end the discussion': acts('moves on from asking for your nomination advice.'),
+  },
+  direct_replacement_pitch: {
+    'back that choice as a backup': (context) =>
+      `${context.fromName} takes your support for ${subject(context)} as a backup recommendation.`,
+    'ask why they’d be a good replacement': (context) =>
+      `${context.fromName} explains why they would put ${subject(context)} on the block as a backup.`,
+    'oppose that backup choice': acts('understands you oppose that replacement.'),
+    'end the safety discussion': acts('lets the replacement discussion end.'),
+  },
+  protection_deal: {
+    'take the deal': says(
+      'agrees to keep you off the block this week, and you promise to vote to keep them if they are nominated.'
+    ),
+    'ask for time': says('accepts your hesitation without either of you making a promise.'),
+    'refuse clearly': acts('withdraws the offer after you decline the bargain.'),
+    'end the pitch': acts('ends the conversation without either of you making a promise.'),
+  },
+  protection_deal_future_vote: {
+    'take the deal': says(
+      'agrees to use Safety on you now, and you promise to vote to keep them if they are nominated next week.'
+    ),
+    'ask for time': says(
+      'accepts your hesitation without making a Safety promise or receiving a vote promise for next week.'
+    ),
+    'refuse clearly': acts('withdraws the Safety offer after you decline the bargain.'),
+    'end the pitch': acts(
+      'ends the Safety-for-next-week vote pitch without either of you making a promise.'
+    ),
+  },
+  trade_secrets_offer: {
+    'take the trade': says(
+      'shares the available lead and receives any fresh lead you have in return.'
+    ),
+    'hear the offer': says('leaves the trade unresolved, with no information exchanged.'),
+    'keep your information close': acts('backs off without exchanging information.'),
+    'end the conversation': acts('ends the conversation without exchanging information.'),
+  },
+  unavoidable_nominee_reaction: {
+    'acknowledge the rule': says(
+      'they know you had no legal alternative and want to plan their survival.'
+    ),
+    'discuss safety and votes': says(
+      'they shift the conversation to the decisions that can still change their week.'
+    ),
+    'say you cannot help': says(
+      'they understand the nomination was forced, but will find support elsewhere.'
+    ),
+    'give them space': acts('starts campaigning without blaming you for the forced nomination.'),
+    'confirm there was no alternative': says(
+      'they agree that the legal choices were already fixed.'
+    ),
+    'plan their next move': says('they want to focus on the next controllable decision.'),
+    'keep your distance': says(
+      'they stop relying on you for help without blaming you for the forced block.'
+    ),
+    'end the talk': acts('leaves the conversation without treating the nomination as betrayal.'),
+  },
+  background_nominate_human: {
+    'explain why i’m worth keeping': says(
+      'hears your case. Your place on the slate is still undecided.'
+    ),
+    'ask why i’m on their slate': says(
+      'explains the concern behind the nomination plan. You made no agreement.'
+    ),
+    'challenge their reasoning': acts(
+      'stands by their concern. The nomination decision is still theirs.'
+    ),
+    'end the conversation': acts('ends the discussion and continues weighing the slate.'),
+  },
+  hoh_safety_request: {
+    'promise to keep them off the block': says(
+      'takes you at your word and expects to stay off the block.'
+    ),
+    'give my word they’ll stay off the block': says(
+      'will hold you to keeping them off the block when nominations lock.'
+    ),
+    'give them a real opening': says(
+      'they can offer you a week of safety if you keep their name off the block.'
+    ),
+    'ask what they are offering': says(
+      'their offer is one protected week and a vote you can call on.'
+    ),
+    'set a clear limit': says(
+      'they understand there is no promise and will campaign elsewhere too.'
+    ),
+    'end the pitch': acts('leaves without safety and starts looking for another route.'),
+    'promise consideration': says(
+      'they will wait for your decision and avoid pushing you publicly.'
+    ),
+    'keep it noncommittal': says('they hear the uncertainty and know they are still in danger.'),
+    'tell them it is unlikely': says('they will stop counting on you and work on a backup deal.'),
+    'send them away': acts('ends the pitch and leaves knowing they have no protection from you.'),
+  },
+  nominee_hoh_plea: {
+    'offer safety': says('putting them up would create a vote you cannot fully control.'),
+    'ask for their case': says(
+      'keeping them off the block leaves you one more vote you can still influence.'
+    ),
+    'explain the risk': says(
+      'they understand your concern, but argue they are less dangerous than the alternative.'
+    ),
+    'close the meeting': acts('leaves without protection and starts building a backup plan.'),
+    'give them your word': says('they trust the promise and will stop shopping for another deal.'),
+    'listen without promising': says('their pitch is simple: they will not target you next week.'),
+    'state your reasons': says('they disagree, but now know exactly why their name is in danger.'),
+    'end the talk': acts('stops pleading and leaves to find leverage elsewhere.'),
+  },
+  nominee_veto_pitch: {
+    'promise to use safety on them': says(
+      'expects you to use Safety on them when the decision locks.'
+    ),
+    'back their safety': says('they will remember the save as a major favor if the power is used.'),
+    'ask what changes': says('they need a clear deal before names are set.'),
+    'refuse to commit': says(
+      'they know the power is still live and will keep pushing until the ceremony.'
+    ),
+    'end the conversation': acts(
+      'leaves without a Safety promise and starts working the holder elsewhere.'
+    ),
+    'promise the power': says('they treat the promise as real and stop looking for another saver.'),
+    'hear their plan': says(
+      'their plan is to protect you next round if you pull them off the block.'
+    ),
+    'keep your move private': says(
+      'they cannot tell whether they are being saved and remain on edge.'
+    ),
+    'walk away': acts('loses the chance to press you again before the Safety decision.'),
+  },
+  nominee_campaign: {
+    'give them hope': says('they think one more firm vote could flip the numbers.'),
+    'hear the campaign': says('they are still testing which votes are firm and which could move.'),
+    'tell them where you stand': says(
+      'they appreciate the clarity and will work the undecided votes instead.'
+    ),
+    'leave it there': acts('ends the pitch and moves on to the next voter.'),
+    'ask what they need': says(
+      'they need one firm vote before they can pressure the fence-sitters.'
+    ),
+    'keep your options open': says('they will check back once the Hub numbers move again.'),
+    'say you cannot help': says('they stop counting your vote and redirect the campaign.'),
+    'end the chat': acts('takes the hint and spends the remaining time on other votes.'),
+  },
+  tie_break_campaign: {
+    'i will use my deciding vote to keep you': says(
+      'they will remember that you chose them when the vote was tied.'
+    ),
+    'make your case': says('they can offer support next week, but know the decision is yours.'),
+    'i am voting you out': says('they understand your decision and stop asking for your vote.'),
+    'end the pitch': acts('leaves the deciding vote in your hands without a promise.'),
+  },
+  nomination_aftershock: {
+    'comfort them': says(
+      'they feel less alone and can steady themselves before planning their next move.'
+    ),
+    'ask what would help': says(
+      'they are still shaken and want a moment to work out what support they need.'
+    ),
+    'keep it focused on the game': says(
+      'they accept that you want to focus on the game and look for comfort elsewhere.'
+    ),
+    'keep it strategic': says('they will treat the damage as game business, not friendship.'),
+    'give them space': acts('takes some time to process the nomination on their own.'),
+    'reassure them': says('they still trust you enough to compare what they hear about the vote.'),
+    'compare vote reads': says(
+      'they trade information with you without treating it as a vote promise.'
+    ),
+    'keep your position private': says(
+      'they stop expecting you to share your strategy and protect their own read.'
+    ),
+    'leave it there': acts('leaves without asking you to reassure them again.'),
+    'share what you know': says('they use your information to sharpen their own campaign.'),
+    'compare reads': says('they compare notes with you while keeping their final move open.'),
+    'protect your own game': says(
+      'they understand you are keeping your strategy private and plan independently.'
+    ),
+    'end the conversation': acts('returns to working the room without a shared plan.'),
+    'tell them you meant it': says(
+      'they believe your earlier support was sincere and feel less isolated.'
+    ),
+    'ask how they are holding up': says(
+      'they tell you the block still weighs on them, but your earlier support helped.'
+    ),
+    'keep things game-focused': says(
+      'they accept the boundary and keep the conversation on the vote.'
+    ),
+    'wrap up the check-in': acts('thanks you for checking in and returns to the game.'),
+    'acknowledge the hurt': says(
+      'they needed someone to admit the nomination changed the relationship.'
+    ),
+    'explain carefully': says('they can hear the strategy, but the choice still feels personal.'),
+    'stand by the move': says('they understand there is no apology coming and adjust accordingly.'),
+    'end the talk': acts(
+      'leaves the nomination fallout unresolved and stops asking you for reassurance.'
+    ),
+    'offer a path back': says(
+      'they are willing to rebuild if your next move shows it was strategic.'
+    ),
+    'hear their anger': says(
+      'they feel exposed and believe someone close to them helped make it happen.'
+    ),
+    'walk away': acts('lets the conversation end and keeps the resentment to themselves.'),
+  },
+  nominee_understands_loh: {
+    'explain the decision': says(
+      'they accept the logic, but want proof the move was not personal.'
+    ),
+    'hear them out': says(
+      'they can separate game from friendship only if your next move matches the explanation.'
+    ),
+    'keep it strictly strategic': says(
+      'they will judge you only by what happens at Safety and the vote.'
+    ),
+    'end the talk': acts('leaves without the reassurance they came for.'),
+    'own the move': says('they respect the directness even though the nomination still hurts.'),
+    'ask what they need': says('they need to know whether you would support them if they survive.'),
+    'refuse to apologize': says('they stop looking for comfort and start planning against you.'),
+    'give them space': acts('takes the space and postpones the relationship conversation.'),
+  },
+  automatic_nominee_reaction: {
+    'acknowledge the rule': says(
+      'they appreciate that you are treating the last-place rule as the cause, not a personal nomination.'
+    ),
+    'hear how they feel': says(
+      'they are frustrated with the result, but not blaming the LOH for putting them there.'
+    ),
+    'talk next steps': says(
+      'they want to focus on Safety and the vote rather than relitigating a choice nobody made.'
+    ),
+    'give them space': acts('takes the space and starts planning from the automatic block.'),
+    'keep it factual': says(
+      'they agree that the competition result is the relevant fact and move on to survival.'
+    ),
+    'ask what they need now': says('they need a path through Safety and enough votes to stay.'),
+    'focus on safety': says('they shift immediately to the next controllable part of the week.'),
+    'end the talk': acts(
+      'ends the conversation without turning the rule-driven nomination into a grievance.'
+    ),
+    'name the rule clearly': says(
+      'they agree the last-place rule, not an LOH choice, is what put them on the block.'
+    ),
+    'let them vent': says(
+      'they vent about the competition result without turning it into blame against the LOH.'
+    ),
+    'discuss the vote': says(
+      'they move the conversation toward the votes they still need to survive.'
+    ),
+    'move on': acts(
+      'moves on from the automatic nomination and starts working the rest of the week.'
+    ),
+  },
+  nominee_confronts_loh: {
+    'meet the anger honestly': says('they wanted you to admit the move damaged the relationship.'),
+    'explain the calculation': says(
+      'they understand the numbers, but still think you chose them too easily.'
+    ),
+    'push back too': says('they now see the conflict as mutual rather than one-sided.'),
+    'walk away': acts('lets you leave and treats the confrontation as unfinished.'),
+    'own the fallout': says('they respect the honesty, but will still remember the nomination.'),
+    'keep your voice calm': says('they expected a fight and are forced to lower the temperature.'),
+    'refuse the accusation': acts('backs off and adjusts their plans without you.'),
+    'end the confrontation': acts('backs off, but the rivalry is now out in the open.'),
+  },
+}

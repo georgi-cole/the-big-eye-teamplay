@@ -1,0 +1,627 @@
+import { describe, expect, it } from 'vitest'
+import {
+  getContextualIncomingChoices,
+  resolveIncomingResponse,
+} from '../incomingInteractionResolution'
+import { INCOMING_SCENE_OUTCOME_BANK } from '../incomingSceneOutcomeBank'
+import { SCENE_FAMILY_CHOICES } from '../incomingSceneChoiceBank'
+import { getIncomingDialogueBeat } from '../incomingDialogueOutcomeBank'
+import { SCENARIO_VARIANT_POOLS } from '../interactionVariantBank'
+import { getCommitmentKindForInteraction } from '../socialCommitments'
+import type { IncomingInteraction } from '../types'
+
+function makeInteraction(overrides: Partial<IncomingInteraction> = {}): IncomingInteraction {
+  return {
+    id: 'incoming-resolution-1',
+    fromId: 'rae',
+    type: 'nomination_plea',
+    text: 'Can we talk?',
+    payload: { scenarioKey: 'nominee_hoh_plea' },
+    createdAt: 1,
+    createdWeek: 3,
+    expiresAtWeek: 3,
+    read: false,
+    requiresResponse: true,
+    resolved: false,
+    ...overrides,
+  }
+}
+
+describe('incoming interaction contextual resolution', () => {
+  const supportedSceneKeys = [
+    'week_start_ally_check_in',
+    'week_start_enemy_gossip',
+    'week_start_alliance_lock',
+    'hoh_congratulations',
+    'safety_win_congratulations',
+    'player_nominated_support',
+    'player_nominated_tension',
+    'competition_low_finish_support',
+    'competition_low_finish_taunt',
+    'social_momentum_notice',
+    'hoh_safety_request',
+    'nominee_hoh_plea',
+    'nominee_veto_pitch',
+    'nominee_campaign',
+    'co_nominee_check_in',
+    'nomination_aftershock',
+    'nominee_understands_loh',
+    'nominee_confronts_loh',
+    'replacement_nominee_reacts_to_loh',
+    'post_veto_gratitude',
+    'post_veto_campaign',
+    'live_vote_pitch',
+    'survivor_gratitude',
+    'betrayal_warning',
+    'ignored_warning',
+    'targeted_snark',
+    'alliance_reassurance',
+    'generic_gossip',
+    'generic_check_in',
+  ] as const
+
+  it('keeps an authored opening and four outcome branches for every standard scene', () => {
+    for (const scenarioKey of supportedSceneKeys) {
+      expect(SCENARIO_VARIANT_POOLS[scenarioKey]?.length).toBeGreaterThan(0)
+      const outcomeSet = INCOMING_SCENE_OUTCOME_BANK[scenarioKey]
+      expect(outcomeSet?.positive.length).toBeGreaterThanOrEqual(2)
+      expect(outcomeSet?.neutral.length).toBeGreaterThanOrEqual(2)
+      expect(outcomeSet?.negative.length).toBeGreaterThanOrEqual(2)
+      expect(outcomeSet?.dismiss.length).toBeGreaterThanOrEqual(2)
+      for (const responseType of ['positive', 'neutral', 'negative', 'dismiss'] as const) {
+        expect(
+          getIncomingDialogueBeat({
+            scenarioKey,
+            responseType,
+            fromName: 'Rae',
+            seed: 0,
+          })
+        ).toBeTruthy()
+      }
+    }
+  })
+
+  it('rotates check-in dialogue away from recently used lines', () => {
+    const recentLines: string[] = []
+    for (let index = 0; index < 6; index += 1) {
+      const beat = getIncomingDialogueBeat({
+        scenarioKey: 'relationship_friendship_check_in',
+        responseType: 'positive',
+        fromName: 'Nico',
+        seed: 7,
+        recentLines,
+      })
+      expect(beat).toBeTruthy()
+      expect(recentLines).not.toContain(beat)
+      recentLines.push(beat!)
+    }
+
+    expect(new Set(recentLines).size).toBe(6)
+  })
+
+  it('uses dialogue that fits celebrations and competition taunts', () => {
+    const celebration = getIncomingDialogueBeat({
+      scenarioKey: 'hoh_congratulations',
+      responseType: 'positive',
+      fromName: 'Nico',
+      seed: 0,
+    })
+    const taunt = getIncomingDialogueBeat({
+      scenarioKey: 'competition_low_finish_taunt',
+      responseType: 'negative',
+      fromName: 'Nico',
+      seed: 0,
+    })
+
+    expect(celebration).toMatch(/win|celebrate/i)
+    expect(taunt).toMatch(/cheap shot|joke|jab/i)
+    expect(celebration).not.toBe(taunt)
+  })
+
+  it('gives a nomination plea scene-specific player actions', () => {
+    const choices = getContextualIncomingChoices(makeInteraction())
+
+    expect(choices).toHaveLength(4)
+    expect(choices?.some((choice) => /safety|your word/i.test(choice.label))).toBe(true)
+    expect(choices?.some((choice) => /case|without promising/i.test(choice.label))).toBe(true)
+    expect(choices?.map((choice) => choice.responseType)).toEqual([
+      'positive',
+      'neutral',
+      'negative',
+      'dismiss',
+    ])
+  })
+
+  it('matches nomination-aftershock choices and replies to the incoming message family', () => {
+    const familyCases = [
+      {
+        familyId: 'na_processing',
+        incoming: 'I am still trying to process seeing my name up there.',
+        replyPattern: /stay with me|what would help|still shaken/i,
+      },
+      {
+        familyId: 'na_trust_check',
+        incoming: 'Now that the block is real, I need to know who I can still trust.',
+        replyPattern: /trust|compare|share what i know/i,
+      },
+      {
+        familyId: 'na_strategic',
+        incoming: 'I am nominated. Now I figure out what my next move is.',
+        replyPattern: /plan|compare|strategy|trade reads|keep my options open/i,
+      },
+      {
+        familyId: 'na_followup',
+        incoming: 'You made me feel less alone earlier.',
+        replyPattern: /holding up|less isolating|came back to talk|check in/i,
+      },
+    ] as const
+
+    for (const { familyId, incoming, replyPattern } of familyCases) {
+      const interaction = makeInteraction({
+        type: 'check_in',
+        text: incoming,
+        payload: { scenarioKey: 'nomination_aftershock', variantFamilyId: familyId },
+      })
+      const choices = getContextualIncomingChoices(interaction)
+
+      expect(choices?.map(({ label }) => label)).toEqual(SCENE_FAMILY_CHOICES[familyId])
+      expect(choices?.[1]?.responseType).toBe('neutral')
+
+      const reply = getIncomingDialogueBeat({
+        scenarioKey: 'nomination_aftershock',
+        variantFamilyId: familyId,
+        responseType: 'neutral',
+        responseLabel: choices?.[1]?.label,
+        fromName: 'Sol',
+        seed: 1,
+      })
+      expect(reply).toMatch(replyPattern)
+    }
+
+    const followUpChoices = SCENE_FAMILY_CHOICES.na_followup
+    expect(followUpChoices.join(' ')).not.toMatch(/anger|apolog|fault/i)
+    const followUpReply = getIncomingDialogueBeat({
+      scenarioKey: 'nomination_aftershock',
+      variantFamilyId: 'na_followup',
+      responseType: 'neutral',
+      responseLabel: 'Ask how they are holding up',
+      fromName: 'Sol',
+      seed: 0,
+    })
+    expect(followUpReply).not.toMatch(/explanation|pretending nothing changed|blame/i)
+  })
+
+  it('uses replies that fit support, tension, and nomination-confrontation scenes', () => {
+    const cases = [
+      {
+        scenarioKey: 'player_nominated_support',
+        responseType: 'positive',
+        expected: /glad you checked in|thank you/i,
+        wrong: /keeping options open/i,
+      },
+      {
+        scenarioKey: 'player_nominated_tension',
+        responseType: 'neutral',
+        expected: /keep this calm|talk through the tension/i,
+        wrong: /keeping options open/i,
+      },
+      {
+        scenarioKey: 'nominee_confronts_loh',
+        responseType: 'neutral',
+        expected: /angry|hear you out|listen to the calculation/i,
+        wrong: /not ready to call it fixed/i,
+      },
+      {
+        scenarioKey: 'replacement_nominee_reacts_to_loh',
+        responseType: 'neutral',
+        expected: /hear how you reached|listen to the logic/i,
+        wrong: /not ready to call it fixed/i,
+      },
+    ] as const
+
+    for (const { scenarioKey, responseType, expected, wrong } of cases) {
+      const reply = getIncomingDialogueBeat({
+        scenarioKey,
+        responseType,
+        fromName: 'Sol',
+        seed: 0,
+      })
+      expect(reply).toMatch(expected)
+      expect(reply).not.toMatch(wrong)
+    }
+  })
+
+  it('keeps alliance reassurance choices accurate when no personal pact exists', () => {
+    const choices = getContextualIncomingChoices(
+      makeInteraction({
+        type: 'check_in',
+        payload: { scenarioKey: 'alliance_reassurance' },
+      })
+    )
+
+    expect(choices).toHaveLength(4)
+    expect(choices?.[0]?.label).toMatch(/reassure/i)
+    expect(choices?.[1]?.label).toMatch(/compare your plans/i)
+    expect(choices?.[2]?.label).toMatch(/doubts|boundary/i)
+    expect(choices?.[3]?.label).toMatch(/avoid|end the check-in/i)
+    expect(choices?.map((choice) => choice.label).join(' ')).not.toMatch(/renew.*pact|new terms/i)
+  })
+
+  it('keeps pact decisions formal while plan and time requests remain pending actions', () => {
+    const interaction = makeInteraction({
+      type: 'alliance_proposal',
+      payload: { scenarioKey: 'week_start_alliance_lock' },
+    })
+    const choices = getContextualIncomingChoices(interaction) ?? []
+
+    expect(choices.map(({ label }) => label)).toEqual([
+      'Accept',
+      'Decline',
+      'Need time',
+      'Ask for their plan',
+    ])
+    expect(choices.map(({ responseType }) => responseType)).toEqual([
+      'accept',
+      'decline',
+      'neutral',
+      'neutral',
+    ])
+    expect(choices[2]?.action).toBe('need_time')
+    expect(choices[3]?.action).toBe('ask_plan')
+    expect(
+      getContextualIncomingChoices({
+        ...interaction,
+        payload: { ...interaction.payload, pactTimeRequested: true, pactPlanRequested: true },
+      })?.map(({ label }) => label)
+    ).toEqual(['Accept', 'Decline'])
+  })
+
+  it('makes alliance vote replies name the proposed target without implying a promise to keep the sender', () => {
+    const choices = getContextualIncomingChoices(
+      makeInteraction({
+        type: 'deal_offer',
+        payload: {
+          scenarioKey: 'alliance_vote_pitch',
+          subjectId: 'nova',
+          subjectName: 'Nova',
+        },
+      })
+    )
+
+    expect(choices?.[0]?.label).toMatch(/Nova/)
+    expect(choices?.[1]?.label).toMatch(/Nova/)
+    expect(choices?.map((choice) => choice.label).join(' ')).not.toMatch(
+      /promise to keep|commit to keeping/i
+    )
+  })
+
+  it('uses alliance roles and target names in strategy replies', () => {
+    const huddle = makeInteraction({
+      type: 'deal_offer',
+      payload: {
+        scenarioKey: 'alliance_power_safety_huddle',
+        subjectId: 'nova',
+        subjectName: 'Nova',
+        secondarySubjectId: 'remy',
+        secondarySubjectName: 'Remy',
+      },
+    })
+    const choices = getContextualIncomingChoices(huddle)
+    const spokenReply = getIncomingDialogueBeat({
+      scenarioKey: 'alliance_power_safety_huddle',
+      responseType: 'accept',
+      fromName: 'Rae',
+      subjectName: 'Nova',
+      secondarySubjectName: 'Remy',
+      seed: 0,
+    })
+
+    expect(choices?.[0]?.label).toContain('Nova')
+    expect(choices?.[0]?.label).toContain('Remy')
+    expect(spokenReply).toContain('Nova')
+    expect(spokenReply).toContain('Remy')
+    expect(spokenReply).toMatch(/Safety decision/i)
+  })
+
+  it('does not turn an allied LOH check-in into an automatic protection or vote promise', () => {
+    expect(
+      getCommitmentKindForInteraction(
+        makeInteraction({
+          type: 'check_in',
+          payload: { scenarioKey: 'allied_loh_plan_check_in' },
+        })
+      )
+    ).toBeNull()
+    expect(
+      getCommitmentKindForInteraction(
+        makeInteraction({
+          type: 'deal_offer',
+          payload: { scenarioKey: 'live_vote_pitch' },
+        })
+      )
+    ).toBe('vote_to_keep')
+  })
+
+  it('gives co-nominees choices that do not pretend either can cast a saving vote', () => {
+    const choices = getContextualIncomingChoices(
+      makeInteraction({
+        type: 'check_in',
+        payload: { scenarioKey: 'co_nominee_check_in' },
+      })
+    )
+
+    expect(choices).toHaveLength(4)
+    expect(choices?.some((choice) => /compare|share/i.test(choice.label))).toBe(true)
+    expect(choices?.some((choice) => /promise your vote|vote with them/i.test(choice.label))).toBe(
+      false
+    )
+  })
+
+  it('keeps co-nominee reactions grounded in what either player can control', () => {
+    const reactions = {
+      positive: getIncomingDialogueBeat({
+        scenarioKey: 'co_nominee_check_in',
+        responseType: 'positive',
+        fromName: 'Rae',
+        seed: 0,
+      }),
+      neutral: getIncomingDialogueBeat({
+        scenarioKey: 'co_nominee_check_in',
+        responseType: 'neutral',
+        fromName: 'Rae',
+        seed: 0,
+      }),
+      negative: getIncomingDialogueBeat({
+        scenarioKey: 'co_nominee_check_in',
+        responseType: 'negative',
+        fromName: 'Rae',
+        seed: 0,
+      }),
+      dismiss: getIncomingDialogueBeat({
+        scenarioKey: 'co_nominee_check_in',
+        responseType: 'dismiss',
+        fromName: 'Rae',
+        seed: 0,
+      }),
+    }
+
+    expect(reactions.positive).toContain('neither of us can promise how the others vote')
+    expect(reactions.neutral).toContain('not mistake this for a vote promise')
+    expect(reactions.negative).toContain('stop asking you to carry my campaign')
+    expect(reactions.dismiss).toContain('take my campaign to someone else')
+  })
+
+  it('keeps constructive automatic nominee replies constructive', () => {
+    const interaction = makeInteraction({
+      type: 'check_in',
+      payload: { scenarioKey: 'automatic_nominee_reaction' },
+    })
+    const choices = getContextualIncomingChoices(interaction) ?? []
+    const nextSteps = choices[2]
+    expect(nextSteps.label).toMatch(/next steps|safety/i)
+    expect(nextSteps.responseType).toBe('neutral')
+
+    const resolution = resolveIncomingResponse({
+      interaction,
+      responseType: nextSteps.responseType,
+      responseLabel: nextSteps.label,
+      fromName: 'Rae',
+      phase: 'nomination_results',
+      actorAffinity: 10,
+      playerAffinity: 10,
+    })
+    expect(resolution.actorDelta).toBeGreaterThanOrEqual(0)
+  })
+
+  it('uses the game context rather than an interaction timestamp for the same answer', () => {
+    const interaction = makeInteraction({
+      type: 'check_in',
+      payload: { scenarioKey: 'automatic_nominee_reaction' },
+    })
+    const answer = {
+      responseType: 'neutral' as const,
+      responseLabel: 'Talk next steps',
+      fromName: 'Rae',
+      phase: 'nomination_results',
+      actorAffinity: 10,
+      playerAffinity: 10,
+    }
+    expect(getContextualIncomingChoices({ ...interaction, id: 'later-timestamp' })).toEqual(
+      getContextualIncomingChoices(interaction)
+    )
+    expect(
+      resolveIncomingResponse({ ...answer, interaction: { ...interaction, id: 'later-timestamp' } })
+    ).toEqual(resolveIncomingResponse({ ...answer, interaction }))
+  })
+
+  it('keeps a scene response short and concrete', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction(),
+      responseType: 'positive',
+      fromName: 'Rae',
+      phase: 'nominations',
+      actorAffinity: 14,
+      playerAffinity: 8,
+      responseLabel: 'Offer safety',
+    })
+
+    expect(resolution.actorDelta).toBeGreaterThan(0)
+    expect(resolution.playerDelta).toBeGreaterThan(0)
+    expect(resolution.playerDelta).toBeLessThan(resolution.actorDelta)
+    expect(resolution.outcomeText).toBe(
+      'Rae says putting them up would create a vote you cannot fully control.'
+    )
+    expect(resolution.outcomeText.length).toBeLessThan(120)
+    expect(resolution.memoryDelta.gratitude).toBeGreaterThan(0)
+  })
+
+  it('keeps a confrontation distinct from a friendly check-in', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction({
+        id: 'incoming-resolution-2',
+        type: 'warning',
+        payload: { scenarioKey: 'nominee_confronts_loh' },
+      }),
+      responseType: 'negative',
+      fromName: 'Rae',
+      phase: 'nomination_results',
+      actorAffinity: -20,
+      playerAffinity: -8,
+      responseLabel: 'Refuse the accusation',
+    })
+
+    expect(resolution.actorDelta).toBeLessThan(0)
+    expect(resolution.playerDelta).toBeLessThan(0)
+    expect(resolution.outcomeText).toBe('Rae backs off and adjusts their plans without you.')
+    expect(resolution.memoryDelta.resentment).toBeGreaterThan(0)
+  })
+
+  it('gives a request for an explanation a short, specific reply', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction({
+        id: 'mimi-direct-question',
+        fromId: 'mimi',
+        type: 'check_in',
+        text: 'Something between us is not adding up, and I want a direct answer.',
+        payload: { scenarioKey: 'generic_check_in' },
+      }),
+      responseType: 'neutral',
+      responseLabel: 'Make them explain',
+      fromName: 'Mimi',
+      phase: 'social_1',
+      actorAffinity: -2,
+      playerAffinity: -2,
+    })
+
+    expect(resolution.outcomeText).toBe('Mimi says they felt shut out and wanted a direct answer.')
+  })
+
+  it('keeps an alliance vote question open while giving the player a reason', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction({
+        id: 'lia-vote-rationale',
+        fromId: 'lia',
+        type: 'deal_offer',
+        text: 'My vote has not moved. I am still on Remy.',
+        payload: { scenarioKey: 'background_nominate', subjectId: 'remy' },
+      }),
+      responseType: 'neutral',
+      responseLabel: 'Ask why',
+      fromName: 'Lia',
+      subjectName: 'Remy',
+      phase: 'live_vote',
+      actorAffinity: 25,
+      playerAffinity: 25,
+    })
+
+    expect(resolution.outcomeText).toContain('Remy has the weaker support')
+    expect(resolution.outcomeText).toContain('before either of you locks a shared plan')
+    expect(resolution.memoryDelta.trustMomentum).toBeGreaterThanOrEqual(0)
+  })
+
+  it('gives a Safety question a specific concise outcome', () => {
+    const interaction = makeInteraction({
+      id: 'authored-safety-fallout',
+      fromId: 'mimi',
+      type: 'nomination_plea',
+      text: 'I need to know whether you will use Safety.',
+      payload: { scenarioKey: 'nominee_veto_pitch' },
+    })
+    const resolution = resolveIncomingResponse({
+      interaction,
+      responseType: 'neutral',
+      responseLabel: 'Ask what changes',
+      fromName: 'Mimi',
+      phase: 'pos_ceremony',
+      actorAffinity: 0,
+      playerAffinity: 0,
+    })
+    expect(resolution.outcomeText).toBe('Mimi says they need a clear deal before names are set.')
+  })
+
+  it('gives an ask-for-source reply a concrete, qualified exchange', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction({
+        id: 'ask-the-source',
+        fromId: 'bea',
+        type: 'gossip',
+        text: 'I heard something about Dex.',
+        payload: { scenarioKey: 'generic_gossip', subjectId: 'dex' },
+      }),
+      responseType: 'positive',
+      responseLabel: 'Ask source',
+      fromName: 'Bea',
+      subjectName: 'Dex',
+      phase: 'social_2',
+      actorAffinity: 4,
+      playerAffinity: 3,
+    })
+
+    expect(resolution.outcomeText).toBe(
+      'Bea says they heard the story indirectly, but will not name anyone yet.'
+    )
+  })
+
+  it('gives a campaign reply an actual case instead of only a relationship summary', () => {
+    const resolution = resolveIncomingResponse({
+      interaction: makeInteraction({
+        id: 'hear-the-case',
+        payload: { scenarioKey: 'live_vote_pitch' },
+      }),
+      responseType: 'neutral',
+      responseLabel: 'Ask for their case',
+      fromName: 'Rae',
+      phase: 'live_vote',
+      actorAffinity: 0,
+      playerAffinity: 0,
+    })
+
+    expect(resolution.outcomeText).toBe(
+      'Rae says keeping them gives you a vote that is still open.'
+    )
+  })
+
+  it('makes check-in answers distinct and phase-aware', () => {
+    const interaction = makeInteraction({
+      id: 'friendly-check-in',
+      type: 'check_in',
+      payload: { scenarioKey: 'relationship_friendship_check_in' },
+    })
+    const askHowTheyAre = resolveIncomingResponse({
+      interaction,
+      responseType: 'neutral',
+      responseLabel: 'Ask how they are',
+      fromName: 'Nico',
+      phase: 'social_1',
+      actorAffinity: 0,
+      playerAffinity: 0,
+    })
+    const askThemBack = resolveIncomingResponse({
+      interaction,
+      responseType: 'neutral',
+      responseLabel: 'Ask them back',
+      fromName: 'Rune',
+      phase: 'social_1',
+      actorAffinity: 0,
+      playerAffinity: 0,
+    })
+    const nomineeCheckIn = resolveIncomingResponse({
+      interaction,
+      responseType: 'neutral',
+      responseLabel: 'Ask how they are',
+      fromName: 'Nico',
+      phase: 'live_vote',
+      senderIsNominated: true,
+      actorAffinity: 0,
+      playerAffinity: 0,
+    })
+
+    expect(askHowTheyAre.outcomeText).toBe(
+      'Nico says they are worried about the upcoming nominations.'
+    )
+    expect(askThemBack.outcomeText).toBe(
+      'Rune says they are still trying to read where they stand with you.'
+    )
+    expect(nomineeCheckIn.outcomeText).toBe('Nico says they feel the Hub is against them.')
+  })
+})

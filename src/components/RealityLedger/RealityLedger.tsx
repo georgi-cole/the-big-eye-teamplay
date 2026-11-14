@@ -1,0 +1,799 @@
+import { useMemo, useState } from 'react'
+import type { Player } from '../../types'
+import type { RelationshipsMap, SocialCommitment } from '../../social/types'
+import {
+  getSocialCommitmentDueCopy,
+  getSocialCommitmentLabel,
+} from '../../social/socialCommitments'
+import { getIntelLeadViews } from '../../social/intelligenceSystem'
+import { canReadAllianceEvent } from '../../social/reality/allianceHistory'
+import { formatPlayerFacingPhase } from '../../social/reality/presentation'
+import { isBetrayalBetween } from '../../social/relationshipSemantics'
+import { hasRealityRomanticBond } from '../../social/reality/relationshipFacts'
+import { getCurrentPact } from '../../social/reality/allianceIdentity'
+import {
+  allianceKind,
+  canHumanKnowFact,
+  getRealityAllianceKnowledgeView,
+  getRelationshipStoryLabel,
+  type RealityBelief,
+  type RealityDomainState,
+} from '../../social/reality'
+import {
+  liveRelationshipMetrics,
+  relationshipEventLabel,
+  relationshipMetricStatus,
+} from './relationshipRead'
+import {
+  RELATIONSHIP_FORMING_GRACE_DAYS,
+  isNemesisDisclosedTo,
+  selectCanonicalRelationshipView,
+} from '../../social/relationshipSemantics'
+import { getRealityRelationshipLabel } from '../SocialPanelV2/relationshipUtils'
+import './RealityLedger.css'
+
+type LedgerTab = 'knowledge' | 'deals' | 'house' | 'relationships'
+
+export interface RealityLedgerProps {
+  reality: RealityDomainState
+  players: readonly Player[]
+  humanId: string
+  /** Live social graph used to keep labels/meters synchronized after actions. */
+  relationships?: RelationshipsMap
+  socialCommitments?: readonly SocialCommitment[]
+  /** Renders one notebook section without the nested section switcher. */
+  section?: LedgerTab
+  compact?: boolean
+  focusPlayerId?: string
+  currentDay?: number
+  /** Scroll target opened from a betrayed relationship badge. */
+  focusEventId?: string
+}
+
+function confidenceLabel(confidence: number): string {
+  if (confidence >= 0.82) return 'High confidence'
+  if (confidence >= 0.55) return 'Plausible'
+  return 'Uncertain'
+}
+
+function betrayalCauseLabel(event: RealityDomainState['events'][number]): string {
+  if (event.actionId) return event.actionId.replaceAll('_', ' ')
+  const kind = event.reason.split(':', 1)[0]
+  const labels: Readonly<Record<string, string>> = {
+    nomination: 'Alliance nomination defiance',
+    vote: 'Alliance vote defiance',
+    safety_abandon: 'Alliance Safety defiance',
+    social_betrayal: 'Social betrayal',
+  }
+  return labels[kind] ?? 'Recorded alliance betrayal'
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/^CEREMONY_/, '')
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function allianceStatusLabel(status: string, kind: 'PACT' | 'GROUP'): string {
+  if (status === 'PROBATIONARY') return kind === 'GROUP' ? 'New group' : 'New pact'
+  if (status === 'ACTIVE') return 'Active'
+  if (status === 'DORMANT') return 'Dormant'
+  if (status === 'FRACTURED') return 'Fractured'
+  if (status === 'DISSOLVED') return 'Ended'
+  return titleCase(status)
+}
+
+function allianceSecrecyLabel(value: number): string {
+  if (value >= 0.72) return 'Highly secret'
+  if (value >= 0.42) return 'Low profile'
+  if (value > 0.2) return 'Leaking'
+  return 'Exposed'
+}
+
+function beliefSource(
+  belief: RealityBelief,
+  reality: RealityDomainState,
+  playerName: (id: string) => string
+): string {
+  const memory = (reality.memoriesByOwner[belief.ownerId] ?? []).find((entry) =>
+    belief.supportingMemoryIds.includes(entry.id)
+  )
+  if (!memory) return 'Source unavailable'
+  if (memory.sourceType === 'OFFICIAL') return 'Official result'
+  if (memory.sourceType === 'DIRECT') return 'You experienced this'
+  if (memory.sourceType === 'WITNESSED') return 'You witnessed this'
+  if (memory.sourceType === 'INFERRED') return 'Your read of the situation'
+  const sourceId = memory.sourceChain.at(-1)
+  return sourceId ? `Heard through ${playerName(sourceId)}` : 'Hearsay'
+}
+
+export default function RealityLedger({
+  reality,
+  players,
+  humanId,
+  relationships: liveRelationships,
+  socialCommitments = [],
+  section,
+  compact = false,
+  focusPlayerId,
+  currentDay,
+  focusEventId,
+}: RealityLedgerProps) {
+  const [tab, setTab] = useState<LedgerTab>('relationships')
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null)
+
+  const activeTab = section ?? tab
+  const activePlayerIds = useMemo(
+    () =>
+      new Set(
+        players
+          .filter(
+            (player) =>
+              player.id !== humanId && player.status !== 'evicted' && player.status !== 'jury'
+          )
+          .map((player) => player.id)
+      ),
+    [humanId, players]
+  )
+  const playerName = (id: string) =>
+    id === humanId ? 'You' : (players.find((player) => player.id === id)?.name ?? 'Unknown')
+  const focusedBetrayalEvent = useMemo(() => {
+    if (!focusEventId) return undefined
+    const event = reality.events.find((entry) => entry.id === focusEventId)
+    return event &&
+      canReadAllianceEvent(event, humanId) &&
+      (isBetrayalBetween(event, humanId, event.actorId ?? '') ||
+        event.targetIds.some((id) => isBetrayalBetween(event, humanId, id)))
+      ? event
+      : undefined
+  }, [focusEventId, humanId, reality.events])
+
+  const knownFacts = useMemo(
+    () =>
+      Object.values(reality.facts)
+        .filter((fact) => canHumanKnowFact(fact, humanId, 'PLAYER_LIMITED'))
+        .sort((left, right) => right.day - left.day || right.phase.localeCompare(left.phase)),
+    [humanId, reality.facts]
+  )
+  const intelLeads = useMemo(
+    () =>
+      getIntelLeadViews(
+        reality,
+        humanId,
+        players,
+        currentDay ?? Math.max(0, ...Object.values(reality.facts).map((fact) => fact.day))
+      ),
+    [currentDay, humanId, players, reality]
+  )
+  const beliefs = useMemo(
+    () =>
+      Object.values(reality.beliefsByOwner[humanId] ?? {})
+        .filter((belief) => belief.status !== 'STALE' && belief.status !== 'DISPROVEN')
+        .sort((left, right) => right.lastUpdatedDay - left.lastUpdatedDay),
+    [humanId, reality.beliefsByOwner]
+  )
+  const promises = useMemo(
+    () =>
+      Object.values(reality.promises)
+        .filter(
+          (promise) =>
+            (promise.promisorId === humanId ||
+              promise.beneficiaryIds.includes(humanId) ||
+              promise.witnessIds.includes(humanId)) &&
+            (!focusPlayerId ||
+              promise.promisorId === focusPlayerId ||
+              promise.beneficiaryIds.includes(focusPlayerId))
+        )
+        .sort((left, right) => right.createdAt.day - left.createdAt.day),
+    [focusPlayerId, humanId, reality.promises]
+  )
+  const legacyCommitments = useMemo(() => {
+    const realityPromiseIds = Object.keys(reality.promises)
+    return socialCommitments.filter(
+      (commitment) =>
+        (commitment.promisorId === humanId || commitment.beneficiaryId === humanId) &&
+        (!focusPlayerId ||
+          commitment.promisorId === focusPlayerId ||
+          commitment.beneficiaryId === focusPlayerId) &&
+        !realityPromiseIds.some(
+          (id) =>
+            id === `promise:${commitment.interactionId}` ||
+            id.startsWith(`promise:${commitment.interactionId}:`)
+        )
+    )
+  }, [focusPlayerId, humanId, reality.promises, socialCommitments])
+  const debts = useMemo(
+    () =>
+      Object.values(reality.debts).filter(
+        (debt) =>
+          (debt.debtorId === humanId || debt.creditorId === humanId) &&
+          (!focusPlayerId || debt.debtorId === focusPlayerId || debt.creditorId === focusPlayerId)
+      ),
+    [focusPlayerId, humanId, reality.debts]
+  )
+  const openPromises = promises.filter(
+    (promise) => promise.status === 'ACTIVE' || promise.status === 'PROPOSED'
+  )
+  const resolvedPromises = promises.filter(
+    (promise) => promise.status !== 'ACTIVE' && promise.status !== 'PROPOSED'
+  )
+  const openLegacyCommitments = legacyCommitments.filter(
+    (commitment) => commitment.status === 'pending'
+  )
+  const resolvedLegacyCommitments = legacyCommitments.filter(
+    (commitment) => commitment.status !== 'pending'
+  )
+  const openDebts = debts.filter(
+    (debt) => debt.status === 'OPEN' || debt.status === 'PARTIALLY_REPAID'
+  )
+  const resolvedDebts = debts.filter(
+    (debt) => debt.status !== 'OPEN' && debt.status !== 'PARTIALLY_REPAID'
+  )
+  const commitmentHistoryCount =
+    resolvedPromises.length + resolvedLegacyCommitments.length + resolvedDebts.length
+  const threads = useMemo(
+    () =>
+      Object.values(reality.threads).filter(
+        (thread) =>
+          !thread.type.startsWith('RELATIONSHIP_') &&
+          (thread.participantIds.includes(humanId) || thread.observerIds.includes(humanId)) &&
+          (thread.type !== 'PLAYER_NEMESIS' ||
+            isNemesisDisclosedTo(
+              reality,
+              humanId,
+              thread.participantIds.find((id) => id !== humanId) ?? ''
+            ) ||
+            reality.events.some(
+              (event) =>
+                ['NEMESIS_REVEALED', 'NEMESIS_RECONCILIATION_REVEALED'].includes(event.type) &&
+                event.participantIds.includes(humanId) &&
+                thread.participantIds.every((id) => event.participantIds.includes(id))
+            ))
+      ),
+    [humanId, reality]
+  )
+  const knownRelationshipStories = useMemo(() => {
+    const directEvidence = new Set(
+      Object.values(reality.relationshipAutonomy.evidence)
+        .filter((entry) => entry.ownerId === humanId || entry.targetId === humanId)
+        .map((entry) => `${entry.ownerId}:${entry.targetId}`)
+    )
+    return Object.values(reality.relationshipAutonomy.intents)
+      .filter((intent) => {
+        if (intent.status === 'CLOSED') return false
+        if (intent.ownerId !== humanId && intent.targetId !== humanId) return false
+        const revealed =
+          intent.kind === 'UNDERMINE' &&
+          intent.ownerId !== humanId &&
+          (isNemesisDisclosedTo(reality, humanId, intent.ownerId) ||
+            reality.events.some(
+              (event) =>
+                ['NEMESIS_REVEALED', 'NEMESIS_RECONCILIATION_REVEALED'].includes(event.type) &&
+                event.actorId === intent.ownerId &&
+                event.targetIds.includes(humanId)
+            ))
+        // Ordinary relationship evidence must never reveal an antagonist's
+        // private UNDERMINE objective before their actual story discovery.
+        if (intent.kind === 'UNDERMINE' && intent.ownerId !== humanId) return revealed
+        return directEvidence.has(`${intent.ownerId}:${intent.targetId}`)
+      })
+      .sort(
+        (left, right) =>
+          right.lastAdvancedAt.day - left.lastAdvancedAt.day || right.importance - left.importance
+      )
+  }, [humanId, reality])
+  const alliances = useMemo(
+    () =>
+      Object.values(reality.alliances)
+        .map((alliance) => ({
+          alliance,
+          knowledge: getRealityAllianceKnowledgeView(reality, alliance.id, humanId),
+        }))
+        .filter(
+          ({ alliance, knowledge }) =>
+            alliance.provenance !== 'SOURCE' && knowledge.level !== 'UNKNOWN'
+        )
+        .sort(
+          (left, right) =>
+            Number(right.knowledge.level === 'MEMBER') -
+              Number(left.knowledge.level === 'MEMBER') ||
+            right.knowledge.confidence - left.knowledge.confidence ||
+            left.alliance.id.localeCompare(right.alliance.id)
+        ),
+    [humanId, reality]
+  )
+  const discoveredAlliances = alliances.filter(({ knowledge }) => knowledge.level !== 'MEMBER')
+  const relationships = useMemo(
+    () =>
+      Object.values(reality.relationships[humanId] ?? {})
+        .filter((edge) => activePlayerIds.has(edge.toId))
+        .sort(
+          (left, right) =>
+            right.familiarity - left.familiarity || left.toId.localeCompare(right.toId)
+        ),
+    [activePlayerIds, humanId, reality.relationships]
+  )
+  const selectedRelationship = focusPlayerId
+    ? relationships.find((edge) => edge.toId === focusPlayerId)
+    : (relationships.find((edge) => edge.toId === selectedPlayerId) ?? relationships[0])
+  const selectedRelationshipView = selectedRelationship
+    ? selectCanonicalRelationshipView({
+        relationships: liveRelationships,
+        reality,
+        actorId: humanId,
+        targetId: selectedRelationship.toId,
+      })
+    : null
+  const selectedRelationshipDisplay = selectedRelationship
+    ? getRealityRelationshipLabel(
+        selectedRelationship,
+        selectedRelationshipView?.alliance?.operational,
+        currentDay,
+        selectedRelationshipView?.isNemesis,
+        Boolean(getCurrentPact(reality, humanId, selectedRelationship.toId)),
+        hasRealityRomanticBond(reality, humanId, selectedRelationship.toId, false)
+      )
+    : null
+  const recentRelationshipShift = selectedRelationship?.lastMeaningfulInteraction
+    ? reality.events.find(
+        (event) => event.id === selectedRelationship.lastMeaningfulInteraction?.eventId
+      )
+    : undefined
+  const recentShiftIsKnown =
+    recentRelationshipShift &&
+    (recentRelationshipShift.participantIds.includes(humanId) ||
+      recentRelationshipShift.witnessIds.includes(humanId) ||
+      recentRelationshipShift.visibility === 'HOUSE_PUBLIC' ||
+      recentRelationshipShift.visibility === 'CEREMONY_PUBLIC')
+
+  return (
+    <section
+      className={`reality-ledger${compact ? ' reality-ledger--compact' : ''}`}
+      aria-label="Reality ledger"
+    >
+      {!compact && (
+        <div className="reality-ledger__intro">
+          <span>Your private game read</span>
+          <small>Only information your player has learned appears here.</small>
+        </div>
+      )}
+      {!section && (
+        <nav className="reality-ledger__tabs" aria-label="Private notebook sections">
+          {(['relationships', 'knowledge', 'deals', 'house'] as LedgerTab[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={tab === item ? 'is-active' : ''}
+              onClick={() => setTab(item)}
+            >
+              {item === 'knowledge'
+                ? 'Known'
+                : item === 'relationships'
+                  ? 'People'
+                  : item === 'house'
+                    ? 'Hub stories'
+                    : item === 'deals'
+                      ? 'Commitments'
+                      : item}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      <div className="reality-ledger__content">
+        {activeTab === 'knowledge' && (
+          <>
+            {focusedBetrayalEvent && (
+              <article
+                className="reality-ledger__item reality-ledger__item--focused"
+                id={`intel-event-${focusedBetrayalEvent.id}`}
+                aria-label="Betrayal event evidence"
+              >
+                <div>
+                  <span className="reality-ledger__badge reality-ledger__badge--claim">
+                    Betrayal event
+                  </span>
+                  <small>
+                    Day {focusedBetrayalEvent.day} ·{' '}
+                    {formatPlayerFacingPhase(focusedBetrayalEvent.phase)}
+                  </small>
+                </div>
+                <strong>
+                  {playerName(focusedBetrayalEvent.actorId ?? '')} ·{' '}
+                  {betrayalCauseLabel(focusedBetrayalEvent)}
+                </strong>
+                <p>
+                  Affected: {focusedBetrayalEvent.targetIds.map(playerName).join(' and ') || 'You'}.{' '}
+                  This is the recorded event behind the betrayed label.
+                </p>
+              </article>
+            )}
+            <h3>Leads and discoveries</h3>
+            <p className="reality-ledger__hint">
+              Signals your player has learned, with their source and confidence.
+            </p>
+            {intelLeads.length === 0 && discoveredAlliances.length === 0 ? (
+              <p className="reality-ledger__empty">
+                You have not learned any current leads or other alliances yet.
+              </p>
+            ) : (
+              <>
+                {intelLeads.slice(0, 8).map((lead) => (
+                  <article className="reality-ledger__item" key={lead.factId}>
+                    <div>
+                      <span className="reality-ledger__badge reality-ledger__badge--claim">
+                        {lead.confidence}
+                      </span>
+                      <small>Day {lead.day}</small>
+                    </div>
+                    <strong>{lead.text}</strong>
+                    <em>{lead.source}</em>
+                  </article>
+                ))}
+                {discoveredAlliances.map(({ alliance, knowledge }) => {
+                  const isFormerAlliance =
+                    knowledge.level !== 'MEMBER' && alliance.status === 'DISSOLVED'
+                  const knownMembers = [
+                    ...knowledge.knownMemberIds,
+                    ...knowledge.historicalMemberIds.filter(
+                      (id) => !knowledge.knownMemberIds.includes(id)
+                    ),
+                  ]
+                  return (
+                    <article className="reality-ledger__item" key={alliance.id}>
+                      <div>
+                        <span className="reality-ledger__badge reality-ledger__badge--alliance">
+                          {knowledge.level === 'MEMBER'
+                            ? allianceStatusLabel(alliance.status, allianceKind(alliance))
+                            : isFormerAlliance
+                              ? 'Former alliance'
+                              : knowledge.level === 'PUBLIC'
+                                ? 'Public alliance'
+                                : knowledge.level === 'CONFIRMED'
+                                  ? 'Confirmed pact'
+                                  : 'Suspected pact'}
+                        </span>
+                        <small>
+                          {knowledge.level === 'MEMBER'
+                            ? `${Math.round((knowledge.cohesion ?? 0) * 100)}% cohesion · ${allianceSecrecyLabel(knowledge.secrecy ?? 0)}`
+                            : isFormerAlliance
+                              ? 'Historical'
+                              : knowledge.level === 'PUBLIC'
+                                ? 'Hub-known'
+                                : confidenceLabel(knowledge.confidence)}
+                        </small>
+                      </div>
+                      <strong>
+                        {knowledge.displayName ??
+                          (knowledge.level === 'MEMBER'
+                            ? 'Private pact'
+                            : isFormerAlliance
+                              ? 'Former alliance'
+                              : knowledge.level === 'PUBLIC'
+                                ? 'Exposed alliance'
+                                : 'Possible alliance')}
+                      </strong>
+                      <p>
+                        {knownMembers.length
+                          ? knowledge.fullMembershipKnown
+                            ? `Known members: ${knownMembers.map((id) => `${playerName(id)}${knowledge.historicalMemberIds.includes(id) ? ' (former)' : ''}`).join(' · ')}. This is the full roster.`
+                            : `Known links: ${knownMembers.map((id) => `${playerName(id)}${knowledge.historicalMemberIds.includes(id) ? ' (former)' : ''}`).join(' · ')}. The full roster has not been confirmed.`
+                          : 'You suspect a pact exists, but do not know its members.'}
+                      </p>
+                    </article>
+                  )
+                })}
+              </>
+            )}
+            {(knownFacts.length > 0 || beliefs.length > 0) && (
+              <details className="reality-ledger__history">
+                <summary>Evidence history · {knownFacts.length + beliefs.length}</summary>
+                {knownFacts.slice(0, 12).map((fact) => (
+                  <article className="reality-ledger__item" key={fact.id}>
+                    <div>
+                      <span className="reality-ledger__badge reality-ledger__badge--fact">
+                        Known fact
+                      </span>
+                      <small>Day {fact.day}</small>
+                    </div>
+                    <strong>{titleCase(fact.propositionType)}</strong>
+                    <p>{fact.subjectIds.map(playerName).join(' · ')}</p>
+                  </article>
+                ))}
+                {beliefs.slice(0, 12).map((belief) => (
+                  <article className="reality-ledger__item" key={belief.id}>
+                    <div>
+                      <span className="reality-ledger__badge reality-ledger__badge--claim">
+                        Claim
+                      </span>
+                      <small>{confidenceLabel(belief.confidence)}</small>
+                    </div>
+                    <strong>{titleCase(belief.propositionType)}</strong>
+                    <p>{belief.subjectIds.map(playerName).join(' · ')}</p>
+                    <em>{beliefSource(belief, reality, playerName)}</em>
+                  </article>
+                ))}
+              </details>
+            )}
+          </>
+        )}
+
+        {activeTab === 'deals' && (
+          <>
+            <h3>Commitments</h3>
+            <p className="reality-ledger__hint">
+              Promises, favors and their deadlines, kept together for your next decision.
+            </p>
+            <>
+              {openPromises.length === 0 &&
+              openLegacyCommitments.length === 0 &&
+              openDebts.length === 0 ? (
+                <p className="reality-ledger__empty">
+                  No open promises or favors need your attention.
+                </p>
+              ) : (
+                <>
+                  {openPromises.map((promise) => (
+                    <article className="reality-ledger__item" key={promise.id}>
+                      <div>
+                        <span
+                          className={`reality-ledger__badge reality-ledger__badge--${promise.status.toLowerCase()}`}
+                        >
+                          {titleCase(promise.status)}
+                        </span>
+                        <small>
+                          {promise.deadline
+                            ? `Due Day ${promise.deadline.day}`
+                            : `Made Day ${promise.createdAt.day}`}
+                        </small>
+                      </div>
+                      <strong>{titleCase(promise.kind)}</strong>
+                      <p>
+                        {playerName(promise.promisorId)} →{' '}
+                        {promise.beneficiaryIds.map(playerName).join(', ')}
+                      </p>
+                    </article>
+                  ))}
+                  {openLegacyCommitments.map((commitment) => (
+                    <article className="reality-ledger__item" key={`legacy-${commitment.id}`}>
+                      <div>
+                        <span
+                          className={`reality-ledger__badge reality-ledger__badge--${commitment.status}`}
+                        >
+                          Promise · {titleCase(commitment.status)}
+                        </span>
+                        <small>
+                          Due Day {commitment.dueWeek} ·{' '}
+                          {getSocialCommitmentDueCopy(commitment.kind)}
+                        </small>
+                      </div>
+                      <strong>{getSocialCommitmentLabel(commitment.kind)}</strong>
+                      <p>
+                        {playerName(commitment.promisorId)} → {playerName(commitment.beneficiaryId)}
+                      </p>
+                    </article>
+                  ))}
+                  {openDebts.map((debt) => (
+                    <article className="reality-ledger__item" key={debt.id}>
+                      <div>
+                        <span className="reality-ledger__badge reality-ledger__badge--debt">
+                          Favor · {titleCase(debt.status)}
+                        </span>
+                        <small>Raised Day {debt.createdAt.day}</small>
+                      </div>
+                      <strong>
+                        {playerName(debt.debtorId)} owes {playerName(debt.creditorId)}
+                      </strong>
+                    </article>
+                  ))}
+                </>
+              )}
+              {commitmentHistoryCount > 0 && (
+                <details className="reality-ledger__history">
+                  <summary>Resolved history · {commitmentHistoryCount}</summary>
+                  {resolvedPromises.map((promise) => (
+                    <article className="reality-ledger__item" key={promise.id}>
+                      <div>
+                        <span
+                          className={`reality-ledger__badge reality-ledger__badge--${promise.status.toLowerCase()}`}
+                        >
+                          {titleCase(promise.status)}
+                        </span>
+                        <small>Made Day {promise.createdAt.day}</small>
+                      </div>
+                      <strong>{titleCase(promise.kind)}</strong>
+                      <p>
+                        {playerName(promise.promisorId)} →{' '}
+                        {promise.beneficiaryIds.map(playerName).join(', ')}
+                      </p>
+                    </article>
+                  ))}
+                  {resolvedLegacyCommitments.map((commitment) => (
+                    <article className="reality-ledger__item" key={`legacy-${commitment.id}`}>
+                      <div>
+                        <span
+                          className={`reality-ledger__badge reality-ledger__badge--${commitment.status}`}
+                        >
+                          Promise · {titleCase(commitment.status)}
+                        </span>
+                        <small>Due Day {commitment.dueWeek}</small>
+                      </div>
+                      <strong>{getSocialCommitmentLabel(commitment.kind)}</strong>
+                      <p>
+                        {playerName(commitment.promisorId)} → {playerName(commitment.beneficiaryId)}
+                      </p>
+                    </article>
+                  ))}
+                  {resolvedDebts.map((debt) => (
+                    <article className="reality-ledger__item" key={debt.id}>
+                      <div>
+                        <span className="reality-ledger__badge reality-ledger__badge--debt">
+                          Favor · {titleCase(debt.status)}
+                        </span>
+                        <small>Raised Day {debt.createdAt.day}</small>
+                      </div>
+                      <strong>
+                        {playerName(debt.debtorId)} owed {playerName(debt.creditorId)}
+                      </strong>
+                    </article>
+                  ))}
+                </details>
+              )}
+            </>
+          </>
+        )}
+
+        {activeTab === 'house' && (
+          <>
+            <h3>Open house stories</h3>
+            {threads.length === 0 && knownRelationshipStories.length === 0 ? (
+              <p className="reality-ledger__empty">No known Hub story is active.</p>
+            ) : (
+              <>
+                {threads.map((thread) => (
+                  <article className="reality-ledger__item" key={thread.id}>
+                    <div>
+                      <span className="reality-ledger__badge reality-ledger__badge--thread">
+                        {titleCase(thread.status)}
+                      </span>
+                      <small>Urgency {Math.round(thread.urgency * 100)}%</small>
+                    </div>
+                    <strong>{titleCase(thread.type)}</strong>
+                    <p>{thread.participantIds.map(playerName).join(' · ')}</p>
+                  </article>
+                ))}
+                {knownRelationshipStories.map((story) => {
+                  const otherId = story.ownerId === humanId ? story.targetId : story.ownerId
+                  return (
+                    <article className="reality-ledger__item" key={story.id}>
+                      <div>
+                        <span className="reality-ledger__badge reality-ledger__badge--thread">
+                          {titleCase(story.stage)}
+                        </span>
+                        <small>Day {story.lastAdvancedAt.day}</small>
+                      </div>
+                      <strong>{getRelationshipStoryLabel(story.kind)}</strong>
+                      <p>With {playerName(otherId)}</p>
+                    </article>
+                  )
+                })}
+              </>
+            )}
+          </>
+        )}
+
+        {activeTab === 'relationships' && (
+          <>
+            {!compact && <h3>Your relationship reads</h3>}
+            {relationships.length === 0 ? (
+              <p className="reality-ledger__empty">
+                {currentDay !== undefined && currentDay > RELATIONSHIP_FORMING_GRACE_DAYS
+                  ? 'No detailed relationship reads to show yet. Personal interactions will shape them.'
+                  : 'Your relationships are still forming.'}
+              </p>
+            ) : (
+              <>
+                {!focusPlayerId && (
+                  <div className="reality-ledger__people" role="list">
+                    {relationships.map((edge) => {
+                      const relationshipView = selectCanonicalRelationshipView({
+                        relationships: liveRelationships,
+                        reality,
+                        actorId: humanId,
+                        targetId: edge.toId,
+                      })
+                      const relationshipDisplay = getRealityRelationshipLabel(
+                        edge,
+                        relationshipView.alliance?.operational,
+                        currentDay,
+                        relationshipView.isNemesis,
+                        Boolean(getCurrentPact(reality, humanId, edge.toId)),
+                        hasRealityRomanticBond(reality, humanId, edge.toId, false)
+                      )
+                      return (
+                        <button
+                          role="listitem"
+                          key={edge.toId}
+                          type="button"
+                          className={selectedRelationship?.toId === edge.toId ? 'is-active' : ''}
+                          onClick={() => setSelectedPlayerId(edge.toId)}
+                        >
+                          <strong>{playerName(edge.toId)}</strong>
+                          <small>{relationshipDisplay.label}</small>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {selectedRelationship && (
+                  <article
+                    className="reality-ledger__relationship"
+                    aria-label={`${playerName(selectedRelationship.toId)} relationship details`}
+                  >
+                    <div>
+                      {!compact && <strong>{playerName(selectedRelationship.toId)}</strong>}
+                      {!focusPlayerId && selectedRelationshipDisplay && (
+                        <span>{selectedRelationshipDisplay.label}</span>
+                      )}
+                    </div>
+                    {liveRelationshipMetrics(selectedRelationship, currentDay).map(
+                      ([label, rawValue]) => {
+                        const value = Number(rawValue)
+                        const normalized = label === 'Tension' ? value : (value + 100) / 2
+                        return (
+                          <label
+                            className={
+                              label === 'Tension' ? 'reality-ledger__metric--tension' : undefined
+                            }
+                            key={String(label)}
+                          >
+                            <span>{label}</span>
+                            <div
+                              className={`reality-ledger__relationship-meter${label === 'Tension' ? ' reality-ledger__relationship-meter--tension' : ''}`}
+                              role="meter"
+                              aria-label={`${label}: ${relationshipMetricStatus(String(label), value)}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={normalized}
+                              aria-valuetext={relationshipMetricStatus(String(label), value)}
+                            >
+                              <span
+                                className="reality-ledger__relationship-meter-fill"
+                                style={{ width: `${normalized}%` }}
+                              />
+                              {label !== 'Tension' && (
+                                <span
+                                  className="reality-ledger__relationship-meter-midpoint"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </div>
+                            <small>{relationshipMetricStatus(String(label), value)}</small>
+                          </label>
+                        )
+                      }
+                    )}
+                    {recentRelationshipShift && recentShiftIsKnown && (
+                      <p className="reality-ledger__relationship-shift">
+                        Recent shift · Week {selectedRelationship.lastMeaningfulInteraction?.day} ·{' '}
+                        {relationshipEventLabel(
+                          recentRelationshipShift.type,
+                          recentRelationshipShift.actionId
+                        )}
+                      </p>
+                    )}
+                    <small>
+                      This is your character’s read. Their private opinion of you remains hidden.
+                    </small>
+                  </article>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}

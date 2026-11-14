@@ -1,0 +1,1650 @@
+import { finalizeAcceptedPersonalPact } from './reality/allianceManagement'
+import { getCurrentPact } from './reality/allianceIdentity'
+import {
+  getIncomingInteractionResponseOptions,
+  getIncomingInteractionTone,
+} from './incomingInteractionPresentation'
+import {
+  getSafetyConsultationScenario,
+  isSafetyChoiceAligned,
+  type IncomingSafetyChoice,
+} from './incomingSafetyConsultationChoice'
+import { ROMANCE_ACTION_CHOICES } from './incomingSceneChoiceBank'
+import { getIncomingDialogueBeat } from './incomingDialogueOutcomeBank'
+import { getSameDayPactRefusal, isProtectionClarification } from './pactProtectionContinuity'
+import { getIncomingActionContent } from './incomingActionContentBank'
+import {
+  getIncomingResponseLogCopy,
+  getIncomingResponseRelationshipDelta,
+} from './incomingResponseEffects'
+import { resolveIncomingResponse } from './incomingInteractionResolution'
+import type { AppDispatch, RootState } from '../store/store'
+import { socialConfig } from './socialConfig'
+import { logIncomingInteractionDecision } from './incomingInteractionLogging'
+import {
+  addSocialCommitment,
+  applyDramaIncomingResponse,
+  applyInfoDelta,
+  applyInfluenceDelta,
+  commitRealityDomainUpdate,
+  dismissIncomingInteraction,
+  replaceRealityDomain,
+  recordIncomingInteractionFollowUp,
+  resolveIncomingInteractionsByDeadline,
+  resolveIncomingInteraction,
+  recordSeasonProvocateurResponse,
+  updateRelationship,
+  updateSocialMemory,
+  learnRealityKnowledge,
+  recordIntelligenceDelivery,
+  recordSocialAction,
+} from './socialSlice'
+import {
+  coordinateRealityAllianceTarget,
+  holdRealityAllianceStrategyMeeting,
+  resolvePendingHumanRealityInteraction,
+  resolveRelationshipStoryResponse,
+} from './reality'
+import {
+  getIncomingDeadline,
+  isIncomingInteractionOverdue,
+  isIncomingInteractionUrgent,
+} from './incomingInteractionDeadline'
+import {
+  createCommitmentFromInteraction,
+  getCommitmentKindForInteraction,
+} from './socialCommitments'
+import { isIncomingInteractionInvalidated } from './incomingInteractionValidity'
+import { buildSocialMemoryDeltaForResponse, buildSocialMemoryEvent } from './socialMemory'
+import type { SocialMemoryDelta } from './socialMemory'
+import { ALLIANCE_TAG, MIN_ALLIANCE_AFFINITY } from './socialAlliance'
+import { getInteractionSocialMode } from './socialMode'
+import { getIncomingInteractionResponsePolicy } from './socialRuntimeConfig'
+import { getCupidPartnerId } from '../features/twists/cupidArrow'
+import type {
+  IncomingInteraction,
+  IncomingInteractionResponseType,
+  IncomingInteractionResponseAction,
+  IncomingInteractionReceipt,
+  IncomingInteractionType,
+} from './types'
+import { makeIntelMemory } from './intelligenceSystem'
+import { getRuntimeSocialActionById } from './socialActionManager'
+import { normalizeActionCosts } from './smExecNormalize'
+import { getSocialResourceEffect } from './socialResourceEconomy'
+
+const TYPE_LABELS: Record<IncomingInteractionType, string> = {
+  compliment: 'compliment',
+  gossip: 'gossip',
+  warning: 'warning',
+  alliance_proposal: 'personal pact offer',
+  deal_offer: 'deal offer',
+  nomination_plea: 'nomination plea',
+  check_in: 'check-in',
+  snide_remark: 'snide remark',
+  other: 'message',
+}
+
+const RESPONSE_VERBS: Record<IncomingInteractionResponseType, string> = {
+  positive: 'encouraged',
+  neutral: 'acknowledged',
+  negative: 'pushed back on',
+  accept: 'accepted',
+  decline: 'declined',
+  dismiss: 'dismissed',
+  ignore: 'ignored',
+}
+
+type ResolutionSource = 'player' | 'expiry'
+
+const ALLIANCE_STRATEGY_SCENARIOS = new Set([
+  'alliance_nomination_pitch',
+  'alliance_vox_ballot_pitch',
+  'alliance_safety_pitch',
+  'alliance_vote_pitch',
+  'alliance_power_nomination_huddle',
+  'alliance_power_safety_huddle',
+])
+
+function isAllianceStrategyScenario(value: unknown): boolean {
+  return typeof value === 'string' && ALLIANCE_STRATEGY_SCENARIOS.has(value)
+}
+
+function getRecentIncomingReactionLines(
+  state: RootState,
+  currentInteraction: IncomingInteraction
+): string[] {
+  return state.social.incomingInteractions
+    .filter(
+      (interaction) =>
+        interaction.id !== currentInteraction.id &&
+        interaction.resolved &&
+        typeof interaction.reactionText === 'string'
+    )
+    .slice(-12)
+    .map((interaction) => {
+      const reactionText = interaction.reactionText ?? ''
+      const reactionPrefix = reactionText.match(/ (?:replies|reacts): /)
+      const reactionStart = reactionPrefix?.index
+      return reactionPrefix && reactionStart !== undefined
+        ? reactionText.slice(reactionStart + reactionPrefix[0].length)
+        : reactionText
+    })
+}
+
+function buildIncomingReactionText(
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  responseLabel: string | undefined,
+  fromName: string,
+  subjectName: string | undefined,
+  secondarySubjectName: string | undefined,
+  phase: string,
+  recentLines: readonly string[] = [],
+  recentPactRefusal?: string
+): string | undefined {
+  const scenarioKey = interaction.payload?.scenarioKey
+  if (typeof scenarioKey !== 'string') return undefined
+
+  const variantId =
+    typeof interaction.payload?.variantId === 'string'
+      ? interaction.payload.variantId
+      : interaction.id
+  const seedSource = [
+    interaction.fromId,
+    interaction.id,
+    interaction.createdAt,
+    scenarioKey,
+    variantId,
+    responseType,
+    responseLabel ?? '',
+    phase,
+  ].join(':')
+  let seed = 2166136261
+  for (const character of seedSource) {
+    seed ^= character.charCodeAt(0)
+    seed = Math.imul(seed, 16777619)
+  }
+
+  const beat = getIncomingDialogueBeat({
+    actionId:
+      typeof interaction.payload?.originActionId === 'string'
+        ? interaction.payload.originActionId
+        : undefined,
+    scenarioKey,
+    variantFamilyId:
+      typeof interaction.payload?.variantFamilyId === 'string'
+        ? interaction.payload.variantFamilyId
+        : undefined,
+    responseType,
+    responseLabel,
+    fromName,
+    subjectName,
+    secondarySubjectName,
+    seed: seed >>> 0,
+    recentLines,
+    recentPactRefusal,
+  })
+  if (!beat) return undefined
+  const isActionReaction =
+    typeof interaction.payload?.originActionId === 'string' &&
+    Boolean(getIncomingActionContent(interaction.payload.originActionId))
+  return `${fromName} ${isActionReaction ? 'reacts' : 'replies'}: ${beat}`
+}
+
+export function buildAllianceGroupRead(
+  interaction: IncomingInteraction,
+  players: readonly { id: string; name: string; status: string; isUser?: boolean }[]
+): string | null {
+  if (interaction.payload?.allianceGroupHuddle !== true) return null
+  const rawTargetPreferences = interaction.payload?.allianceMemberTargetPreferences
+  if (
+    !rawTargetPreferences ||
+    typeof rawTargetPreferences !== 'object' ||
+    Array.isArray(rawTargetPreferences)
+  ) {
+    return null
+  }
+  const rawFallbackPreferences = interaction.payload?.allianceMemberFallbackPreferences
+  const fallbackPreferences =
+    rawFallbackPreferences &&
+    typeof rawFallbackPreferences === 'object' &&
+    !Array.isArray(rawFallbackPreferences)
+      ? rawFallbackPreferences
+      : null
+  const playerById = new Map(
+    players
+      .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+      .map((player) => [player.id, player] as const)
+  )
+  const humanId = players.find((player) => player.isUser)?.id
+  const authoredMemberIds = Array.isArray(interaction.payload?.allianceGroupMemberIds)
+    ? interaction.payload.allianceGroupMemberIds.filter(
+        (id): id is string => typeof id === 'string'
+      )
+    : Object.keys(rawTargetPreferences)
+  const strategyKind =
+    interaction.payload?.allianceStrategyKind === 'SAFETY'
+      ? 'SAFETY'
+      : interaction.payload?.allianceStrategyKind === 'VOTE'
+        ? 'VOTE'
+        : 'NOMINATION'
+  const reads = [...new Set(authoredMemberIds)]
+    .filter((memberId) => memberId !== humanId && playerById.has(memberId))
+    .flatMap((memberId) => {
+      const targetId = (rawTargetPreferences as Record<string, unknown>)[memberId]
+      if (typeof targetId !== 'string') return []
+      const memberName = playerById.get(memberId)?.name ?? memberId
+      const targetName = playerById.get(targetId)?.name ?? targetId
+      if (strategyKind === 'SAFETY') {
+        const fallbackId = (fallbackPreferences as Record<string, unknown> | null)?.[memberId]
+        const replacement =
+          typeof fallbackId === 'string' ? (playerById.get(fallbackId)?.name ?? fallbackId) : null
+        return [
+          replacement
+            ? `${memberName}: save ${targetName} → replacement ${replacement}`
+            : `${memberName}: save ${targetName}`,
+        ]
+      }
+      return [
+        strategyKind === 'VOTE'
+          ? `${memberName}: vote ${targetName}`
+          : `${memberName}: target ${targetName}`,
+      ]
+    })
+  return reads.length > 0 ? `Alliance reads — ${reads.join('; ')}.` : null
+}
+
+export function buildAllianceHuddleDecisionOutcome(
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  players: readonly { id: string; name: string; status: string; isUser?: boolean }[]
+): string | null {
+  if (interaction.payload?.allianceGroupHuddle !== true) return null
+  const humanId = players.find((player) => player.isUser)?.id
+  const byId = new Map(players.map((player) => [player.id, player] as const))
+  const authoredIds = Array.isArray(interaction.payload.allianceGroupMemberIds)
+    ? interaction.payload.allianceGroupMemberIds.filter(
+        (id): id is string => typeof id === 'string'
+      )
+    : []
+  const activeIds = new Set(
+    [...new Set([interaction.fromId, ...authoredIds, ...(humanId ? [humanId] : [])])].filter(
+      (id) => {
+        const player = byId.get(id)
+        return player && player.status !== 'evicted' && player.status !== 'jury'
+      }
+    )
+  )
+  const humanAttends = responseType !== 'dismiss' && responseType !== 'ignore'
+  const attendeeIds = [...activeIds].filter((id) => id !== humanId || humanAttends)
+  const majority = Math.floor(attendeeIds.length / 2) + 1
+  const targetId =
+    typeof interaction.payload.subjectId === 'string' ? interaction.payload.subjectId : undefined
+  const fallbackId =
+    typeof interaction.payload.secondarySubjectId === 'string'
+      ? interaction.payload.secondarySubjectId
+      : undefined
+  const rawPreferences = interaction.payload.allianceMemberTargetPreferences
+  const preferences =
+    rawPreferences && typeof rawPreferences === 'object' && !Array.isArray(rawPreferences)
+      ? (rawPreferences as Record<string, unknown>)
+      : null
+  const rawFallbacks = interaction.payload.allianceMemberFallbackPreferences
+  const fallbacks =
+    rawFallbacks && typeof rawFallbacks === 'object' && !Array.isArray(rawFallbacks)
+      ? (rawFallbacks as Record<string, unknown>)
+      : null
+  const humanSupports = responseType === 'accept' || responseType === 'positive'
+  const supportFor = (candidateId: string | undefined, map: Record<string, unknown> | null) =>
+    candidateId
+      ? attendeeIds.filter((memberId) =>
+          memberId === humanId ? humanSupports : map ? map[memberId] === candidateId : true
+        ).length
+      : 0
+  const nameFor = (id: string | undefined) => (id ? (byId.get(id)?.name ?? id) : undefined)
+  const strategy = interaction.payload.allianceStrategyKind
+  const clauses: string[] = []
+  if (strategy === 'SAFETY') {
+    if (targetId && supportFor(targetId, preferences) >= majority)
+      clauses.push(`a majority recommends saving ${nameFor(targetId)}`)
+    if (fallbackId && supportFor(fallbackId, fallbacks) >= majority)
+      clauses.push(`a majority recommends ${nameFor(fallbackId)} for the replacement seat`)
+    if (clauses.length === 0) {
+      const read = buildAllianceGroupRead(interaction, players)
+      return `No Safety choice reached a member majority. ${read ?? 'The members did not record a shared Safety preference.'} The Safety holder makes the final decision.`
+    }
+    return `The huddle recorded ${clauses.join(' and ')}. The Safety holder makes the final decision.`
+  }
+
+  if (strategy === 'NOMINATION') {
+    if (targetId && supportFor(targetId, preferences) >= majority)
+      return `The huddle recorded a majority recommendation to target ${nameFor(targetId)}. This does not guarantee a nomination; the LOH sets the slate.`
+    const read = buildAllianceGroupRead(interaction, players)
+    return `No target reached a member majority. ${read ?? 'The members did not record a shared nomination preference.'} The LOH sets the slate.`
+  }
+
+  if (targetId && supportFor(targetId, preferences) >= majority)
+    return `The alliance recorded a majority read for ${nameFor(targetId)}. Each eligible member still casts their own ballot.`
+  const read = buildAllianceGroupRead(interaction, players)
+  return `The huddle did not reach a majority vote read. ${read ?? 'No shared vote preference was recorded.'} Each eligible member still casts their own ballot.`
+}
+
+function resolveRealityIncomingInteraction(
+  dispatch: AppDispatch,
+  getState: () => RootState,
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  day: number,
+  phase: string
+): void {
+  const realityInteractionId =
+    typeof interaction.payload?.realityInteractionId === 'string'
+      ? interaction.payload.realityInteractionId
+      : undefined
+  const state = getState()
+  const humanId = state.game.players.find((player) => player.isUser)?.id
+  if (!humanId) return
+  if (!realityInteractionId) {
+    const allianceId =
+      typeof interaction.payload?.allianceId === 'string'
+        ? interaction.payload.allianceId
+        : undefined
+    const allianceStrategyKind =
+      interaction.payload?.allianceStrategyKind === 'NOMINATION' ||
+      interaction.payload?.allianceStrategyKind === 'SAFETY' ||
+      interaction.payload?.allianceStrategyKind === 'VOTE'
+        ? interaction.payload.allianceStrategyKind
+        : undefined
+    const subjectId =
+      typeof interaction.payload?.subjectId === 'string' ? interaction.payload.subjectId : undefined
+    const secondarySubjectId =
+      typeof interaction.payload?.secondarySubjectId === 'string'
+        ? interaction.payload.secondarySubjectId
+        : undefined
+    const aligned = responseType === 'accept' || responseType === 'positive'
+
+    if (allianceId && allianceStrategyKind) {
+      const domain = structuredClone(getState().social.reality)
+      const alliance = domain.alliances[allianceId]
+      if (
+        alliance &&
+        (alliance.status === 'ACTIVE' || alliance.status === 'PROBATIONARY') &&
+        alliance.memberIds.includes(interaction.fromId) &&
+        alliance.memberIds.includes(humanId)
+      ) {
+        const groupHuddle = interaction.payload?.allianceGroupHuddle === true
+        if (groupHuddle) {
+          const activePlayerIds = new Set(
+            state.game.players
+              .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+              .map((player) => player.id)
+          )
+          const authoredMembers = Array.isArray(interaction.payload?.allianceGroupMemberIds)
+            ? interaction.payload.allianceGroupMemberIds.filter(
+                (id): id is string =>
+                  typeof id === 'string' &&
+                  alliance.memberIds.includes(id) &&
+                  activePlayerIds.has(id)
+              )
+            : []
+          const humanAttends = responseType !== 'dismiss' && responseType !== 'ignore'
+          const attendeeIds = [
+            ...new Set([
+              interaction.fromId,
+              ...authoredMembers.filter((id) => id !== humanId),
+              ...(humanAttends ? [humanId] : []),
+            ]),
+          ]
+          if (attendeeIds.length < 2) return
+          // Choosing to sit out is a real absence, not an excused one. Members
+          // missing from the authored active roster are treated as unavailable.
+          const excusedAbsentIds = alliance.memberIds.filter(
+            (id) => !attendeeIds.includes(id) && id !== humanId
+          )
+          const rawTargetPreferences = interaction.payload?.allianceMemberTargetPreferences
+          const rawFallbackPreferences = interaction.payload?.allianceMemberFallbackPreferences
+          const targetPreferences =
+            rawTargetPreferences &&
+            typeof rawTargetPreferences === 'object' &&
+            !Array.isArray(rawTargetPreferences)
+              ? Object.fromEntries(
+                  Object.entries(rawTargetPreferences).filter(
+                    (entry): entry is [string, string] =>
+                      typeof entry[1] === 'string' && attendeeIds.includes(entry[0])
+                  )
+                )
+              : null
+          const fallbackPreferences =
+            rawFallbackPreferences &&
+            typeof rawFallbackPreferences === 'object' &&
+            !Array.isArray(rawFallbackPreferences)
+              ? Object.fromEntries(
+                  Object.entries(rawFallbackPreferences).filter(
+                    (entry): entry is [string, string] =>
+                      typeof entry[1] === 'string' && attendeeIds.includes(entry[0])
+                  )
+                )
+              : null
+          const majority = Math.floor(attendeeIds.length / 2) + 1
+          const currentTargetCandidate =
+            subjectId && !alliance.memberIds.includes(subjectId) ? subjectId : undefined
+          const fallbackTargetCandidate =
+            secondarySubjectId && !alliance.memberIds.includes(secondarySubjectId)
+              ? secondarySubjectId
+              : undefined
+          const currentSupport = currentTargetCandidate
+            ? attendeeIds.filter((memberId) =>
+                memberId === humanId
+                  ? aligned
+                  : targetPreferences
+                    ? targetPreferences[memberId] === currentTargetCandidate
+                    : true
+              ).length
+            : 0
+          const fallbackSupport = fallbackTargetCandidate
+            ? attendeeIds.filter((memberId) =>
+                memberId === humanId
+                  ? aligned
+                  : fallbackPreferences
+                    ? fallbackPreferences[memberId] === fallbackTargetCandidate
+                    : true
+              ).length
+            : 0
+          const currentTargetIds =
+            currentTargetCandidate && currentSupport >= majority ? [currentTargetCandidate] : []
+          const fallbackTargetIds =
+            fallbackTargetCandidate && fallbackSupport >= majority ? [fallbackTargetCandidate] : []
+          const planIds = [
+            ...currentTargetIds.map((id) => `target:${id}`),
+            ...fallbackTargetIds.map((id) => `fallback:${id}`),
+          ]
+          const memberPlanBeliefs: Record<string, string[]> = Object.fromEntries(
+            attendeeIds.map((memberId) => {
+              if (memberId === humanId) {
+                const humanPosition =
+                  responseType === 'decline' || responseType === 'negative'
+                    ? 'dissent'
+                    : aligned
+                      ? 'support'
+                      : 'aware'
+                return [
+                  memberId,
+                  [
+                    ...(currentTargetCandidate
+                      ? [
+                          humanPosition === 'support'
+                            ? `target:${currentTargetCandidate}`
+                            : `${humanPosition}:${currentTargetCandidate}`,
+                        ]
+                      : []),
+                    ...(fallbackTargetCandidate
+                      ? [
+                          humanPosition === 'support'
+                            ? `fallback:${fallbackTargetCandidate}`
+                            : `${humanPosition}_fallback:${fallbackTargetCandidate}`,
+                        ]
+                      : []),
+                  ],
+                ]
+              }
+              const targetPreference = targetPreferences?.[memberId]
+              const fallbackPreference = fallbackPreferences?.[memberId]
+              return [
+                memberId,
+                [
+                  ...(targetPreference
+                    ? targetPreference === currentTargetIds[0]
+                      ? [`target:${targetPreference}`]
+                      : [
+                          ...(currentTargetIds[0] ? [`aware:${currentTargetIds[0]}`] : []),
+                          `preference:${targetPreference}`,
+                        ]
+                    : targetPreferences
+                      ? []
+                      : currentTargetCandidate
+                        ? [`target:${currentTargetCandidate}`]
+                        : []),
+                  ...(fallbackPreference
+                    ? [
+                        fallbackPreference === fallbackTargetIds[0]
+                          ? `fallback:${fallbackPreference}`
+                          : `replacement_preference:${fallbackPreference}`,
+                      ]
+                    : fallbackPreferences
+                      ? []
+                      : fallbackTargetCandidate
+                        ? [`fallback:${fallbackTargetCandidate}`]
+                        : []),
+                ],
+              ]
+            })
+          )
+          holdRealityAllianceStrategyMeeting(domain, {
+            allianceId,
+            callerId: interaction.fromId,
+            attendeeIds,
+            targetIds: currentTargetIds,
+            fallbackTargetIds,
+            planIds,
+            agenda:
+              allianceStrategyKind === 'NOMINATION'
+                ? 'nominations'
+                : allianceStrategyKind === 'SAFETY'
+                  ? 'safety'
+                  : 'eviction_vote',
+            at: { day, phase },
+            sourceEventId: `incoming:${interaction.id}`,
+            excusedAbsentIds,
+            memberPlanBeliefs,
+          })
+          dispatch(replaceRealityDomain(domain))
+          return
+        }
+
+        if (aligned && subjectId) {
+          coordinateRealityAllianceTarget(domain, {
+            actorId: interaction.fromId,
+            partnerId: humanId,
+            subjectId,
+            kind: allianceStrategyKind === 'SAFETY' ? 'FALLBACK' : 'CURRENT',
+            at: { day, phase },
+            sourceEventId: `incoming:${interaction.id}`,
+            allianceId,
+          })
+          dispatch(replaceRealityDomain(domain))
+          return
+        }
+      }
+    }
+
+    const relationshipIntent = interaction.payload?.relationshipIntent
+    const domain = structuredClone(getState().social.reality)
+    let domainChanged = false
+
+    if (typeof relationshipIntent === 'string') {
+      // Immediate incoming effects may already have updated the social projection.
+      // Start from the latest domain so recording the storyline never rolls those
+      // relationship changes back.
+      domainChanged =
+        resolveRelationshipStoryResponse(domain, {
+          ownerId: interaction.fromId,
+          targetId: humanId,
+          intent: relationshipIntent,
+          responseType,
+          eventId: `incoming:${interaction.id}`,
+          at: { day, phase },
+        }) || domainChanged
+    }
+
+    if (interaction.type === 'alliance_proposal' && responseType === 'accept') {
+      const applied = finalizeAcceptedPersonalPact(domain, {
+        actorId: interaction.fromId,
+        targetId: humanId,
+        at: { day, phase },
+        interactionId: 'incoming:' + interaction.id,
+        displayNames: Object.fromEntries(
+          state.game.players.map((player) => [player.id, player.name])
+        ),
+        humanActorIds: [humanId],
+        viewerActorId: humanId,
+      })
+      domainChanged = applied.status === 'APPLIED' || domainChanged
+    }
+
+    if (domainChanged) dispatch(replaceRealityDomain(domain))
+    return
+  }
+  const resolved = resolvePendingHumanRealityInteraction({
+    // Inbox effects may already have changed other relationship edges or
+    // delivered knowledge. Resolve the linked action against the live domain.
+    domain: state.social.reality,
+    interactionId: realityInteractionId,
+    humanId,
+    responseType,
+    day,
+    phase,
+    subjectId:
+      typeof interaction.payload?.subjectId === 'string'
+        ? interaction.payload.subjectId
+        : undefined,
+    allianceId:
+      typeof interaction.payload?.allianceId === 'string'
+        ? interaction.payload.allianceId
+        : undefined,
+    allianceStrategyKind:
+      interaction.payload?.allianceStrategyKind === 'NOMINATION' ||
+      interaction.payload?.allianceStrategyKind === 'SAFETY'
+        ? interaction.payload.allianceStrategyKind
+        : undefined,
+    displayNames: Object.fromEntries(state.game.players.map((player) => [player.id, player.name])),
+    humanActorIds: [humanId],
+    viewerActorId: humanId,
+    secondarySubjectId:
+      typeof interaction.payload?.secondarySubjectId === 'string'
+        ? interaction.payload.secondarySubjectId
+        : undefined,
+  })
+  if (resolved.event) {
+    dispatch(
+      commitRealityDomainUpdate({
+        domain: resolved.domain,
+        changedRelationshipPairs: resolved.changedRelationshipPairs,
+      })
+    )
+  }
+}
+
+export function getIncomingInteractionTypeLabel(type: IncomingInteractionType): string {
+  return TYPE_LABELS[type]
+}
+
+function getPersonalPactPlanReply(interaction: IncomingInteraction, fromName: string): string {
+  const authoredPlan = interaction.payload?.personalPactPlan
+  const plan =
+    typeof authoredPlan === 'string' && authoredPlan.trim()
+      ? authoredPlan.trim()
+      : 'I want us to share strategic reads and warn each other when plans shift. We would discuss a target before treating it as a shared decision.'
+  return `${fromName} explains: “${plan}” No target or vote is agreed yet; the personal pact offer remains open.`
+}
+
+function getResponseDelta(
+  responseType: IncomingInteractionResponseType,
+  interaction: IncomingInteraction,
+  safetyChoice?: IncomingSafetyChoice
+): number {
+  const scenarioKey = interaction.payload?.scenarioKey
+  if (isAllianceStrategyScenario(scenarioKey)) {
+    if (responseType === 'accept' || responseType === 'positive') return 3
+    if (responseType === 'neutral' || responseType === 'decline' || responseType === 'negative') {
+      return 0
+    }
+    return -2
+  }
+  const consultation = getSafetyConsultationScenario(interaction)
+  if (consultation) {
+    if (responseType === 'dismiss' || responseType === 'ignore') return -2
+    if (safetyChoice?.kind === 'ask_advice') return 2
+    if (safetyChoice?.kind === 'save' || safetyChoice?.kind === 'hold') {
+      return consultation === 'loh_consults_safety_holder'
+        ? isSafetyChoiceAligned(interaction, safetyChoice)
+          ? 3
+          : 0
+        : 2
+    }
+    return 1
+  }
+  return socialConfig.incomingInteractionAffinityDeltas[responseType] ?? 0
+}
+
+function buildResponseLogText(
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  fromName: string,
+  dramaMode: boolean
+): string {
+  if (dramaMode) {
+    return getIncomingResponseLogCopy(interaction.id, responseType, fromName)
+  }
+  const typeLabel = getIncomingInteractionTypeLabel(interaction.type)
+  if (responseType === 'ignore') {
+    return `You left ${fromName}'s ${typeLabel} unanswered.`
+  }
+  const verb = RESPONSE_VERBS[responseType] ?? 'responded to'
+  return `You ${verb} ${fromName}'s ${typeLabel}.`
+}
+
+function describeLohSafetyPreference(interaction: IncomingInteraction, fromName: string): string {
+  if (interaction.payload?.preferredSafetyAdvice === 'save') {
+    const target = interaction.payload?.preferredSafetyTargetName
+    const replacement = interaction.payload?.preferredReplacementName
+    return `${fromName} prefers Safety used on ${
+      typeof target === 'string' ? target : 'one nominee'
+    }${typeof replacement === 'string' ? ` so ${replacement} can become the replacement` : ''}.`
+  }
+  return `${fromName} wants the nominations left unchanged.`
+}
+
+function buildOrdinaryResponseOutcome(
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  fromName: string,
+  responseLabel?: string
+): string {
+  const honestAnswer = /truth|honest|open up|let them in/i.test(responseLabel ?? '')
+  if (interaction.type === 'check_in') {
+    if (responseType === 'positive' || responseType === 'accept') {
+      if (/public save/i.test(interaction.text) && honestAnswer) {
+        return `${fromName} took your honesty seriously. They now understand that the public save left you feeling exposed.`
+      }
+      return `${fromName} appreciated the openness, and the conversation left them feeling closer to you.`
+    }
+    if (responseType === 'neutral') {
+      return `${fromName} accepted the careful answer, but still does not know exactly where you stand.`
+    }
+    if (responseType === 'negative' || responseType === 'decline') {
+      return `${fromName} noticed you pulling away, and the conversation ended with more distance between you.`
+    }
+    return `${fromName} let the conversation end, but the abrupt exit did not go unnoticed.`
+  }
+  if (interaction.type === 'compliment') {
+    if (responseType === 'positive' || responseType === 'accept')
+      return `${fromName} felt the warmth was returned.`
+    if (responseType === 'neutral') return `${fromName} took the restrained reaction in stride.`
+    return `${fromName} left feeling that the compliment had not landed.`
+  }
+  if (interaction.type === 'snide_remark') {
+    if (responseType === 'positive')
+      return `You defused the jab, leaving ${fromName} with little room to escalate.`
+    if (responseType === 'neutral')
+      return `${fromName} got no visible reaction and backed off for now.`
+    if (responseType === 'negative')
+      return `The exchange with ${fromName} sharpened into open tension.`
+    return `You walked away, and ${fromName} was left to decide whether silence meant restraint or contempt.`
+  }
+  if (interaction.type === 'deal_offer') {
+    if (responseType === 'neutral') {
+      if (/ask for terms|demand proof|counteroffer|buy some time/i.test(responseLabel ?? '')) {
+        return `${fromName} laid out what they need before making any promise. The conversation is still open.`
+      }
+      return `${fromName} heard the hesitation and left the offer on the table for now.`
+    }
+    if (responseType === 'negative' || responseType === 'decline')
+      return `${fromName} heard your answer and withdrew the offer without pretending it was fine.`
+    if (responseType === 'dismiss')
+      return `${fromName} left the conversation frustrated that their pitch never got a real hearing.`
+  }
+  if (interaction.type === 'nomination_plea') {
+    if (responseType === 'neutral')
+      return `${fromName} left without a guarantee and will keep looking for certainty elsewhere.`
+    if (responseType === 'negative' || responseType === 'decline')
+      return `${fromName} understood that they could not count on you.`
+    if (responseType === 'dismiss')
+      return `${fromName} left the conversation frustrated by the lack of an answer.`
+  }
+  return `${fromName} registered your response, and the exchange changed how they read you.`
+}
+
+function buildResponseOutcomeText(
+  interaction: IncomingInteraction,
+  responseType: IncomingInteractionResponseType,
+  fromName: string,
+  subjectName?: string,
+  responseLabel?: string,
+  players: readonly { id: string; name: string; status: string; isUser?: boolean }[] = [],
+  safetyChoice?: IncomingSafetyChoice
+): string | undefined {
+  const hasContextualScenario = typeof interaction.payload?.scenarioKey === 'string'
+  if (interaction.type === 'alliance_proposal' && responseType === 'accept') {
+    return `The alliance with ${fromName} is now active. Later votes and nominations will show whether it holds.`
+  }
+
+  const scenarioKey = interaction.payload?.scenarioKey
+  if (isAllianceStrategyScenario(scenarioKey)) {
+    if (interaction.payload?.allianceGroupHuddle === true) {
+      const decisionOutcome =
+        buildAllianceHuddleDecisionOutcome(interaction, responseType, players) ??
+        'No group plan was recorded.'
+      if (responseType === 'accept' || responseType === 'positive') {
+        return `You backed the alliance huddle. ${decisionOutcome}`
+      }
+      if (responseType === 'neutral') {
+        return `You asked for the alliance's read without committing. ${decisionOutcome}`
+      }
+      if (responseType === 'decline' || responseType === 'negative') {
+        return `You pushed back on the alliance proposal. ${decisionOutcome}`
+      }
+      return `You sat out of the alliance huddle. ${decisionOutcome}`
+    }
+    if (responseType === 'accept' || responseType === 'positive') {
+      if (scenarioKey === 'alliance_nomination_pitch')
+        return `You and ${fromName} recorded ${subjectName ?? 'the proposed target'} as an alliance recommendation. The LOH still sets the slate.`
+      if (scenarioKey === 'alliance_safety_pitch')
+        return `You and ${fromName} recorded ${subjectName ?? 'the proposed player'} as a replacement recommendation. The holder decides whether to use Safety, and the LOH decides the replacement.`
+      if (scenarioKey === 'alliance_vote_pitch')
+        return `You and ${fromName} recorded ${subjectName ?? 'the proposed nominee'} as a shared vote read. Each eligible member still casts their own ballot.`
+      return `${fromName} took your answer as strategic alignment. The shared alliance recommendation is now recorded.`
+    }
+    if (responseType === 'neutral') {
+      return `You heard ${fromName}'s alliance read without committing to it. No shared plan was locked.`
+    }
+    if (responseType === 'decline' || responseType === 'negative') {
+      return `You pushed back on ${fromName}'s proposed move. The alliance remains intact, but the recommendation was not agreed.`
+    }
+    return `You stepped out of ${fromName}'s strategy conversation. No alliance recommendation was recorded from your response.`
+  }
+  if (scenarioKey === 'safety_holder_consults_loh') {
+    if (safetyChoice?.kind === 'save')
+      return `${fromName} now knows you prefer Safety used on ${safetyChoice.targetName}. They still make the decision.`
+    if (safetyChoice?.kind === 'hold')
+      return `${fromName} now knows you prefer the nominations left unchanged.`
+    return `You left the Safety decision to ${fromName}.`
+  }
+  if (scenarioKey === 'loh_consults_safety_holder') {
+    if (safetyChoice?.kind === 'ask_advice')
+      return describeLohSafetyPreference(interaction, fromName)
+    if (safetyChoice?.kind === 'save' || safetyChoice?.kind === 'hold') {
+      if (!isSafetyChoiceAligned(interaction, safetyChoice)) {
+        return `${fromName} asked you to reconsider. ${describeLohSafetyPreference(
+          interaction,
+          fromName
+        )}`
+      }
+      return safetyChoice.kind === 'save'
+        ? `${fromName} agrees with saving ${safetyChoice.targetName} and will prepare the replacement.`
+        : `${fromName} agrees that the nominations should remain unchanged.`
+    }
+    return `${fromName} knows you have not committed to a Safety plan yet.`
+  }
+
+  const commitmentKind = getCommitmentKindForInteraction(interaction)
+  if (commitmentKind && (responseType === 'positive' || responseType === 'accept')) {
+    return `You made a promise to ${fromName}. The related game decision will judge whether you keep it.`
+  }
+
+  if (!hasContextualScenario && (interaction.type === 'gossip' || interaction.type === 'warning')) {
+    if (responseType === 'positive' || responseType === 'neutral') {
+      return subjectName
+        ? `You now have an unconfirmed lead involving ${subjectName}.`
+        : 'You chose to keep the claim in mind, but it remains unconfirmed.'
+    }
+  }
+
+  // New interactions all carry an authored scenario key and resolve through
+  // the contextual outcome bank. Keep this compatibility fallback for old
+  // saves and externally-created interactions that do not have one yet.
+  return hasContextualScenario
+    ? undefined
+    : buildOrdinaryResponseOutcome(interaction, responseType, fromName, responseLabel)
+}
+
+function mergeSocialMemoryDeltas(
+  base: SocialMemoryDelta,
+  contextual: SocialMemoryDelta
+): SocialMemoryDelta {
+  return {
+    gratitude: (base.gratitude ?? 0) + (contextual.gratitude ?? 0),
+    resentment: (base.resentment ?? 0) + (contextual.resentment ?? 0),
+    neglect: (base.neglect ?? 0) + (contextual.neglect ?? 0),
+    trustMomentum: (base.trustMomentum ?? 0) + (contextual.trustMomentum ?? 0),
+  }
+}
+
+function canAwardIntel(interaction: IncomingInteraction): boolean {
+  if (interaction.type !== 'gossip' && interaction.type !== 'warning') return false
+  if (interaction.payload?.truth === 'false') return false
+  if (interaction.payload?.evidence === 'none') return false
+  return true
+}
+
+function applyIncomingChoiceConsequences({
+  dispatch,
+  state,
+  interaction,
+  responseType,
+  responseLabel,
+  safetyChoice,
+  source,
+  resolvedAt,
+}: {
+  dispatch: AppDispatch
+  state: RootState
+  interaction: IncomingInteraction
+  responseType: IncomingInteractionResponseType
+  responseLabel?: string
+  safetyChoice?: IncomingSafetyChoice
+  source: ResolutionSource
+  resolvedAt: number
+}): {
+  reactionText?: string
+  outcomeText: string
+  receipt?: IncomingInteractionReceipt
+  logText: string
+} | null {
+  const humanPlayer = state.game.players.find((player) => player.isUser)
+  if (!humanPlayer) return null
+
+  const dramaMode = getInteractionSocialMode(interaction, state) === 'drama'
+  const currentWeek = state.game.week ?? 1
+  const fromPlayer = state.game.players.find((player) => player.id === interaction.fromId)
+  const fromName = fromPlayer?.name ?? interaction.fromId
+  const subjectId =
+    typeof interaction.payload?.subjectId === 'string' ? interaction.payload.subjectId : undefined
+  const subjectName = subjectId
+    ? state.game.players.find((player) => player.id === subjectId)?.name
+    : undefined
+  const consultationScenario = getSafetyConsultationScenario(interaction)
+  const baseDelta = getResponseDelta(responseType, interaction, safetyChoice)
+  const sentiment =
+    consultationScenario && safetyChoice ? (baseDelta > 0 ? 'positive' : 'neutral') : responseType
+  if (dramaMode) {
+    dispatch(
+      applyDramaIncomingResponse({
+        holderId: interaction.fromId,
+        subjectId: humanPlayer.id,
+        responseType: sentiment,
+        interactionType: interaction.type,
+        week: currentWeek,
+      })
+    )
+  }
+  if (interaction.payload?.scenarioKey === 'season_provocateur') {
+    dispatch(
+      recordSeasonProvocateurResponse({
+        targetId: humanPlayer.id,
+        actorId: interaction.fromId,
+        responseType,
+      })
+    )
+  }
+
+  // A stated promise must be recorded in either social mode so the relevant
+  // nomination, Safety, or vote decision can resolve it later.
+  if (source === 'player') {
+    const commitment = createCommitmentFromInteraction({
+      interaction,
+      responseType,
+      promisorId: humanPlayer.id,
+      week: currentWeek,
+    })
+    if (commitment) dispatch(addSocialCommitment(commitment))
+  }
+
+  const responseTone = dramaMode
+    ? getIncomingInteractionTone({
+        interaction,
+        relationships: state.social.relationships,
+        socialMemory: state.social.socialMemory,
+        humanId: humanPlayer.id,
+        isUrgent: interaction.expiresAtWeek <= currentWeek,
+      })
+    : undefined
+  const allianceStrategyScenario = isAllianceStrategyScenario(interaction.payload?.scenarioKey)
+  const hasContextualScenario = typeof interaction.payload?.scenarioKey === 'string'
+  const contextualResolution = resolveIncomingResponse({
+    interaction,
+    responseType: sentiment,
+    fromName,
+    phase: state.game.phase,
+    actorAffinity: state.social.relationships[interaction.fromId]?.[humanPlayer.id]?.affinity ?? 0,
+    playerAffinity: state.social.relationships[humanPlayer.id]?.[interaction.fromId]?.affinity ?? 0,
+    subjectName,
+    responseLabel,
+    senderIsNominated: state.game.nomineeIds.includes(interaction.fromId),
+  })
+  const actorDelta = allianceStrategyScenario
+    ? baseDelta
+    : hasContextualScenario && !consultationScenario
+      ? contextualResolution.actorDelta
+      : dramaMode && !consultationScenario
+        ? getIncomingResponseRelationshipDelta(interaction.type, responseType, responseTone)
+        : baseDelta
+  const playerDelta = allianceStrategyScenario
+    ? Math.sign(baseDelta) * Math.min(1, Math.abs(baseDelta))
+    : hasContextualScenario && !consultationScenario
+      ? contextualResolution.playerDelta
+      : 0
+  const asksForProtectionDetails = isProtectionClarification(
+    typeof interaction.payload?.scenarioKey === 'string'
+      ? interaction.payload.scenarioKey
+      : undefined,
+    responseLabel
+  )
+  const recentPactRefusal = asksForProtectionDetails
+    ? getSameDayPactRefusal(state.social.reality, humanPlayer.id, interaction.fromId, currentWeek)
+    : null
+  const outcomeText = asksForProtectionDetails
+    ? recentPactRefusal
+      ? `${fromName} explained why asking for help with this decision did not mean accepting a long-term pact. You made no new promise.`
+      : `${fromName} explained what would help them, without assuming you agreed to provide it.`
+    : (buildResponseOutcomeText(
+        interaction,
+        responseType,
+        fromName,
+        subjectName,
+        responseLabel,
+        state.game.players,
+        safetyChoice
+      ) ?? contextualResolution.outcomeText)
+  const reactionText = buildIncomingReactionText(
+    interaction,
+    responseType,
+    responseLabel,
+    fromName,
+    subjectName,
+    typeof interaction.payload?.secondarySubjectName === 'string'
+      ? interaction.payload.secondarySubjectName
+      : undefined,
+    state.game.phase,
+    getRecentIncomingReactionLines(state, interaction),
+    recentPactRefusal ?? undefined
+  )
+  const acceptedAlliance = interaction.type === 'alliance_proposal' && responseType === 'accept'
+  const realityInteractionId = interaction.payload?.realityInteractionId
+  const linkedRealityScene =
+    typeof realityInteractionId === 'string'
+      ? state.social.reality.interactions[realityInteractionId]
+      : undefined
+
+  if (
+    // A linked scene computes the direct participant changes on settlement.
+    // Adding these compatibility deltas too would apply the conversation twice.
+    linkedRealityScene?.status !== 'AWAITING_HUMAN' &&
+    (actorDelta !== 0 || playerDelta !== 0 || acceptedAlliance) &&
+    interaction.fromId !== humanPlayer.id
+  ) {
+    const fromAffinity =
+      state.social.relationships[interaction.fromId]?.[humanPlayer.id]?.affinity ?? 0
+    const humanAffinity =
+      state.social.relationships[humanPlayer.id]?.[interaction.fromId]?.affinity ?? 0
+    const fromDelta = acceptedAlliance
+      ? Math.max(actorDelta, MIN_ALLIANCE_AFFINITY - fromAffinity)
+      : actorDelta
+    const humanDelta = acceptedAlliance
+      ? Math.max(playerDelta, MIN_ALLIANCE_AFFINITY - humanAffinity)
+      : playerDelta
+    if (fromDelta !== 0 || acceptedAlliance) {
+      dispatch(
+        updateRelationship({
+          source: interaction.fromId,
+          target: humanPlayer.id,
+          delta: fromDelta,
+          tags: acceptedAlliance ? [ALLIANCE_TAG] : undefined,
+          actionSource: source === 'player' ? 'manual' : 'system',
+        })
+      )
+    }
+    // An incoming conversation changes how both people read the connection.
+    // The contextual resolver deliberately makes this reciprocal effect smaller
+    // and personality-sensitive, rather than pretending every feeling is equal.
+    if (humanDelta !== 0 || acceptedAlliance) {
+      dispatch(
+        updateRelationship({
+          source: humanPlayer.id,
+          target: interaction.fromId,
+          delta: humanDelta,
+          tags: acceptedAlliance ? [ALLIANCE_TAG] : undefined,
+          actionSource: source === 'player' ? 'manual' : 'system',
+        })
+      )
+    }
+  }
+
+  // Cupid partners are separate players, but an active pair tends to compare
+  // a meaningful conversation. Give the other half of the pair a small,
+  // reciprocal read on the human without making the relationships identical.
+  const cupidPartnerId = getCupidPartnerId(state.game, interaction.fromId)
+  const shouldRippleCupidConversation =
+    cupidPartnerId !== null &&
+    cupidPartnerId !== humanPlayer.id &&
+    interaction.fromId !== humanPlayer.id &&
+    (actorDelta !== 0 || playerDelta !== 0)
+  if (shouldRippleCupidConversation && cupidPartnerId) {
+    const cupidRippleDelta =
+      Math.sign(actorDelta || playerDelta) *
+      Math.max(1, Math.round(Math.max(Math.abs(actorDelta), Math.abs(playerDelta)) * 0.35))
+    dispatch(
+      updateRelationship({
+        source: cupidPartnerId,
+        target: humanPlayer.id,
+        delta: cupidRippleDelta,
+        tags: ['cupid_ripple'],
+        actionSource: source === 'player' ? 'manual' : 'system',
+      })
+    )
+    dispatch(
+      updateRelationship({
+        source: humanPlayer.id,
+        target: cupidPartnerId,
+        delta:
+          Math.sign(cupidRippleDelta) * Math.max(1, Math.round(Math.abs(cupidRippleDelta) * 0.5)),
+        tags: ['cupid_ripple'],
+        actionSource: source === 'player' ? 'manual' : 'system',
+      })
+    )
+  }
+
+  if (consultationScenario === 'safety_holder_consults_loh' && safetyChoice) {
+    dispatch({
+      type: 'game/setLohSafetyAdvice',
+      payload: {
+        week: currentWeek,
+        lohId: state.game.lohId ?? humanPlayer.id,
+        holderId: state.game.posWinnerId ?? interaction.fromId,
+        advice:
+          safetyChoice.kind === 'save' ? 'use' : safetyChoice.kind === 'hold' ? 'hold' : 'free',
+        targetId: safetyChoice.kind === 'save' ? safetyChoice.targetId : undefined,
+        source: 'human_loh',
+      },
+    })
+  }
+
+  if (interaction.fromId !== humanPlayer.id) {
+    dispatch(
+      updateSocialMemory({
+        actorId: interaction.fromId,
+        targetId: humanPlayer.id,
+        deltas: allianceStrategyScenario
+          ? buildSocialMemoryDeltaForResponse(
+              responseType === 'decline' || responseType === 'negative' ? 'neutral' : responseType
+            )
+          : hasContextualScenario
+            ? mergeSocialMemoryDeltas(
+                buildSocialMemoryDeltaForResponse(sentiment),
+                contextualResolution.memoryDelta
+              )
+            : buildSocialMemoryDeltaForResponse(responseType),
+        event: buildSocialMemoryEvent(
+          interaction,
+          sentiment,
+          interaction.fromId,
+          humanPlayer.id,
+          currentWeek,
+          resolvedAt
+        ),
+      })
+    )
+  }
+
+  if (
+    dramaMode &&
+    canAwardIntel(interaction) &&
+    (responseType === 'positive' || responseType === 'neutral')
+  ) {
+    dispatch(applyInfoDelta({ playerId: humanPlayer.id, delta: 1 }))
+  }
+
+  const intelFactId =
+    typeof interaction.payload?.intelFactId === 'string'
+      ? interaction.payload.intelFactId
+      : undefined
+  const intelFact = intelFactId ? state.social.reality.facts[intelFactId] : undefined
+  if (
+    intelFact &&
+    source === 'player' &&
+    (responseType === 'positive' || responseType === 'neutral')
+  ) {
+    const senderBelief =
+      state.social.reality.beliefsByOwner[interaction.fromId]?.[
+        `belief:${interaction.fromId}:${intelFact.id}`
+      ]
+    const authoredConfidence = Number(interaction.payload?.intelConfidence)
+    const senderConfidence = Number.isFinite(authoredConfidence)
+      ? authoredConfidence
+      : (senderBelief?.confidence ?? 0.52)
+    const confidence = Math.max(
+      0.2,
+      Math.min(0.88, senderConfidence * (responseType === 'positive' ? 0.9 : 0.72))
+    )
+    const authoredChain = Array.isArray(interaction.payload?.intelSourceChain)
+      ? interaction.payload.intelSourceChain.filter(
+          (entry): entry is string => typeof entry === 'string'
+        )
+      : []
+    dispatch(
+      learnRealityKnowledge({
+        ownerId: humanPlayer.id,
+        factId: intelFact.id,
+        confidence,
+        memory: makeIntelMemory({
+          ownerId: humanPlayer.id,
+          fact: intelFact,
+          sourceType: 'HEARSAY',
+          sourceChain: [...authoredChain, interaction.fromId],
+          confidence,
+          day: currentWeek,
+          phase: state.game.phase,
+        }),
+      })
+    )
+    dispatch(
+      recordIntelligenceDelivery({
+        id: `intel-delivery:incoming:${humanPlayer.id}:${intelFact.id}:${currentWeek}`,
+        factId: intelFact.id,
+        channel: 'incoming',
+        day: currentWeek,
+        recipientId: humanPlayer.id,
+      })
+    )
+  }
+
+  const outcomeWithRipple = `${outcomeText}${
+    shouldRippleCupidConversation && cupidPartnerId
+      ? ` Their Cupid partner, ${
+          state.game.players.find((player) => player.id === cupidPartnerId)?.name ?? 'their partner'
+        }, is likely to hear their version of it.`
+      : ''
+  }`
+  const receiptKind =
+    source === 'player' &&
+    (responseType === 'positive' || responseType === 'accept') &&
+    getCommitmentKindForInteraction(interaction)
+      ? 'promise'
+      : consultationScenario || allianceStrategyScenario
+        ? 'gameplay'
+        : intelFact &&
+            source === 'player' &&
+            (responseType === 'positive' || responseType === 'neutral')
+          ? 'intel'
+          : shouldRippleCupidConversation
+            ? 'relationship'
+            : null
+  return {
+    reactionText,
+    outcomeText: outcomeWithRipple,
+    receipt: receiptKind ? { kind: receiptKind, text: outcomeWithRipple } : undefined,
+    logText: buildResponseLogText(interaction, sentiment, fromName, dramaMode),
+  }
+}
+
+function settleBackgroundSocialAction(
+  dispatch: AppDispatch,
+  getState: () => RootState,
+  interaction: IncomingInteraction,
+  resolvedAt: number
+): void {
+  if (
+    interaction.payload?.source !== 'background_social' ||
+    typeof interaction.payload?.originActionId !== 'string' ||
+    typeof interaction.payload?.realityInteractionId !== 'string'
+  ) {
+    return
+  }
+
+  const action = getRuntimeSocialActionById(interaction.payload.originActionId)
+  if (!action) return
+
+  const state = getState()
+  const realityInteraction =
+    state.social.reality.interactions[interaction.payload.realityInteractionId]
+  const resolvedEvent = [...state.social.reality.events]
+    .reverse()
+    .find((event) => event.interactionId === interaction.payload?.realityInteractionId)
+  if (!resolvedEvent || !realityInteraction) return
+
+  const outcome = resolvedEvent.outcome === 'SUCCESS' ? 'success' : 'failure'
+  const targetCount = Math.max(1, realityInteraction.targetIds.length)
+  const effect = getSocialResourceEffect(action, outcome, targetCount)
+  if (effect.influence !== 0) {
+    dispatch(applyInfluenceDelta({ playerId: interaction.fromId, delta: effect.influence }))
+  }
+  if (effect.info !== 0) {
+    dispatch(applyInfoDelta({ playerId: interaction.fromId, delta: effect.info }))
+  }
+
+  const after = getState()
+  const costs = normalizeActionCosts(
+    action,
+    targetCount,
+    getInteractionSocialMode(interaction, after) === 'drama'
+  )
+  dispatch(
+    recordSocialAction({
+      entry: {
+        actionId: action.id,
+        actorId: interaction.fromId,
+        targetId: realityInteraction.targetIds[0] ?? interaction.fromId,
+        targetIds: [...realityInteraction.targetIds],
+        cost: costs.energy,
+        costs,
+        delta: 0,
+        outcome,
+        newEnergy: after.social.energyBank[interaction.fromId] ?? 0,
+        balancesAfter: {
+          energy: after.social.energyBank[interaction.fromId] ?? 0,
+          influence: after.social.influenceBank[interaction.fromId] ?? 0,
+          info: after.social.infoBank[interaction.fromId] ?? 0,
+        },
+        timestamp: resolvedAt,
+        week: interaction.createdDay ?? interaction.createdWeek,
+        phase: interaction.createdPhase ?? state.game.phase,
+        source: 'system',
+        ...(effect.influence !== 0 || effect.info !== 0
+          ? {
+              yieldsApplied: {
+                ...(effect.influence !== 0 ? { influence: effect.influence } : {}),
+                ...(effect.info !== 0 ? { info: effect.info } : {}),
+              },
+            }
+          : {}),
+        label: resolvedEvent.outcome,
+      },
+    })
+  )
+}
+
+type IncomingReplySubmission = { interactionId: string } & (
+  | {
+      choiceId: string
+      responseType?: never
+      responseLabel?: never
+      responseAction?: never
+    }
+  | {
+      choiceId?: never
+      responseType: IncomingInteractionResponseType
+      responseLabel?: string
+      responseAction?: IncomingInteractionResponseAction
+    }
+)
+
+function getSubmittedIncomingChoice(
+  interaction: IncomingInteraction,
+  submission: IncomingReplySubmission,
+  state: RootState
+) {
+  const isSafety = Boolean(getSafetyConsultationScenario(interaction))
+  if (submission.choiceId === undefined && !isSafety) return undefined
+
+  const dramaMode = getInteractionSocialMode(interaction, state) === 'drama'
+  const humanId = state.game.players.find((player) => player.isUser)?.id ?? ''
+  const tone = dramaMode
+    ? getIncomingInteractionTone({
+        interaction,
+        relationships: state.social.relationships,
+        socialMemory: state.social.socialMemory,
+        humanId,
+        isUrgent:
+          getIncomingInteractionResponsePolicy(interaction) === 'required' &&
+          isIncomingInteractionUrgent(interaction, {
+            day: state.game.week ?? 1,
+            phase: state.game.phase,
+          }),
+      })
+    : undefined
+  const options = getIncomingInteractionResponseOptions(
+    interaction.type,
+    interaction,
+    tone,
+    dramaMode,
+    state.game
+  )
+  if (submission.choiceId !== undefined) {
+    return options.find((option) => option.id === submission.choiceId)
+  }
+  // Older callers can still use a label if it refers to one unambiguous live nominee.
+  const matches = options.filter(
+    (option) =>
+      option.label === submission.responseLabel ||
+      (option.safetyChoice?.kind === 'save' &&
+        submission.responseLabel === `Save ${option.safetyChoice.targetName}`)
+  )
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+export function respondToIncomingInteraction(submission: IncomingReplySubmission) {
+  const { interactionId, choiceId } = submission
+  return (dispatch: AppDispatch, getState: () => RootState): void => {
+    const state = getState()
+    const interaction = state.social.incomingInteractions.find(
+      (entry) => entry.id === interactionId
+    )
+    if (!interaction || interaction.resolved) return
+    if (getIncomingInteractionResponsePolicy(interaction) === 'readOnly') return
+
+    const currentWeek = state.game.week ?? 1
+    const resolvedAt = Date.now()
+
+    const overdue = isIncomingInteractionOverdue(interaction, {
+      day: currentWeek,
+      phase: state.game.phase,
+    })
+    const invalidated = isIncomingInteractionInvalidated(
+      interaction,
+      state.game,
+      state.social.reality
+    )
+    if (overdue) {
+      dispatch(
+        autoResolveExpiredIncomingInteractionsForClock(currentWeek, state.game.phase, interactionId)
+      )
+      return
+    }
+    if (invalidated) {
+      dispatch(
+        dismissIncomingInteraction({
+          resolutionOrigin: 'invalidation',
+          interactionId,
+          resolvedAt,
+          resolvedWeek: currentWeek,
+        })
+      )
+      return
+    }
+
+    const option = getSubmittedIncomingChoice(interaction, submission, state)
+    if ((choiceId !== undefined || getSafetyConsultationScenario(interaction)) && !option) return
+    const safetyChoice = option?.safetyChoice
+    if (safetyChoice?.kind === 'save' && !safetyChoice.targetId) return
+
+    const responseLabel = option?.label ?? submission.responseLabel
+    const responseAction = option?.action ?? submission.responseAction
+    let responseType = option?.responseType ?? submission.responseType
+    if (!responseType) return
+
+    const originActionId = interaction.payload?.originActionId
+    const legacyAmbiguousConsent =
+      choiceId === undefined &&
+      typeof originActionId === 'string' &&
+      Object.hasOwn(ROMANCE_ACTION_CHOICES, originActionId)
+    const legacyConsideration =
+      /^(?:promise consideration|promise to consider|give them a real opening)$/i.test(
+        responseLabel ?? ''
+      )
+    if (
+      (legacyAmbiguousConsent || legacyConsideration) &&
+      (responseType === 'positive' || responseType === 'accept')
+    ) {
+      responseType = 'neutral'
+    }
+
+    if (interaction.type === 'alliance_proposal' && responseAction) {
+      if (responseType !== 'neutral') return
+      if (responseAction === 'ask_plan') {
+        dispatch(
+          recordIncomingInteractionFollowUp({
+            interactionId,
+            action: 'ask_plan',
+            outcomeText: getPersonalPactPlanReply(
+              interaction,
+              getState().game.players.find((player) => player.id === interaction.fromId)?.name ??
+                interaction.fromId
+            ),
+          })
+        )
+        return
+      }
+      if (responseAction === 'need_time') {
+        if (interaction.payload?.pactTimeRequested === true) return
+        const extendedDeadline = {
+          day: currentWeek + 1,
+          phase: 'social_2',
+          policy: 'AUTO_IGNORE' as const,
+        }
+        const fromName =
+          getState().game.players.find((player) => player.id === interaction.fromId)?.name ??
+          interaction.fromId
+        dispatch(
+          recordIncomingInteractionFollowUp({
+            interactionId,
+            action: 'need_time',
+            deadline: extendedDeadline,
+            outcomeText: `You asked ${fromName} for time. The offer stays open through Day ${extendedDeadline.day}'s final campaign window.`,
+          })
+        )
+        return
+      }
+    }
+
+    if (interaction.type === 'alliance_proposal') {
+      resolveRealityIncomingInteraction(
+        dispatch,
+        getState,
+        interaction,
+        responseType,
+        currentWeek,
+        state.game.phase
+      )
+      const humanId = state.game.players.find((player) => player.isUser)?.id
+      const activePact = humanId
+        ? getCurrentPact(getState().social.reality, interaction.fromId, humanId)
+        : undefined
+      const outcomeText =
+        responseType === 'accept'
+          ? activePact
+            ? 'Your personal pact is now active. Other groups and pacts are unchanged.'
+            : 'This pact could not be finalized. Check your current pact limit and request status.'
+          : responseType === 'decline'
+            ? 'You declined the personal pact offer. No pact was formed.'
+            : 'The personal pact offer was closed without a decision. No pact was formed.'
+      const reactionText = buildIncomingReactionText(
+        interaction,
+        responseType,
+        responseLabel,
+        getState().game.players.find((player) => player.id === interaction.fromId)?.name ??
+          interaction.fromId,
+        undefined,
+        undefined,
+        state.game.phase,
+        getRecentIncomingReactionLines(getState(), interaction)
+      )
+      settleBackgroundSocialAction(dispatch, getState, interaction, resolvedAt)
+      dispatch(
+        resolveIncomingInteraction({
+          interactionId,
+          resolvedWith: responseType,
+          resolvedLabel: responseLabel,
+          resolvedChoiceId: choiceId,
+          reactionText,
+          outcomeText,
+          receipt: { kind: 'gameplay', text: outcomeText },
+          resolvedAt,
+          resolvedWeek: currentWeek,
+        })
+      )
+      return
+    }
+
+    const result = applyIncomingChoiceConsequences({
+      dispatch,
+      state,
+      interaction,
+      responseType,
+      responseLabel,
+      safetyChoice,
+      source: 'player',
+      resolvedAt,
+    })
+    if (!result) return
+
+    resolveRealityIncomingInteraction(
+      dispatch,
+      getState,
+      interaction,
+      responseType,
+      currentWeek,
+      state.game.phase
+    )
+    settleBackgroundSocialAction(dispatch, getState, interaction, resolvedAt)
+
+    dispatch(
+      resolveIncomingInteraction({
+        interactionId,
+        resolvedWith: responseType,
+        resolvedLabel: responseLabel,
+        resolvedChoiceId: choiceId,
+        reactionText: result.reactionText,
+        outcomeText: result.outcomeText,
+        receipt: result.receipt,
+        resolvedAt,
+        resolvedWeek: currentWeek,
+      })
+    )
+    // The answered card remains visible with its outcome. Do not repeat the same
+    // panel interaction through faux TV or a second broadcast log.
+  }
+}
+
+/**
+ * Resolve expired conversations. Only required decisions count as ignored;
+ * optional conversations and read-only updates close quietly with no penalty.
+ */
+export function autoResolveExpiredIncomingInteractionsForWeek(week: number) {
+  return autoResolveExpiredIncomingInteractionsForClock(week, 'week_start')
+}
+
+export function autoResolveExpiredIncomingInteractionsForClock(
+  day: number,
+  phase: string,
+  onlyInteractionId?: string
+) {
+  return (dispatch: AppDispatch, getState: () => RootState): void => {
+    const interactions = getState().social.incomingInteractions.filter(
+      (entry) =>
+        (!onlyInteractionId || entry.id === onlyInteractionId) &&
+        isIncomingInteractionOverdue(entry, { day, phase })
+    )
+    if (interactions.length === 0) return
+
+    const resolvedAt = Date.now()
+    const expiredIds: string[] = []
+    for (const interaction of interactions) {
+      const state = getState()
+      const isRequired = getIncomingInteractionResponsePolicy(interaction) === 'required'
+      const deadline = getIncomingDeadline(interaction)
+      // A missed window can count as ignored, but a move made impossible by
+      // a changed role, locked ballot or missing target closes without penalty.
+      if (
+        isRequired &&
+        isIncomingInteractionInvalidated(
+          interaction,
+          { ...state.game, phase: deadline.phase },
+          state.social.reality
+        )
+      ) {
+        dispatch(
+          dismissIncomingInteraction({
+            resolutionOrigin: 'invalidation',
+            interactionId: interaction.id,
+            resolvedAt,
+            resolvedWeek: day,
+          })
+        )
+        continue
+      }
+      expiredIds.push(interaction.id)
+      logIncomingInteractionDecision(dispatch, {
+        stage: 'auto_resolution',
+        reason: isRequired ? 'auto_resolved_ignored' : 'auto_resolved_no_response_required',
+        interactionId: interaction.id,
+        actorId: interaction.fromId,
+        type: interaction.type,
+        week: day,
+        phase,
+        detail: 'phase_deadline',
+      })
+
+      if (isRequired) {
+        applyIncomingChoiceConsequences({
+          dispatch,
+          state,
+          interaction,
+          responseType: 'ignore',
+          source: 'expiry',
+          resolvedAt,
+        })
+        resolveRealityIncomingInteraction(dispatch, getState, interaction, 'ignore', day, phase)
+        settleBackgroundSocialAction(dispatch, getState, interaction, resolvedAt)
+      }
+    }
+
+    dispatch(
+      resolveIncomingInteractionsByDeadline({
+        interactionIds: expiredIds,
+        day,
+        phase,
+        resolvedAt,
+      })
+    )
+  }
+}

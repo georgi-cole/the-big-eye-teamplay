@@ -1,0 +1,2145 @@
+import { recordAllianceRequestEvent } from './allianceRequestEvents'
+import type { DramaAlliance } from '../types'
+import {
+  maybeExposeRealityAlliance,
+  preserveRealityAllianceRosterForMembers,
+  recordRealityAllianceLeakDiscovery,
+} from './allianceKnowledge'
+import { appendRealityEvent } from './events'
+import { isUnagreedNominationFor } from './facadeAgreements'
+import { reconcileConvergedAllianceRosters } from './allianceRosterConvergence'
+import { remember } from './memory'
+import { applyRealityRelationshipChange, getRealityRelationship } from './relationships'
+import { enforceNemesisAllianceConsistency, recordGroundedJealousy } from './relationshipAutonomy'
+import { getRealityBetrayalStatus } from './relationshipFacts'
+import {
+  allianceKind,
+  getCurrentPact,
+  isCurrentAlliance,
+  normalizeAllianceIdentity,
+  rememberAllianceRoster,
+  synchronizeAllianceOfficers,
+} from './allianceIdentity'
+import type {
+  RealityAlliance,
+  RealityClock,
+  RealityDomainState,
+  RealityGrievance,
+  RealityReentryAllianceSnapshot,
+  RealityRomance,
+  RealityVoteIntent,
+} from './types'
+
+function pairId(left: string, right: string): string {
+  return [left, right].sort().join('~')
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
+}
+
+function allianceBondDeltas(
+  state: RealityDomainState,
+  sourceId: string,
+  targetId: string,
+  at: RealityClock,
+  eventId: string
+): {
+  warmth: number
+  trust: number
+  loyalty: number
+  reliability: number
+  strategicValue: number
+  secretCloseness: number
+} {
+  const edge = state.relationships[sourceId]?.[targetId]
+  const sharedHistory = state.events.filter(
+    (event) =>
+      event.id !== eventId &&
+      event.participantIds.includes(sourceId) &&
+      event.participantIds.includes(targetId)
+  )
+  const firstKnownDay = sharedHistory.reduce<number | undefined>(
+    (earliest, event) => (earliest === undefined ? event.day : Math.min(earliest, event.day)),
+    undefined
+  )
+  const timeKnown = clamp01(
+    Math.max(
+      firstKnownDay === undefined ? 0 : (at.day - firstKnownDay) / 10,
+      (edge?.familiarity ?? 0) / 80
+    )
+  )
+  const sharedExperience = clamp01(sharedHistory.length / 6)
+  const successfulExperience =
+    sharedHistory.length === 0
+      ? 0.5
+      : sharedHistory.filter((event) => event.outcome === 'SUCCESS').length / sharedHistory.length
+  const positiveHistory = clamp01((edge?.positiveAnchorEventIds.length ?? 0) / 5)
+  const relationshipQuality =
+    edge === undefined
+      ? 0.5
+      : clamp01((edge.warmth + edge.trust + edge.loyalty + edge.reliability + 400) / 800)
+  const strain = Math.min(
+    0.45,
+    (edge?.negativeAnchorEventIds.length ?? 0) * 0.06 +
+      (edge?.unresolvedGrievanceIds.length ?? 0) * 0.12
+  )
+  const bondStrength = clamp01(
+    0.1 +
+      sharedExperience * 0.2 +
+      timeKnown * 0.15 +
+      positiveHistory * 0.18 +
+      successfulExperience * 0.15 +
+      relationshipQuality * 0.22 -
+      strain
+  )
+
+  return {
+    warmth: 5 + Math.round(bondStrength * 5),
+    trust: 5 + Math.round(bondStrength * 7),
+    loyalty: 7 + Math.round(bondStrength * 9),
+    reliability: 3 + Math.round(bondStrength * 4),
+    strategicValue: 7 + Math.round(bondStrength * 8),
+    secretCloseness: 5 + Math.round(bondStrength * 4),
+  }
+}
+
+/** Give only newly connected member pairs a visible, history-sensitive bond boost. */
+export function strengthenRealityAllianceBonds(
+  state: RealityDomainState,
+  memberIds: readonly string[],
+  at: RealityClock,
+  eventId: string
+): void {
+  for (const sourceId of memberIds) {
+    for (const targetId of memberIds) {
+      if (sourceId === targetId) continue
+      strengthenRealityAlliancePair(state, sourceId, targetId, at, eventId)
+    }
+  }
+}
+
+/** Apply the same bond boost to one new relationship edge without touching existing pairs. */
+export function strengthenRealityAlliancePair(
+  state: RealityDomainState,
+  sourceId: string,
+  targetId: string,
+  at: RealityClock,
+  eventId: string
+): void {
+  if (sourceId === targetId) return
+  applyRealityRelationshipChange(state, {
+    sourceId,
+    targetId,
+    eventId,
+    day: at.day,
+    phase: at.phase,
+    anchor: 'positive',
+    deltas: allianceBondDeltas(state, sourceId, targetId, at, eventId),
+  })
+}
+
+function allianceNameHash(value: string): number {
+  let hash = 2166136261
+  for (const character of value) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+const ALLIANCE_NAME_POOLS = {
+  endgame: [
+    'Final Cut',
+    'Last Light',
+    'The Finish Line',
+    'Endgame',
+    'The Last Word',
+    'Closing Time',
+  ],
+  protection: ['Safe Harbor', 'The Shield', 'The Guard', 'The Cover', 'Home Base', 'The Anchor'],
+  numbers: ['The Numbers', 'The Bloc', 'The Majority', 'The Line', 'The Vote', 'The Board'],
+  generic: [
+    'The Circle',
+    'The Core',
+    'The Collective',
+    'The Quiet Pact',
+    'The Table',
+    'The Network',
+  ],
+} as const
+
+function isEndgameAlliancePurpose(purpose: string): boolean {
+  return /final\s*(two|2)|endgame|ride.?or.?die|last\s*two/i.test(purpose)
+}
+
+function allianceNamePool(alliance: RealityAlliance): readonly string[] {
+  const purpose = alliance.purpose.toLowerCase()
+  if (isEndgameAlliancePurpose(purpose)) {
+    return ALLIANCE_NAME_POOLS.endgame
+  }
+  if (/protect|safe|shield|cover/.test(purpose)) return ALLIANCE_NAME_POOLS.protection
+  if (/vote|target|control|numbers|majority|middle/.test(purpose)) {
+    return ALLIANCE_NAME_POOLS.numbers
+  }
+  return ALLIANCE_NAME_POOLS.generic
+}
+
+function shouldNameRealityAlliance(alliance: RealityAlliance): boolean {
+  if (alliance.memberIds.length >= 3) return true
+  if (alliance.memberIds.length !== 2) return false
+  return isEndgameAlliancePurpose(alliance.purpose)
+}
+
+export function ensureRealityAllianceName(
+  state: RealityDomainState,
+  alliance: RealityAlliance
+): RealityAlliance {
+  if (alliance.name?.trim() || !shouldNameRealityAlliance(alliance)) return alliance
+  const pool = allianceNamePool(alliance)
+  const used = new Set(
+    Object.values(state.alliances)
+      .filter((candidate) => candidate.id !== alliance.id && candidate.name)
+      .map((candidate) => candidate.name)
+  )
+  const start = allianceNameHash(`${alliance.id}:${alliance.purpose}`) % pool.length
+  for (let offset = 0; offset < pool.length; offset += 1) {
+    const candidate = pool[(start + offset) % pool.length]
+    if (!used.has(candidate)) {
+      alliance.name = candidate
+      return alliance
+    }
+  }
+  alliance.name = `${pool[start]} ${(allianceNameHash(alliance.id) % 90) + 10}`
+  return alliance
+}
+
+export function renameRealityAlliance(
+  state: RealityDomainState,
+  input: {
+    allianceId: string
+    actorId: string
+    name: string
+    at: RealityClock
+    ignoreRequestId?: string
+  }
+): RealityAlliance {
+  const alliance = state.alliances[input.allianceId]
+  if (!alliance || alliance.status === 'DISSOLVED') throw new Error('Alliance is not active')
+  if (allianceKind(alliance) !== 'GROUP' || alliance.leaderId !== input.actorId)
+    throw new Error('Only the group leader can rename the alliance')
+
+  const name = input.name.trim().replace(/\s+/g, ' ').slice(0, 28)
+  if (name.length < 2) throw new Error('Alliance name is too short')
+  const firstName = alliance.initialNamePending === true
+  if (alliance.name === name && !firstName) return alliance
+
+  for (const request of Object.values(state.allianceManagement.requests)) {
+    if (
+      request.id !== input.ignoreRequestId &&
+      request.kind === 'RENAME_SUGGESTION' &&
+      request.allianceId === alliance.id &&
+      (request.status === 'VOTING' || request.status === 'CONSENT')
+    ) {
+      request.status = 'INVALIDATED'
+      request.reason = 'The alliance name changed before the suggestion was decided.'
+      request.settledAt = { ...input.at }
+      recordAllianceRequestEvent(state, request, 'ALLIANCE_REQUEST_INVALIDATED', input.at)
+    }
+  }
+
+  const previousName = alliance.name
+  alliance.name = name
+  alliance.initialNamePending = false
+  rememberAllianceRoster(alliance)
+  appendRealityEvent(state, {
+    ...input.at,
+    type: 'ALLIANCE_RENAMED',
+    allianceId: alliance.id,
+    allianceSnapshot: {
+      id: alliance.id,
+      kind: allianceKind(alliance),
+      name,
+      previousName,
+      ...(firstName ? { nameAction: 'NAMED' as const } : {}),
+      memberIds: [...alliance.memberIds],
+    },
+    actorId: input.actorId,
+    targetIds: [],
+    participantIds: [...alliance.memberIds],
+    witnessIds: [],
+    visibility: 'GROUP_VISIBLE',
+    outcome: 'SUCCESS',
+    reason: `${firstName ? 'named' : 'renamed'}:${alliance.id}:${name}`,
+    tags: ['ALLIANCE', 'IDENTITY'],
+    relatedFactIds: [],
+    relatedPromiseIds: [...alliance.sharedPromiseIds],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: false,
+  })
+  return alliance
+}
+
+type RealityAllianceMemberStatus = 'CORE' | 'REGULAR' | 'PERIPHERAL'
+
+function nextAllianceMemberStatus(
+  current: RealityAllianceMemberStatus,
+  commitment: number
+): RealityAllianceMemberStatus {
+  if (current === 'CORE') {
+    if (commitment <= 0.28) return 'PERIPHERAL'
+    if (commitment < 0.44) return 'REGULAR'
+    return 'CORE'
+  }
+  if (current === 'REGULAR') {
+    if (commitment >= 0.74) return 'CORE'
+    if (commitment <= 0.3) return 'PERIPHERAL'
+    return 'REGULAR'
+  }
+  return commitment >= 0.5 ? 'REGULAR' : 'PERIPHERAL'
+}
+
+function alliancePlanDisagreement(alliance: RealityAlliance): number {
+  const plans = alliance.memberIds
+    .map((id) => [...(alliance.memberPlanBeliefs[id] ?? [])].sort().join('|'))
+    .filter(Boolean)
+  if (plans.length < 2) return 0
+  const counts = new Map<string, number>()
+  for (const plan of plans) counts.set(plan, (counts.get(plan) ?? 0) + 1)
+  const largestBloc = Math.max(...counts.values())
+  return 1 - largestBloc / plans.length
+}
+
+/**
+ * Recompute hierarchy and health from durable member commitment rather than
+ * treating the raw average as coalition cohesion. Hysteresis keeps members
+ * from bouncing between tiers after a single positive or negative beat.
+ */
+export function refreshRealityAllianceDynamics(alliance: RealityAlliance): RealityAlliance {
+  if (alliance.memberIds.length === 0) return alliance
+
+  alliance.memberCommitment ??= {}
+  alliance.memberPerceivedStatus ??= {}
+  alliance.memberPlanBeliefs ??= {}
+  alliance.knownLeakEventIds ??= []
+  alliance.leaderIds ??= []
+  alliance.founderIds ??= []
+
+  const commitments = alliance.memberIds.map((id) => clamp01(alliance.memberCommitment[id] ?? 0.5))
+  for (const [index, memberId] of alliance.memberIds.entries()) {
+    const commitment = commitments[index]
+    alliance.memberCommitment[memberId] = commitment
+    alliance.memberPerceivedStatus[memberId] = nextAllianceMemberStatus(
+      alliance.memberPerceivedStatus[memberId] ?? 'REGULAR',
+      commitment
+    )
+  }
+
+  const mean = commitments.reduce((sum, value) => sum + value, 0) / commitments.length
+  const variance =
+    commitments.reduce((sum, value) => sum + (value - mean) ** 2, 0) / commitments.length
+  const dispersion = Math.sqrt(variance)
+  const lowCommitmentShare = commitments.filter((value) => value <= 0.3).length / commitments.length
+  const planDisagreement = alliancePlanDisagreement(alliance)
+  const leakPenalty = Math.min(0.66, alliance.knownLeakEventIds.length * 0.22)
+
+  alliance.cohesion = clamp01(mean - dispersion * 0.55 - planDisagreement * 0.18)
+  alliance.fractureRisk = clamp01(
+    (1 - mean) * 0.38 +
+      dispersion * 1.1 +
+      lowCommitmentShare * 0.22 +
+      planDisagreement * 0.22 +
+      leakPenalty
+  )
+
+  synchronizeAllianceOfficers(alliance)
+
+  return alliance
+}
+
+export function refreshRealityAllianceLifecycle(alliance: RealityAlliance): RealityAlliance {
+  if (alliance.status === 'DISSOLVED' || alliance.status === 'PROBATIONARY') return alliance
+
+  const engagedMembers = alliance.memberIds.filter(
+    (id) => (alliance.memberCommitment[id] ?? 0) >= 0.35
+  ).length
+
+  if (alliance.status === 'FRACTURED') {
+    if (alliance.cohesion >= 0.64 && alliance.fractureRisk <= 0.3 && engagedMembers >= 2) {
+      alliance.status = 'ACTIVE'
+    }
+    return alliance
+  }
+
+  if (alliance.status === 'DORMANT') {
+    if (alliance.cohesion >= 0.5 && engagedMembers >= 2) alliance.status = 'ACTIVE'
+    return alliance
+  }
+
+  if (alliance.status === 'ACTIVE' && alliance.cohesion < 0.26 && engagedMembers < 2) {
+    alliance.status = 'DORMANT'
+  }
+  return alliance
+}
+
+export function adjustRealityAllianceCommitment(
+  state: RealityDomainState,
+  allianceId: string,
+  memberId: string,
+  delta: number
+): RealityAlliance {
+  const alliance = state.alliances[allianceId]
+  if (!alliance || alliance.status === 'DISSOLVED') throw new Error('Alliance is not active')
+  if (!alliance.memberIds.includes(memberId)) throw new Error('Actor is not an alliance member')
+  alliance.memberCommitment[memberId] = clamp01(
+    (alliance.memberCommitment[memberId] ?? 0.5) + delta
+  )
+  refreshRealityAllianceDynamics(alliance)
+  return refreshRealityAllianceLifecycle(alliance)
+}
+
+export type RealityAllianceMembershipExitKind =
+  | 'VOLUNTARY'
+  | 'EXPELLED'
+  | 'DEFECTION'
+  | 'ELIMINATED'
+
+export function removeRealityAllianceMember(
+  state: RealityDomainState,
+  input: {
+    allianceId: string
+    memberId: string
+    actorId: string
+    kind: RealityAllianceMembershipExitKind
+    at: RealityClock
+    sourceEventId?: string
+    /** Specific automatic ending; manual and eviction exits keep the existing reason. */
+    endReason?: string
+    deferSuccession?: boolean
+  }
+): RealityAlliance {
+  const alliance = state.alliances[input.allianceId]
+  if (!alliance || alliance.status === 'DISSOLVED') throw new Error('Alliance is not active')
+  if (!alliance.memberIds.includes(input.memberId))
+    throw new Error('Player is not an alliance member')
+
+  const resultingRoster = alliance.memberIds.filter((id) => id !== input.memberId).sort()
+  const preferredSurvivorIds = Object.values(state.alliances)
+    .filter(
+      (candidate) =>
+        candidate.id !== alliance.id &&
+        isCurrentAlliance(candidate) &&
+        allianceKind(candidate) === 'GROUP' &&
+        [...candidate.memberIds].sort().join('~') === resultingRoster.join('~')
+    )
+    .map((candidate) => candidate.id)
+
+  if (input.kind === 'EXPELLED') {
+    if (input.actorId === input.memberId) throw new Error('A member cannot expel themself')
+    if (!alliance.leaderIds.includes(input.actorId)) {
+      throw new Error('Only an alliance leader can expel a member')
+    }
+    if (
+      input.memberId === alliance.leaderId ||
+      (input.memberId === alliance.coLeaderId && input.actorId !== alliance.leaderId)
+    )
+      throw new Error('This officer cannot remove that member')
+  } else if (input.actorId !== input.memberId) {
+    throw new Error('Only the member can leave or defect')
+  }
+
+  rememberAllianceRoster(alliance)
+  const formerMemberIds = [...alliance.memberIds]
+  const justifyingBetrayal =
+    input.kind === 'VOLUNTARY' || input.kind === 'DEFECTION'
+      ? [...state.events]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.type === 'ALLIANCE_BETRAYAL' &&
+              entry.allianceId === alliance.id &&
+              entry.targetIds.includes(input.memberId) &&
+              entry.actorId &&
+              getRealityBetrayalStatus(state, input.memberId, entry.actorId) === 'UNRESOLVED'
+          )
+      : undefined
+  const eventType =
+    input.kind === 'EXPELLED'
+      ? 'ALLIANCE_MEMBER_EXPELLED'
+      : input.kind === 'DEFECTION'
+        ? 'ALLIANCE_MEMBER_DEFECTED'
+        : input.kind === 'ELIMINATED'
+          ? 'ALLIANCE_MEMBER_EVICTED'
+          : 'ALLIANCE_MEMBER_LEFT'
+  const event = appendRealityEvent(state, {
+    ...input.at,
+    type: eventType,
+    allianceId: alliance.id,
+    actorId: input.actorId,
+    targetIds: [input.memberId],
+    participantIds: formerMemberIds,
+    witnessIds: formerMemberIds.filter((id) => id !== input.memberId),
+    visibility: 'GROUP_VISIBLE',
+    outcome: 'SUCCESS',
+    reason: `${input.kind.toLowerCase()}:${alliance.id}:${input.sourceEventId ?? 'manual'}`,
+    tags: ['ALLIANCE', 'MEMBERSHIP', input.kind, ...(justifyingBetrayal ? ['JUSTIFIED_EXIT'] : [])],
+    relatedFactIds: [],
+    relatedPromiseIds: [...alliance.sharedPromiseIds],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+
+  // Keep the complete roster available to a member who later leaves or is removed.
+  preserveRealityAllianceRosterForMembers(state, alliance.id, input.at, event.id, formerMemberIds)
+
+  alliance.memberIds = alliance.memberIds.filter((id) => id !== input.memberId)
+  alliance.rosterRevision = (alliance.rosterRevision ?? 0) + 1
+  alliance.leaderIds = alliance.leaderIds.filter((id) => id !== input.memberId)
+  alliance.infiltratorIds = alliance.infiltratorIds.filter((id) => id !== input.memberId)
+  delete alliance.memberCommitment[input.memberId]
+  delete alliance.memberPerceivedStatus[input.memberId]
+  delete alliance.memberPlanBeliefs[input.memberId]
+  delete alliance.operationalRoles[input.memberId]
+  alliance.genuine = alliance.infiltratorIds.length === 0
+
+  if (input.kind === 'EXPELLED') {
+    applyRealityRelationshipChange(state, {
+      sourceId: input.memberId,
+      targetId: input.actorId,
+      eventId: event.id,
+      day: input.at.day,
+      phase: input.at.phase,
+      anchor: 'negative',
+      deltas: { trust: -8, loyalty: -8, resentment: 12, suspicion: 4 },
+    })
+    createRealityGrievance(state, {
+      id: `grievance:expulsion:${event.id}`,
+      holderId: input.memberId,
+      againstId: input.actorId,
+      causeEventId: event.id,
+      severity: 32,
+      at: input.at,
+    })
+  } else if (input.kind !== 'ELIMINATED' && !(justifyingBetrayal && input.kind === 'VOLUNTARY')) {
+    for (const memberId of alliance.memberIds) {
+      const independentAgreement = Object.values(state.alliances).some(
+        (other) =>
+          other.id !== alliance.id &&
+          isCurrentAlliance(other) &&
+          other.memberIds.includes(memberId) &&
+          other.memberIds.includes(input.memberId)
+      )
+      const scale = justifyingBetrayal ? 0.25 : 1
+      applyRealityRelationshipChange(state, {
+        sourceId: memberId,
+        targetId: input.memberId,
+        eventId: event.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        anchor: 'negative',
+        deltas:
+          input.kind === 'VOLUNTARY'
+            ? { trust: independentAgreement ? -1 : -2, loyalty: independentAgreement ? 0 : -3 }
+            : {
+                trust: -7 * scale,
+                loyalty: -9 * scale,
+                resentment: 5 * scale,
+                suspicion: 5 * scale,
+                reliability: -8 * scale,
+              },
+      })
+    }
+  }
+
+  if (alliance.memberIds.length < 2) {
+    alliance.status = 'DISSOLVED'
+    alliance.currentTargetIds = []
+    alliance.fallbackTargetIds = []
+    alliance.leaderIds = []
+    alliance.endedAt = { ...input.at }
+    alliance.endReason = input.endReason ?? 'TOO_FEW_MEMBERS'
+    alliance.memberIds = []
+    synchronizeAllianceOfficers(alliance)
+    appendRealityEvent(state, {
+      ...input.at,
+      type: 'ALLIANCE_ENDED',
+      allianceId: alliance.id,
+      actorId: input.actorId,
+      targetIds: [input.memberId],
+      participantIds: formerMemberIds,
+      witnessIds: formerMemberIds.filter((id) => id !== input.memberId),
+      visibility: 'GROUP_VISIBLE',
+      outcome: 'SUCCESS',
+      reason: `management:${alliance.id}`,
+      tags: ['ALLIANCE', 'MANAGEMENT', 'TOO_FEW_MEMBERS'],
+      relatedFactIds: [],
+      relatedPromiseIds: [...alliance.sharedPromiseIds],
+      relatedThreadIds: [],
+      allianceSnapshot: {
+        id: alliance.id,
+        kind: allianceKind(alliance),
+        ...(alliance.name ? { name: alliance.name } : {}),
+        memberIds: formerMemberIds,
+        endReason: input.endReason ?? 'TOO_FEW_MEMBERS',
+        exitKind: input.kind,
+      },
+      publicEligible: false,
+      juryEligible: true,
+    })
+  } else {
+    if (!input.deferSuccession) {
+      synchronizeAllianceOfficers(alliance)
+      refreshRealityAllianceDynamics(alliance)
+      refreshRealityAllianceLifecycle(alliance)
+      rememberAllianceRoster(alliance)
+    }
+  }
+  if (!input.deferSuccession)
+    reconcileConvergedAllianceRosters(state, input.at, preferredSurvivorIds)
+  refreshRealityAllianceOverlaps(state)
+  return alliance
+}
+
+export function removeRealityAllianceMembers(
+  state: RealityDomainState,
+  input: { memberIds: readonly string[]; at: RealityClock; sourceEventId?: string }
+): void {
+  const preferredSurvivorIds = Object.values(state.alliances)
+    .filter((alliance) => isCurrentAlliance(alliance) && allianceKind(alliance) === 'GROUP')
+    .filter((alliance) => {
+      const nextRoster = alliance.memberIds.filter((id) => !input.memberIds.includes(id)).sort()
+      return (
+        nextRoster.length === alliance.memberIds.length &&
+        nextRoster.join('~') === [...alliance.memberIds].sort().join('~')
+      )
+    })
+    .map((alliance) => alliance.id)
+  for (const alliance of Object.values(state.alliances)) {
+    if (!isCurrentAlliance(alliance)) continue
+    const departingIds = alliance.memberIds.filter((id) => input.memberIds.includes(id))
+    for (const memberId of departingIds) {
+      if (alliance.status === 'DISSOLVED') break
+      removeRealityAllianceMember(state, {
+        allianceId: alliance.id,
+        memberId,
+        actorId: memberId,
+        kind: 'ELIMINATED',
+        at: input.at,
+        sourceEventId: input.sourceEventId,
+        deferSuccession: true,
+      })
+    }
+    if (departingIds.length && isCurrentAlliance(alliance)) {
+      synchronizeAllianceOfficers(alliance)
+      refreshRealityAllianceDynamics(alliance)
+      rememberAllianceRoster(alliance)
+    }
+  }
+  for (const request of Object.values(state.allianceManagement.requests)) {
+    if (
+      (request.status === 'VOTING' || request.status === 'CONSENT') &&
+      [
+        request.proposerId,
+        ...request.memberIds,
+        ...(request.candidateId ? [request.candidateId] : []),
+      ].some((id) => input.memberIds.includes(id))
+    ) {
+      request.status = 'INVALIDATED'
+      request.reason = 'A participant left the Hub.'
+      request.settledAt = { ...input.at }
+      recordAllianceRequestEvent(state, request, 'ALLIANCE_REQUEST_INVALIDATED', input.at)
+    }
+  }
+  reconcileConvergedAllianceRosters(state, input.at, preferredSurvivorIds)
+  refreshRealityAllianceOverlaps(state)
+}
+
+function snapshotRealityAlliance(alliance: RealityAlliance): RealityReentryAllianceSnapshot {
+  return {
+    allianceId: alliance.id,
+    memberIds: [...alliance.memberIds],
+    founderIds: [...alliance.founderIds],
+    leaderIds: [...alliance.leaderIds],
+    secrecy: alliance.secrecy,
+    cohesion: alliance.cohesion,
+    fractureRisk: alliance.fractureRisk,
+    purpose: alliance.purpose,
+    currentTargetIds: [...alliance.currentTargetIds],
+    fallbackTargetIds: [...alliance.fallbackTargetIds],
+    sharedPromiseIds: [...alliance.sharedPromiseIds],
+    memberCommitment: { ...alliance.memberCommitment },
+    memberPerceivedStatus: { ...alliance.memberPerceivedStatus },
+    memberPlanBeliefs: Object.fromEntries(
+      Object.entries(alliance.memberPlanBeliefs).map(([memberId, beliefs]) => [
+        memberId,
+        [...beliefs],
+      ])
+    ),
+    operationalRoles: Object.fromEntries(
+      Object.entries(alliance.operationalRoles).map(([memberId, roles]) => [memberId, [...roles]])
+    ),
+    genuine: alliance.genuine,
+    infiltratorIds: [...alliance.infiltratorIds],
+    status: alliance.status,
+  }
+}
+
+/** Preserve formal alliance history immediately before an eviction removes the member. */
+export function captureRealityReentryProfile(
+  state: RealityDomainState,
+  playerId: string,
+  evictedAt: RealityClock
+): void {
+  const alliances = Object.values(state.alliances)
+    .filter((alliance) => alliance.status !== 'DISSOLVED' && alliance.memberIds.includes(playerId))
+    .map(snapshotRealityAlliance)
+  const latestNomination = state.events
+    .slice(-128)
+    .reverse()
+    .find(
+      (event) => event.type === 'CEREMONY_NOMINATIONS_LOCKED' && event.targetIds.includes(playerId)
+    )
+  const conflictTargetIds =
+    latestNomination?.actorId &&
+    latestNomination.actorId !== playerId &&
+    isUnagreedNominationFor(latestNomination, playerId)
+      ? [latestNomination.actorId]
+      : []
+  state.reentryProfiles[playerId] = {
+    evictedAt: { ...evictedAt },
+    alliances,
+    conflictTargetIds,
+  }
+}
+
+export function reconcileRealityBattleBackReturn(
+  state: RealityDomainState,
+  input: { playerId: string; at: RealityClock; activeActorIds: readonly string[] }
+): {
+  restoredAllianceIds: string[]
+  probationaryAllianceIds: string[]
+  formerAllianceIds: string[]
+} {
+  const profile = state.reentryProfiles[input.playerId]
+  const formerAllianceIds = profile?.alliances.map((entry) => entry.allianceId) ?? []
+  if (profile)
+    appendRealityEvent(state, {
+      ...input.at,
+      type: 'ALLIANCE_REENTRY_RECONCILED',
+      actorId: input.playerId,
+      targetIds: profile.conflictTargetIds ?? [],
+      participantIds: [input.playerId],
+      witnessIds: [],
+      visibility: 'PRIVATE',
+      outcome: 'PARTIAL',
+      reason: 'Fresh pact renewal or normal group admission is required after returning.',
+      tags: ['ALLIANCE', 'REENTRY'],
+      relatedFactIds: [],
+      relatedPromiseIds: [],
+      relatedThreadIds: [],
+      publicEligible: false,
+      juryEligible: false,
+    })
+  delete state.reentryProfiles[input.playerId]
+  return { restoredAllianceIds: [], probationaryAllianceIds: [], formerAllianceIds }
+}
+
+export type RealityAllianceBetrayalKind =
+  | 'NOMINATION'
+  | 'VOTE'
+  | 'SAFETY_ABANDON'
+  | 'SOCIAL_BETRAYAL'
+
+export function recordRealityAllianceBetrayal(
+  state: RealityDomainState,
+  input: {
+    actorId: string
+    targetId: string
+    kind: RealityAllianceBetrayalKind
+    at: RealityClock
+    sourceEventId: string
+    allianceId?: string
+  }
+): RealityAlliance[] {
+  const affected: RealityAlliance[] = []
+  let pairConsequenceRecorded = state.events.some(
+    (event) =>
+      event.type === 'ALLIANCE_BETRAYAL' &&
+      event.actorId === input.actorId &&
+      event.targetIds.includes(input.targetId) &&
+      event.reason.endsWith(`:${input.sourceEventId}`)
+  )
+  const baseSeverity =
+    input.kind === 'NOMINATION'
+      ? 0.3
+      : input.kind === 'SOCIAL_BETRAYAL'
+        ? 0.34
+        : input.kind === 'VOTE'
+          ? 0.22
+          : 0.12
+
+  const eligibleAlliances = Object.values(state.alliances).filter(
+    (alliance) =>
+      (alliance.status === 'ACTIVE' ||
+        alliance.status === 'PROBATIONARY' ||
+        alliance.status === 'FRACTURED') &&
+      (input.allianceId === undefined || alliance.id === input.allianceId) &&
+      alliance.memberIds.includes(input.actorId) &&
+      alliance.memberIds.includes(input.targetId)
+  )
+  const severityFor = (alliance: RealityAlliance) =>
+    baseSeverity +
+    (alliance.memberPerceivedStatus[input.actorId] === 'CORE' ? 0.06 : 0) +
+    (alliance.memberPerceivedStatus[input.targetId] === 'CORE' ? 0.05 : 0) +
+    (alliance.memberIds.length === 2 ? 0.06 : 0)
+  eligibleAlliances.sort(
+    (left, right) => severityFor(right) - severityFor(left) || left.id.localeCompare(right.id)
+  )
+  for (const alliance of eligibleAlliances) {
+    if (
+      (alliance.status !== 'ACTIVE' &&
+        alliance.status !== 'PROBATIONARY' &&
+        alliance.status !== 'FRACTURED') ||
+      (input.allianceId !== undefined && alliance.id !== input.allianceId) ||
+      !alliance.memberIds.includes(input.actorId) ||
+      !alliance.memberIds.includes(input.targetId)
+    ) {
+      continue
+    }
+
+    const eventReason = `${input.kind.toLowerCase()}:${alliance.id}:${input.sourceEventId}`
+    const duplicate = state.events.some(
+      (event) =>
+        event.type === 'ALLIANCE_BETRAYAL' &&
+        event.actorId === input.actorId &&
+        event.targetIds.includes(input.targetId) &&
+        event.reason === eventReason
+    )
+    if (duplicate) continue
+
+    const actorWasCore = alliance.memberPerceivedStatus[input.actorId] === 'CORE'
+    const targetWasCore = alliance.memberPerceivedStatus[input.targetId] === 'CORE'
+    const pairSeverity = alliance.memberIds.length === 2 ? 0.06 : 0
+    const severity = clamp01(
+      baseSeverity + (actorWasCore ? 0.06 : 0) + (targetWasCore ? 0.05 : 0) + pairSeverity
+    )
+    const wasFractured = alliance.status === 'FRACTURED'
+
+    alliance.memberCommitment[input.actorId] = clamp01(
+      (alliance.memberCommitment[input.actorId] ?? 0.5) - severity
+    )
+    alliance.memberCommitment[input.targetId] = clamp01(
+      (alliance.memberCommitment[input.targetId] ?? 0.5) - severity * 0.42
+    )
+    for (const memberId of alliance.memberIds) {
+      if (memberId === input.actorId || memberId === input.targetId) continue
+      alliance.memberCommitment[memberId] = clamp01(
+        (alliance.memberCommitment[memberId] ?? 0.5) - severity * 0.1
+      )
+    }
+    refreshRealityAllianceDynamics(alliance)
+
+    const betrayalEvent = appendRealityEvent(state, {
+      ...input.at,
+      type: 'ALLIANCE_BETRAYAL',
+      allianceId: alliance.id,
+      actorId: input.actorId,
+      targetIds: [input.targetId],
+      participantIds: [...alliance.memberIds],
+      witnessIds: [],
+      visibility: 'GROUP_VISIBLE',
+      outcome: 'SUCCESS',
+      reason: eventReason,
+      tags: ['ALLIANCE', 'BETRAYAL', input.kind],
+      relatedFactIds: [],
+      relatedPromiseIds: [...alliance.sharedPromiseIds],
+      relatedThreadIds: [],
+      publicEligible: false,
+      juryEligible: true,
+    })
+
+    if (!pairConsequenceRecorded)
+      applyRealityRelationshipChange(state, {
+        sourceId: input.targetId,
+        targetId: input.actorId,
+        eventId: betrayalEvent.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        anchor: 'negative',
+        deltas: {
+          warmth: -severity * 28,
+          trust: -severity * 55,
+          loyalty: -severity * 60,
+          resentment: severity * 65,
+          suspicion: severity * 35,
+          reliability: -severity * 45,
+        },
+      })
+    pairConsequenceRecorded = true
+
+    for (const ownerId of alliance.memberIds) {
+      remember(state, {
+        id: `memory:${ownerId}:${betrayalEvent.id}`,
+        ownerId,
+        eventId: betrayalEvent.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        participantIds: [...alliance.memberIds],
+        sourceType:
+          ownerId === input.actorId || ownerId === input.targetId ? 'DIRECT' : 'WITNESSED',
+        sourceChain: [input.actorId],
+        confidence: 1,
+        importance: 0.92,
+        surprise: 0.75,
+        emotionalValence: ownerId === input.actorId ? -0.2 : -0.78,
+        emotionalIntensity: ownerId === input.actorId ? 0.55 : 0.88,
+        secrecy: 0.55,
+        strategicRelevance: 1,
+        visibility: 'GROUP_VISIBLE',
+        tags: [...betrayalEvent.tags],
+        relatedPromiseIds: [...betrayalEvent.relatedPromiseIds],
+        relatedSecretIds: [],
+        recallStrength: 1,
+      })
+    }
+
+    const grievanceId = `grievance:alliance:${input.sourceEventId}:${input.actorId}:${input.targetId}`
+    if (!state.grievances[grievanceId]) {
+      createRealityGrievance(state, {
+        id: grievanceId,
+        holderId: input.targetId,
+        againstId: input.actorId,
+        causeEventId: input.sourceEventId,
+        severity: Math.round(35 + severity * 115),
+        at: input.at,
+      })
+    }
+
+    const repeatedSevereBreach =
+      wasFractured && (severity >= 0.28 || (alliance.memberCommitment[input.actorId] ?? 0) <= 0.12)
+    if (repeatedSevereBreach || severity >= 0.38 || alliance.fractureRisk >= 0.72) {
+      alliance.status = 'FRACTURED'
+    } else {
+      refreshRealityAllianceLifecycle(alliance)
+    }
+
+    affected.push(alliance)
+  }
+
+  const witnesses = new Map<string, RealityAlliance>()
+  for (const alliance of affected)
+    for (const memberId of alliance.memberIds)
+      if (memberId !== input.actorId && memberId !== input.targetId && !witnesses.has(memberId))
+        witnesses.set(memberId, alliance)
+  for (const [witnessId, alliance] of witnesses) {
+    if (
+      state.events.some(
+        (entry) =>
+          entry.type === 'ALLIANCE_BETRAYAL_REACTION' &&
+          entry.actorId === witnessId &&
+          entry.reason.endsWith(`:${input.sourceEventId}`)
+      )
+    )
+      continue
+    const towardVictim = getRealityRelationship(state, witnessId, input.targetId)
+    const towardActor = getRealityRelationship(state, witnessId, input.actorId)
+    const support =
+      (towardVictim.trust + towardVictim.loyalty - towardActor.trust - towardActor.loyalty) / 160 -
+      towardActor.fear / 250
+    const stance = support > 0.18 ? 'SUPPORTS_TARGET' : support < -0.25 ? 'BACKS_ACTOR' : 'WARY'
+    const reaction = appendRealityEvent(state, {
+      ...input.at,
+      type: 'ALLIANCE_BETRAYAL_REACTION',
+      allianceId: alliance.id,
+      actorId: witnessId,
+      targetIds: [input.targetId, input.actorId],
+      participantIds: [...alliance.memberIds],
+      witnessIds: alliance.memberIds.filter((id) => id !== witnessId),
+      visibility: 'GROUP_VISIBLE',
+      outcome: 'SUCCESS',
+      reason: `${stance}:${input.sourceEventId}`,
+      tags: ['ALLIANCE', 'REACTION', stance],
+      relatedFactIds: [],
+      relatedPromiseIds: [],
+      relatedThreadIds: [],
+      publicEligible: false,
+      juryEligible: true,
+    })
+    applyRealityRelationshipChange(state, {
+      sourceId: witnessId,
+      targetId: input.actorId,
+      eventId: reaction.id,
+      day: input.at.day,
+      phase: input.at.phase,
+      deltas: {
+        trust: -baseSeverity * (stance === 'BACKS_ACTOR' ? 3 : 7 + Math.max(0, support) * 10),
+        reliability: -baseSeverity * 10,
+        suspicion: baseSeverity * 8,
+      },
+    })
+    if (stance === 'SUPPORTS_TARGET')
+      applyRealityRelationshipChange(state, {
+        sourceId: input.targetId,
+        targetId: witnessId,
+        eventId: reaction.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        anchor: 'positive',
+        deltas: { warmth: 2, trust: 2, gratitude: 3 },
+      })
+  }
+  if (affected.length > 0) refreshRealityAllianceOverlaps(state)
+  return affected
+}
+
+function hasStrongerRealityPact(
+  state: RealityDomainState,
+  memberId: string,
+  allianceId: string,
+  currentCommitment: number
+): boolean {
+  return Object.values(state.alliances).some(
+    (candidate) =>
+      candidate.id !== allianceId &&
+      (candidate.status === 'ACTIVE' || candidate.status === 'PROBATIONARY') &&
+      candidate.memberIds.includes(memberId) &&
+      (candidate.memberCommitment[memberId] ?? 0) >= 0.68 &&
+      (candidate.memberCommitment[memberId] ?? 0) >= currentCommitment + 0.12
+  )
+}
+
+/**
+ * A player who accepts a much weaker secondary pact while already anchored in
+ * a strong alliance can outwardly join without internally treating both deals
+ * as equal. This mirrors the existing Drama false-pretense behavior but keeps
+ * the durable truth in RealityAlliance.
+ */
+export function markRealityAllianceInfiltratorIfSecondary(
+  state: RealityDomainState,
+  allianceId: string,
+  memberId: string,
+  at: RealityClock
+): boolean {
+  const alliance = state.alliances[allianceId]
+  if (
+    !alliance ||
+    alliance.status === 'DISSOLVED' ||
+    !alliance.memberIds.includes(memberId) ||
+    alliance.infiltratorIds.includes(memberId)
+  ) {
+    return false
+  }
+  const commitment = alliance.memberCommitment[memberId] ?? 0.5
+  if (!hasStrongerRealityPact(state, memberId, allianceId, commitment)) return false
+
+  alliance.infiltratorIds = [...new Set([...alliance.infiltratorIds, memberId])]
+  alliance.genuine = false
+  alliance.memberCommitment[memberId] = Math.min(commitment, 0.3)
+  refreshRealityAllianceDynamics(alliance)
+
+  appendRealityEvent(state, {
+    ...at,
+    type: 'ALLIANCE_FALSE_PRETENSE_ESTABLISHED',
+    allianceId: alliance.id,
+    actorId: memberId,
+    targetIds: alliance.memberIds.filter((id) => id !== memberId),
+    participantIds: [memberId],
+    witnessIds: [],
+    visibility: 'PRIVATE',
+    outcome: 'SYSTEM',
+    reason: `secondary_to_stronger_pact:${alliance.id}`,
+    tags: ['ALLIANCE', 'FALSE_PRETENSE'],
+    relatedFactIds: [],
+    relatedPromiseIds: [...alliance.sharedPromiseIds],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+  return true
+}
+
+function refreshRealityAllianceInfiltratorIntent(
+  state: RealityDomainState,
+  alliance: RealityAlliance,
+  memberId: string
+): void {
+  if (!alliance.infiltratorIds.includes(memberId)) return
+  const commitment = alliance.memberCommitment[memberId] ?? 0
+  if (commitment >= 0.58 && !hasStrongerRealityPact(state, memberId, alliance.id, commitment)) {
+    alliance.infiltratorIds = alliance.infiltratorIds.filter((id) => id !== memberId)
+    alliance.genuine = alliance.infiltratorIds.length === 0
+  }
+}
+
+function allianceCoordinationRank(
+  alliance: RealityAlliance,
+  actorId: string,
+  partnerId: string
+): [number, number, number, number, string] {
+  const statusRank = alliance.status === 'ACTIVE' ? 2 : 1
+  const actorRole =
+    alliance.memberPerceivedStatus[actorId] === 'CORE'
+      ? 2
+      : alliance.memberPerceivedStatus[actorId] === 'REGULAR'
+        ? 1
+        : 0
+  const partnerRole =
+    alliance.memberPerceivedStatus[partnerId] === 'CORE'
+      ? 2
+      : alliance.memberPerceivedStatus[partnerId] === 'REGULAR'
+        ? 1
+        : 0
+  const mutualCommitment = Math.min(
+    alliance.memberCommitment[actorId] ?? 0,
+    alliance.memberCommitment[partnerId] ?? 0
+  )
+  // A tight inner pact should own a private agreement before a looser outer
+  // coalition does. Size is therefore only a final tiebreak after live health,
+  // member standing and mutual commitment.
+  return [
+    statusRank,
+    actorRole + partnerRole,
+    mutualCommitment + alliance.cohesion * 0.35,
+    -alliance.memberIds.length,
+    alliance.id,
+  ]
+}
+
+export function findRealityAllianceForCoordination(
+  state: RealityDomainState,
+  actorId: string,
+  partnerId: string,
+  subjectId?: string
+): RealityAlliance | null {
+  const candidates = Object.values(state.alliances).filter(
+    (alliance) =>
+      (alliance.status === 'ACTIVE' || alliance.status === 'PROBATIONARY') &&
+      alliance.memberIds.includes(actorId) &&
+      alliance.memberIds.includes(partnerId) &&
+      (!subjectId || !alliance.memberIds.includes(subjectId))
+  )
+  candidates.sort((left, right) => {
+    const a = allianceCoordinationRank(left, actorId, partnerId)
+    const b = allianceCoordinationRank(right, actorId, partnerId)
+    return (
+      b[0] - a[0] ||
+      b[1] - a[1] ||
+      b[2] - a[2] ||
+      b[3] - a[3] ||
+      String(a[4]).localeCompare(String(b[4]))
+    )
+  })
+  return candidates[0] ?? null
+}
+
+export function findRealityAllianceForConsultation(
+  state: RealityDomainState,
+  actorId: string,
+  representativeId: string
+): RealityAlliance | null {
+  const roleRank = (alliance: RealityAlliance, memberId: string) =>
+    alliance.memberPerceivedStatus[memberId] === 'CORE'
+      ? 2
+      : alliance.memberPerceivedStatus[memberId] === 'REGULAR'
+        ? 1
+        : 0
+
+  return (
+    Object.values(state.alliances)
+      .filter(
+        (alliance) =>
+          isCurrentAlliance(alliance) &&
+          allianceKind(alliance) === 'GROUP' &&
+          alliance.memberIds.includes(actorId) &&
+          alliance.memberIds.includes(representativeId)
+      )
+      .sort(
+        (left, right) =>
+          Number(right.status === 'ACTIVE') - Number(left.status === 'ACTIVE') ||
+          right.memberIds.length - left.memberIds.length ||
+          roleRank(right, actorId) - roleRank(left, actorId) ||
+          roleRank(right, representativeId) - roleRank(left, representativeId) ||
+          (right.memberCommitment[actorId] ?? 0) - (left.memberCommitment[actorId] ?? 0) ||
+          right.cohesion - left.cohesion ||
+          left.id.localeCompare(right.id)
+      )[0] ?? null
+  )
+}
+
+/**
+ * Persist an accepted target conversation into the strongest shared pact only.
+ * This deliberately does not call holdRealityAllianceMeeting: two members
+ * agreeing privately should not count absent coalition members as skipping a
+ * formal meeting. Their differing memberPlanBeliefs instead create natural
+ * internal disagreement until the wider group aligns.
+ */
+export function coordinateRealityAllianceTarget(
+  state: RealityDomainState,
+  input: {
+    actorId: string
+    partnerId: string
+    subjectId: string
+    kind: 'CURRENT' | 'FALLBACK'
+    at: RealityClock
+    sourceEventId: string
+    allianceId?: string
+  }
+): RealityAlliance | null {
+  if (
+    input.actorId === input.partnerId ||
+    input.actorId === input.subjectId ||
+    input.partnerId === input.subjectId
+  ) {
+    return null
+  }
+  const requestedAlliance = input.allianceId ? state.alliances[input.allianceId] : undefined
+  const alliance = input.allianceId
+    ? requestedAlliance &&
+      (requestedAlliance.status === 'ACTIVE' || requestedAlliance.status === 'PROBATIONARY') &&
+      requestedAlliance.memberIds.includes(input.actorId) &&
+      requestedAlliance.memberIds.includes(input.partnerId) &&
+      !requestedAlliance.memberIds.includes(input.subjectId)
+      ? requestedAlliance
+      : null
+    : findRealityAllianceForCoordination(state, input.actorId, input.partnerId, input.subjectId)
+  if (!alliance) return null
+
+  const planId =
+    input.kind === 'CURRENT' ? `target:${input.subjectId}` : `fallback:${input.subjectId}`
+  if (input.kind === 'CURRENT') {
+    alliance.currentTargetIds = [input.subjectId]
+    alliance.fallbackTargetIds = alliance.fallbackTargetIds.filter(
+      (targetId) => targetId !== input.subjectId
+    )
+  } else {
+    alliance.fallbackTargetIds = [input.subjectId]
+  }
+
+  for (const memberId of [input.actorId, input.partnerId]) {
+    alliance.memberPlanBeliefs[memberId] = [planId]
+    const commitmentGain = alliance.infiltratorIds.includes(memberId) ? 0.005 : 0.02
+    alliance.memberCommitment[memberId] = clamp01(
+      (alliance.memberCommitment[memberId] ?? 0.5) + commitmentGain
+    )
+  }
+
+  appendRealityEvent(state, {
+    ...input.at,
+    type: 'ALLIANCE_TARGET_COORDINATED',
+    allianceId: alliance.id,
+    actorId: input.actorId,
+    targetIds: [input.subjectId],
+    participantIds: [input.actorId, input.partnerId],
+    witnessIds: [],
+    visibility: 'PAIR_ONLY',
+    outcome: 'SUCCESS',
+    reason: `${input.kind.toLowerCase()}:${alliance.id}:${input.sourceEventId}`,
+    tags: ['ALLIANCE', 'PLAN', input.kind],
+    relatedFactIds: [],
+    relatedPromiseIds: [...alliance.sharedPromiseIds],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+
+  refreshRealityAllianceDynamics(alliance)
+  refreshRealityAllianceInfiltratorIntent(state, alliance, input.actorId)
+  refreshRealityAllianceInfiltratorIntent(state, alliance, input.partnerId)
+  return refreshRealityAllianceLifecycle(alliance)
+}
+
+function allianceRecruitmentRank(
+  alliance: RealityAlliance,
+  recruiterId: string
+): [number, number, number, number, string] {
+  const statusRank = alliance.status === 'ACTIVE' ? 2 : alliance.status === 'PROBATIONARY' ? 1 : 0
+  const memberRank =
+    alliance.memberPerceivedStatus[recruiterId] === 'CORE'
+      ? 2
+      : alliance.memberPerceivedStatus[recruiterId] === 'REGULAR'
+        ? 1
+        : 0
+  return [
+    alliance.memberIds.length,
+    memberRank,
+    statusRank,
+    alliance.memberCommitment[recruiterId] ?? 0,
+    alliance.id,
+  ]
+}
+
+/**
+ * Pick the existing coalition a player is most plausibly recruiting into.
+ * Only core/regular members of live coalitions may extend them; peripheral
+ * members need to build their own deal instead of silently changing the group.
+ */
+export function findRealityAllianceForRecruitment(
+  state: RealityDomainState,
+  recruiterId: string,
+  targetId: string
+): RealityAlliance | null {
+  const candidates = Object.values(state.alliances).filter(
+    (alliance) =>
+      (alliance.status === 'ACTIVE' || alliance.status === 'PROBATIONARY') &&
+      alliance.memberIds.includes(recruiterId) &&
+      !alliance.memberIds.includes(targetId) &&
+      alliance.memberPerceivedStatus[recruiterId] !== 'PERIPHERAL'
+  )
+  candidates.sort((left, right) => {
+    const a = allianceRecruitmentRank(left, recruiterId)
+    const b = allianceRecruitmentRank(right, recruiterId)
+    return (
+      b[0] - a[0] ||
+      b[1] - a[1] ||
+      b[2] - a[2] ||
+      b[3] - a[3] ||
+      String(a[4]).localeCompare(String(b[4]))
+    )
+  })
+  return candidates[0] ?? null
+}
+
+/**
+ * Recompute structural overlap links for every non-dissolved alliance.
+ * Two alliances overlap when they share at least two members, which covers
+ * nested Final-2/core deals without treating a single shared player as a bloc.
+ */
+export function refreshRealityAllianceOverlaps(state: RealityDomainState): void {
+  const allAlliances = Object.values(state.alliances)
+  for (const alliance of allAlliances) alliance.overlapAllianceIds = []
+  const alliances = allAlliances.filter((alliance) => alliance.status !== 'DISSOLVED')
+
+  for (let leftIndex = 0; leftIndex < alliances.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < alliances.length; rightIndex += 1) {
+      const left = alliances[leftIndex]
+      const right = alliances[rightIndex]
+      const sharedMembers = left.memberIds.filter((id) => right.memberIds.includes(id))
+      if (sharedMembers.length < 2) continue
+      left.overlapAllianceIds.push(right.id)
+      right.overlapAllianceIds.push(left.id)
+    }
+  }
+
+  for (const alliance of alliances) {
+    alliance.overlapAllianceIds = [...new Set(alliance.overlapAllianceIds)].sort()
+  }
+}
+
+/**
+ * Add a recruit to an existing coalition without flattening a two-person core.
+ * Expanding a pair creates a wider coalition and keeps the pair as an overlapping
+ * inner pact. Once a coalition already has 3+ members, later recruits extend it
+ * in place so we do not create a new alliance object for every additional member.
+ */
+export function recruitRealityAllianceMember(
+  state: RealityDomainState,
+  input: {
+    allianceId: string
+    recruiterId: string
+    targetId: string
+    expandedAllianceId: string
+    at: RealityClock
+    requestId?: string
+  }
+): RealityAlliance {
+  if (!isCurrentAlliance(state.alliances[input.allianceId]))
+    throw new Error('Alliance is not recruitable')
+  const request = input.requestId ? state.allianceManagement.requests[input.requestId] : undefined
+  const alliance = request?.resultAllianceId ? state.alliances[request.resultAllianceId] : undefined
+  if (
+    request?.status === 'ACCEPTED' &&
+    request.kind === 'ADMIT' &&
+    request.allianceId === input.allianceId &&
+    request.candidateId === input.targetId &&
+    alliance
+  )
+    return alliance
+  throw new Error(
+    'Recruitment requires member approval and candidate consent through a group admission request'
+  )
+}
+
+export function createRealityAlliance(
+  state: RealityDomainState,
+  input: {
+    id: string
+    createdById?: string
+    founderIds: string[]
+    memberIds: string[]
+    purpose: string
+    at: RealityClock
+    name?: string
+    secrecy?: number
+    genuine?: boolean
+    kind?: 'PACT' | 'GROUP'
+    leaderId?: string
+    coLeaderId?: string
+    replacesPactId?: string
+  }
+): RealityAlliance {
+  const memberIds = [...new Set([...input.founderIds, ...input.memberIds])]
+  if (memberIds.length < 2) throw new Error('A Reality alliance needs at least two members')
+  if (state.alliances[input.id]) throw new Error('Commitment episode IDs cannot be reused')
+  const kind = input.kind ?? (memberIds.length >= 3 ? 'GROUP' : 'PACT')
+  if (kind === 'PACT' && memberIds.length !== 2)
+    throw new Error('A personal pact has exactly two members')
+  if (kind === 'GROUP' && memberIds.length < 3)
+    throw new Error('Founding a group needs at least three members')
+  const existingPact =
+    kind === 'PACT' ? getCurrentPact(state, memberIds[0], memberIds[1]) : undefined
+  if (existingPact && existingPact.id !== input.replacesPactId) return existingPact
+  const alliance: RealityAlliance = {
+    id: input.id,
+    createdById:
+      input.createdById ?? (kind === 'GROUP' ? input.leaderId : undefined) ?? input.founderIds[0],
+    createdAt: { ...input.at },
+    kind,
+    provenance: 'NATIVE',
+    leaderId:
+      kind === 'GROUP' ? (input.createdById ?? input.leaderId ?? input.founderIds[0]) : undefined,
+    coLeaderId: kind === 'GROUP' ? input.coLeaderId : undefined,
+    memberJoinSequence: Object.fromEntries(memberIds.map((id) => [id, state.nextSequence++])),
+    rosterRevision: 0,
+    governanceRevision: 0,
+    ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+    memberIds,
+    founderIds: [...new Set(input.founderIds)],
+    leaderIds: [
+      input.createdById ?? input.leaderId ?? input.founderIds[0],
+      ...(input.coLeaderId ? [input.coLeaderId] : []),
+    ],
+    secrecy: Math.max(0, Math.min(1, input.secrecy ?? 0.75)),
+    cohesion: 0.45,
+    fractureRisk: 0.15,
+    purpose: input.purpose,
+    currentTargetIds: [],
+    fallbackTargetIds: [],
+    sharedPromiseIds: [],
+    memberCommitment: Object.fromEntries(memberIds.map((id) => [id, 0.5])),
+    memberPerceivedStatus: Object.fromEntries(
+      memberIds.map((id) => [id, input.founderIds.includes(id) ? 'CORE' : 'REGULAR'])
+    ),
+    memberPlanBeliefs: Object.fromEntries(memberIds.map((id) => [id, []])),
+    operationalRoles: Object.fromEntries(memberIds.map((id) => [id, []])),
+    suspectedByIds: [],
+    knownLeakEventIds: [],
+    overlapAllianceIds: [],
+    lastMeeting: input.at,
+    status: 'PROBATIONARY',
+    genuine: input.genuine ?? true,
+    infiltratorIds: [],
+  }
+  state.alliances[alliance.id] = alliance
+  ensureRealityAllianceName(state, alliance)
+  const event = appendRealityEvent(state, {
+    ...input.at,
+    type: 'ALLIANCE_FORMED',
+    allianceId: alliance.id,
+    actorId: input.createdById ?? input.leaderId ?? input.founderIds[0],
+    targetIds: memberIds.filter((id) => !input.founderIds.includes(id)),
+    participantIds: memberIds,
+    witnessIds: [],
+    visibility: 'GROUP_VISIBLE',
+    outcome: 'SUCCESS',
+    reason: input.purpose,
+    tags: ['ALLIANCE', 'ANCHOR'],
+    relatedFactIds: [],
+    relatedPromiseIds: [],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+  strengthenRealityAllianceBonds(state, memberIds, input.at, event.id)
+  // A newly signed pact can be false pretense when one signatory secretly
+  // intends to undermine the other. Do not clear that private objective.
+  enforceNemesisAllianceConsistency(state)
+  refreshRealityAllianceDynamics(alliance)
+  rememberAllianceRoster(alliance)
+  refreshRealityAllianceOverlaps(state)
+  return alliance
+}
+
+export function holdRealityAllianceMeeting(
+  state: RealityDomainState,
+  input: {
+    allianceId: string
+    attendeeIds: string[]
+    targetIds: string[]
+    fallbackTargetIds?: string[]
+    planIds: string[]
+    at: RealityClock
+    /** Members who could not reasonably attend (for example already evicted) are neutral. */
+    excusedAbsentIds?: string[]
+    /** Defaults preserve legacy meeting behavior. Strategy wrappers may tune these. */
+    attendeeCommitmentDelta?: number
+    absentCommitmentDelta?: number
+  }
+): RealityAlliance {
+  const alliance = state.alliances[input.allianceId]
+  if (!alliance || alliance.status === 'DISSOLVED') throw new Error('Alliance is not active')
+  const attendees = input.attendeeIds.filter((id) => alliance.memberIds.includes(id))
+  if (attendees.length < 2) throw new Error('An alliance meeting needs two members')
+  alliance.currentTargetIds = [...new Set(input.targetIds)]
+  alliance.fallbackTargetIds = [...new Set(input.fallbackTargetIds ?? [])]
+  alliance.lastMeeting = input.at
+  alliance.status = alliance.status === 'PROBATIONARY' ? 'ACTIVE' : alliance.status
+  const attendeeCommitmentDelta = input.attendeeCommitmentDelta ?? 0.05
+  const absentCommitmentDelta = input.absentCommitmentDelta ?? -0.025
+  for (const attendeeId of attendees) {
+    alliance.memberPlanBeliefs[attendeeId] = [...new Set(input.planIds)]
+    alliance.memberCommitment[attendeeId] = clamp01(
+      (alliance.memberCommitment[attendeeId] ?? 0.5) + attendeeCommitmentDelta
+    )
+  }
+  const excusedAbsentIds = new Set(input.excusedAbsentIds ?? [])
+  for (const absentId of alliance.memberIds.filter(
+    (id) => !attendees.includes(id) && !excusedAbsentIds.has(id)
+  )) {
+    alliance.memberCommitment[absentId] = clamp01(
+      (alliance.memberCommitment[absentId] ?? 0.5) + absentCommitmentDelta
+    )
+  }
+  refreshRealityAllianceDynamics(alliance)
+  for (const attendeeId of attendees) {
+    refreshRealityAllianceInfiltratorIntent(state, alliance, attendeeId)
+  }
+  ensureRealityAllianceName(state, alliance)
+  refreshRealityAllianceLifecycle(alliance)
+  return alliance
+}
+
+export function holdRealityAllianceStrategyMeeting(
+  state: RealityDomainState,
+  input: {
+    allianceId: string
+    callerId: string
+    attendeeIds: string[]
+    targetIds: string[]
+    fallbackTargetIds?: string[]
+    planIds: string[]
+    agenda: string
+    consultationSummary?: string
+    at: RealityClock
+    sourceEventId?: string
+    excusedAbsentIds?: string[]
+    /** Optional attendee-specific reads preserve real disagreement inside the coalition. */
+    memberPlanBeliefs?: Record<string, string[]>
+  }
+): RealityAlliance {
+  const priorMeeting = state.events.some(
+    (event) =>
+      event.type === 'ALLIANCE_STRATEGY_MEETING' &&
+      event.day === input.at.day &&
+      event.phase === input.at.phase &&
+      event.reason.startsWith(`strategy_meeting:${input.allianceId}:${input.agenda}:`)
+  )
+  const alliance = holdRealityAllianceMeeting(state, {
+    allianceId: input.allianceId,
+    attendeeIds: input.attendeeIds,
+    targetIds: input.targetIds,
+    fallbackTargetIds: input.fallbackTargetIds,
+    planIds: input.planIds,
+    at: input.at,
+    excusedAbsentIds: input.excusedAbsentIds,
+    attendeeCommitmentDelta: priorMeeting ? 0 : 0.015,
+    absentCommitmentDelta: priorMeeting ? 0 : -0.01,
+  })
+
+  if (input.memberPlanBeliefs) {
+    for (const attendeeId of input.attendeeIds) {
+      if (!alliance.memberIds.includes(attendeeId)) continue
+      const beliefs = input.memberPlanBeliefs[attendeeId]
+      if (beliefs) alliance.memberPlanBeliefs[attendeeId] = [...new Set(beliefs)]
+    }
+    refreshRealityAllianceDynamics(alliance)
+    refreshRealityAllianceLifecycle(alliance)
+  }
+
+  appendRealityEvent(state, {
+    ...input.at,
+    type: 'ALLIANCE_STRATEGY_MEETING',
+    allianceId: alliance.id,
+    actorId: input.callerId,
+    targetIds: [...new Set([...input.targetIds, ...(input.fallbackTargetIds ?? [])])],
+    participantIds: [...new Set(input.attendeeIds)],
+    witnessIds: [],
+    visibility: 'GROUP_VISIBLE',
+    outcome: 'SUCCESS',
+    reason: `strategy_meeting:${alliance.id}:${input.agenda}:${input.sourceEventId ?? 'manual'}`,
+    ...(input.consultationSummary
+      ? { allianceConsultationSummary: input.consultationSummary }
+      : {}),
+    tags: ['ALLIANCE', 'STRATEGY', 'MEETING'],
+    relatedFactIds: [],
+    relatedPromiseIds: [...alliance.sharedPromiseIds],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+  return alliance
+}
+
+export function recordRealityAlliancePlanDefiance(
+  state: RealityDomainState,
+  input: {
+    actorId: string
+    actualTargetId: string
+    at: RealityClock
+    sourceEventId: string
+    eligibleTargetIds?: string[]
+  }
+): RealityAlliance[] {
+  const reactedPairs = new Set<string>()
+  const affected: RealityAlliance[] = []
+
+  for (const alliance of Object.values(state.alliances)) {
+    if (
+      (alliance.status !== 'ACTIVE' && alliance.status !== 'PROBATIONARY') ||
+      !alliance.memberIds.includes(input.actorId) ||
+      alliance.memberIds.includes(input.actualTargetId) ||
+      alliance.currentTargetIds.length === 0
+    ) {
+      continue
+    }
+
+    const planTargetIds = [...alliance.currentTargetIds, ...alliance.fallbackTargetIds]
+    if (
+      input.eligibleTargetIds &&
+      !planTargetIds.some((targetId) => input.eligibleTargetIds!.includes(targetId))
+    ) {
+      continue
+    }
+
+    const actorPlanBeliefs = alliance.memberPlanBeliefs[input.actorId] ?? []
+    const knowsPlan =
+      alliance.leaderIds.includes(input.actorId) ||
+      actorPlanBeliefs.some((planId) => planTargetIds.some((targetId) => planId.includes(targetId)))
+    if (!knowsPlan) continue
+    if (
+      alliance.currentTargetIds.includes(input.actualTargetId) ||
+      alliance.fallbackTargetIds.includes(input.actualTargetId)
+    ) {
+      continue
+    }
+
+    const declaredDissent = actorPlanBeliefs.some(
+      (planId) =>
+        planId.startsWith('dissent') && planTargetIds.some((targetId) => planId.includes(targetId))
+    )
+    // The meeting already records this boundary. An explicit broken promise is
+    // resolved separately; following declared dissent is not a new betrayal.
+    if (declaredDissent) continue
+    const merelyAware =
+      !declaredDissent &&
+      actorPlanBeliefs.some(
+        (planId) =>
+          planId.startsWith('aware') && planTargetIds.some((targetId) => planId.includes(targetId))
+      )
+
+    const duplicate = state.events.some(
+      (event) =>
+        event.type === 'ALLIANCE_PLAN_DEFIED' &&
+        event.actorId === input.actorId &&
+        event.day === input.at.day &&
+        event.reason.startsWith(`vote_defiance:${alliance.id}:`)
+    )
+    if (duplicate) continue
+
+    const severity =
+      (declaredDissent ? 0.03 : merelyAware ? 0.045 : 0.07) +
+      (alliance.memberPerceivedStatus[input.actorId] === 'CORE' ? 0.025 : 0) +
+      alliance.cohesion * (declaredDissent ? 0.015 : merelyAware ? 0.025 : 0.035)
+    alliance.memberCommitment[input.actorId] = clamp01(
+      (alliance.memberCommitment[input.actorId] ?? 0.5) - severity
+    )
+
+    const event = appendRealityEvent(state, {
+      ...input.at,
+      type: 'ALLIANCE_PLAN_DEFIED',
+      allianceId: alliance.id,
+      actorId: input.actorId,
+      targetIds: [input.actualTargetId],
+      participantIds: [...alliance.memberIds],
+      witnessIds: alliance.memberIds.filter((id) => id !== input.actorId),
+      visibility: 'GROUP_VISIBLE',
+      outcome: 'SUCCESS',
+      reason: `vote_defiance:${alliance.id}:${alliance.currentTargetIds[0]}:${input.actualTargetId}`,
+      tags: [
+        'ALLIANCE',
+        'PLAN',
+        'DEFIANCE',
+        'VOTE',
+        ...(declaredDissent ? ['DECLARED_DISSENT'] : merelyAware ? ['NONCOMMITTAL'] : []),
+      ],
+      relatedFactIds: [],
+      relatedPromiseIds: [...alliance.sharedPromiseIds],
+      relatedThreadIds: [],
+      publicEligible: false,
+      juryEligible: true,
+    })
+
+    const reactionScale = declaredDissent ? 0.45 : merelyAware ? 0.7 : 1
+    for (const memberId of alliance.memberIds) {
+      if (memberId === input.actorId || reactedPairs.has(memberId)) continue
+      reactedPairs.add(memberId)
+      applyRealityRelationshipChange(state, {
+        sourceId: memberId,
+        targetId: input.actorId,
+        eventId: event.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        anchor: 'negative',
+        deltas: {
+          trust: -6 * reactionScale,
+          loyalty: -8 * reactionScale,
+          resentment: 4 * reactionScale,
+          suspicion: 6 * reactionScale,
+          reliability: -8 * reactionScale,
+          strategicValue: -3 * reactionScale,
+        },
+      })
+    }
+
+    refreshRealityAllianceDynamics(alliance)
+    if (alliance.fractureRisk >= 0.72) alliance.status = 'FRACTURED'
+    else refreshRealityAllianceLifecycle(alliance)
+    affected.push(alliance)
+  }
+
+  if (affected.length > 0) refreshRealityAllianceOverlaps(state)
+  return affected
+}
+
+export function chooseAllianceMemberVote(
+  state: RealityDomainState,
+  allianceId: string,
+  memberId: string,
+  options: {
+    candidateIds: string[]
+    day: number
+    draw: number
+  }
+): RealityVoteIntent {
+  const alliance = state.alliances[allianceId]
+  if (!alliance?.memberIds.includes(memberId)) throw new Error('Actor is not an alliance member')
+  const commitment = alliance.memberCommitment[memberId] ?? 0
+  const preferred = alliance.currentTargetIds.find((id) => options.candidateIds.includes(id))
+  const personal = [...options.candidateIds].sort(
+    (left, right) =>
+      (getRealityRelationship(state, memberId, left).warmth ?? 0) -
+        (getRealityRelationship(state, memberId, right).warmth ?? 0) || left.localeCompare(right)
+  )[0]
+  const followsPlan = Boolean(preferred) && options.draw < Math.min(0.95, commitment)
+  const intendedTargetId = followsPlan ? preferred : personal
+  const intent: RealityVoteIntent = {
+    actorId: memberId,
+    statedTargetId: preferred,
+    intendedTargetId,
+    confidence: followsPlan ? commitment : Math.max(0.35, 1 - commitment),
+    reasonEventIds: [],
+    day: options.day,
+  }
+  state.voteIntents[memberId] = intent
+  return intent
+}
+
+export function leakRealityAlliance(
+  state: RealityDomainState,
+  allianceId: string,
+  leakerId: string,
+  receiverIds: string[],
+  at: RealityClock
+): void {
+  const alliance = state.alliances[allianceId]
+  if (!alliance?.memberIds.includes(leakerId))
+    throw new Error('Only a member can leak the alliance')
+  if (alliance.status === 'DISSOLVED') return
+  const outsiderReceiverIds = [
+    ...new Set(receiverIds.filter((id) => !alliance.memberIds.includes(id))),
+  ]
+  if (outsiderReceiverIds.length === 0) return
+  const event = appendRealityEvent(state, {
+    ...at,
+    type: 'ALLIANCE_LEAKED',
+    allianceId: alliance.id,
+    actorId: leakerId,
+    targetIds: outsiderReceiverIds,
+    participantIds: [leakerId, ...outsiderReceiverIds],
+    witnessIds: [],
+    visibility: 'PAIR_ONLY',
+    outcome: 'SUCCESS',
+    reason: 'member_disclosed_alliance',
+    tags: ['ALLIANCE', 'LEAK'],
+    relatedFactIds: [],
+    relatedPromiseIds: alliance.sharedPromiseIds,
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+  alliance.knownLeakEventIds.push(event.id)
+  alliance.suspectedByIds = [...new Set([...alliance.suspectedByIds, ...outsiderReceiverIds])]
+  alliance.secrecy = Math.max(0, alliance.secrecy - outsiderReceiverIds.length * 0.16)
+  recordRealityAllianceLeakDiscovery(state, {
+    allianceId: alliance.id,
+    leakerId,
+    receiverIds,
+    at,
+    sourceEventId: event.id,
+  })
+  const wasFractured = alliance.status === 'FRACTURED'
+  refreshRealityAllianceDynamics(alliance)
+  if (wasFractured && alliance.fractureRisk >= 0.9) {
+    alliance.status = 'DISSOLVED'
+    alliance.currentTargetIds = []
+    alliance.fallbackTargetIds = []
+    preserveRealityAllianceRosterForMembers(state, alliance.id, at, event.id)
+    refreshRealityAllianceOverlaps(state)
+  } else if (alliance.fractureRisk >= 0.72) {
+    alliance.status = 'FRACTURED'
+  }
+  maybeExposeRealityAlliance(state, alliance.id, at, event.id)
+}
+
+export interface RomanceSettings {
+  enabled: boolean
+  allowedPair?: (leftId: string, rightId: string) => boolean
+}
+
+export function signalRealityRomance(
+  state: RealityDomainState,
+  input: {
+    actorId: string
+    targetId: string
+    at: RealityClock
+    acceptedByTarget: boolean
+    genuineIntent?: number
+    strategicIntent?: number
+    settings: RomanceSettings
+  }
+): RealityRomance | null {
+  if (
+    !input.settings.enabled ||
+    (input.settings.allowedPair && !input.settings.allowedPair(input.actorId, input.targetId))
+  ) {
+    return null
+  }
+  const id = `romance:${pairId(input.actorId, input.targetId)}`
+  const romance =
+    state.romances[id] ??
+    ({
+      id,
+      participantIds: [input.actorId, input.targetId],
+      initiatedById: input.actorId,
+      signalledInterest: {
+        [input.actorId]: true,
+        [input.targetId]: false,
+      },
+      acceptedEscalation: {
+        [input.actorId]: true,
+        [input.targetId]: false,
+      },
+      genuineIntent: {
+        [input.actorId]: input.genuineIntent ?? 0.7,
+        [input.targetId]: 0,
+      },
+      strategicIntent: {
+        [input.actorId]: input.strategicIntent ?? 0.2,
+        [input.targetId]: 0,
+      },
+      exclusivity: { [input.actorId]: false, [input.targetId]: false },
+      public: false,
+      startedAt: input.at,
+      lastUpdatedAt: input.at,
+      anchorEventIds: [],
+      strainEventIds: [],
+      status: 'SIGNALLED',
+    } satisfies RealityRomance)
+  romance.signalledInterest[input.actorId] = true
+  romance.acceptedEscalation[input.targetId] = input.acceptedByTarget
+  romance.lastUpdatedAt = input.at
+  const mutual =
+    romance.signalledInterest[input.actorId] &&
+    romance.acceptedEscalation[input.actorId] &&
+    romance.acceptedEscalation[input.targetId]
+  const event = appendRealityEvent(state, {
+    ...input.at,
+    type: mutual ? 'ROMANCE_MUTUALLY_ACCEPTED' : 'ROMANCE_SIGNALLED',
+    actorId: input.actorId,
+    targetIds: [input.targetId],
+    participantIds: [input.actorId, input.targetId],
+    witnessIds: [],
+    visibility: 'PAIR_ONLY',
+    outcome: mutual ? 'SUCCESS' : input.acceptedByTarget ? 'PARTIAL' : 'FAILURE',
+    reason: mutual ? 'mutual_acceptance' : 'one_sided_signal',
+    tags: ['ROMANCE', ...(mutual ? ['ANCHOR'] : [])],
+    relatedFactIds: [],
+    relatedPromiseIds: [],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: false,
+  })
+  if (mutual) {
+    romance.status = 'ACTIVE'
+    romance.anchorEventIds.push(event.id)
+    for (const [fromId, toId] of [
+      [input.actorId, input.targetId],
+      [input.targetId, input.actorId],
+    ] as const) {
+      applyRealityRelationshipChange(state, {
+        sourceId: fromId,
+        targetId: toId,
+        eventId: event.id,
+        day: input.at.day,
+        phase: input.at.phase,
+        anchor: 'positive',
+        deltas: { attraction: 18, intimacy: 12, warmth: 7, trust: 4 },
+      })
+    }
+  } else {
+    romance.status = 'SIGNALLED'
+    applyRealityRelationshipChange(state, {
+      sourceId: input.actorId,
+      targetId: input.targetId,
+      eventId: event.id,
+      day: input.at.day,
+      phase: input.at.phase,
+      deltas: { attraction: 10, familiarity: 2 },
+    })
+  }
+  state.romances[id] = romance
+  if (input.acceptedByTarget) {
+    recordGroundedJealousy(state, {
+      actorId: input.actorId,
+      targetId: input.targetId,
+      eventId: event.id,
+      at: input.at,
+      witnessIds: event.witnessIds,
+      publicEligible: event.publicEligible,
+    })
+  }
+  return romance
+}
+
+export function reciprocateRealityRomance(
+  state: RealityDomainState,
+  romanceId: string,
+  actorId: string,
+  at: RealityClock
+): RealityRomance {
+  const romance = state.romances[romanceId]
+  if (!romance || !romance.participantIds.includes(actorId)) {
+    throw new Error('Romance signal is not available')
+  }
+  const targetId = romance.participantIds.find((id) => id !== actorId)!
+  romance.signalledInterest[actorId] = true
+  romance.acceptedEscalation[actorId] = true
+  return signalRealityRomance(state, {
+    actorId,
+    targetId,
+    at,
+    acceptedByTarget: romance.acceptedEscalation[targetId] === true,
+    genuineIntent: romance.genuineIntent[actorId] ?? 0.7,
+    strategicIntent: romance.strategicIntent[actorId] ?? 0.2,
+    settings: { enabled: true },
+  })!
+}
+
+export function createRealityGrievance(
+  state: RealityDomainState,
+  input: {
+    id: string
+    holderId: string
+    againstId: string
+    causeEventId: string
+    severity: number
+    at: RealityClock
+  }
+): RealityGrievance {
+  const severity = Math.max(0, Math.min(100, input.severity))
+  const grievance: RealityGrievance = {
+    id: input.id,
+    holderId: input.holderId,
+    againstId: input.againstId,
+    causeEventId: input.causeEventId,
+    severity,
+    repairDebt: severity,
+    createdAt: input.at,
+    status: 'OPEN',
+    apologyEventIds: [],
+  }
+  state.grievances[grievance.id] = grievance
+  const edge = getRealityRelationship(state, input.holderId, input.againstId)
+  if (!edge.unresolvedGrievanceIds.includes(grievance.id)) {
+    edge.unresolvedGrievanceIds.push(grievance.id)
+  }
+  return grievance
+}
+
+export function applyRealityApology(
+  state: RealityDomainState,
+  input: {
+    grievanceId: string
+    apologyEventId: string
+    sincerity: number
+    accountability: number
+    at: RealityClock
+  }
+): RealityGrievance {
+  const grievance = state.grievances[input.grievanceId]
+  if (!grievance || grievance.status === 'RESOLVED') throw new Error('Grievance is not open')
+  const repair = Math.min(
+    grievance.repairDebt * 0.2,
+    Math.max(0, input.sincerity) * Math.max(0, input.accountability) * 18
+  )
+  grievance.repairDebt = Math.max(0, grievance.repairDebt - repair)
+  grievance.apologyEventIds.push(input.apologyEventId)
+  grievance.status =
+    grievance.repairDebt <= 5
+      ? 'RESOLVED'
+      : grievance.apologyEventIds.length > 0
+        ? 'REPAIRING'
+        : 'ACKNOWLEDGED'
+  applyRealityRelationshipChange(state, {
+    sourceId: grievance.holderId,
+    targetId: grievance.againstId,
+    eventId: input.apologyEventId,
+    day: input.at.day,
+    phase: input.at.phase,
+    anchor: repair >= 8 ? 'positive' : undefined,
+    deltas: {
+      trust: repair * 0.18,
+      warmth: repair * 0.2,
+      resentment: -repair,
+      suspicion: -repair * 0.25,
+    },
+  })
+  if (grievance.status === 'RESOLVED') {
+    const edge = getRealityRelationship(state, grievance.holderId, grievance.againstId)
+    edge.unresolvedGrievanceIds = edge.unresolvedGrievanceIds.filter((id) => id !== grievance.id)
+  }
+  return grievance
+}
+
+export function formRealityTruce(
+  state: RealityDomainState,
+  leftId: string,
+  rightId: string,
+  sharedThreatId: string,
+  at: RealityClock
+): void {
+  const event = appendRealityEvent(state, {
+    ...at,
+    type: 'UNEASY_TRUCE_FORMED',
+    actorId: leftId,
+    targetIds: [rightId],
+    participantIds: [leftId, rightId],
+    witnessIds: [],
+    visibility: 'PAIR_ONLY',
+    outcome: 'SUCCESS',
+    reason: `shared_threat:${sharedThreatId}`,
+    tags: ['TRUCE', 'ANCHOR'],
+    relatedFactIds: [],
+    relatedPromiseIds: [],
+    relatedThreadIds: [],
+    publicEligible: false,
+    juryEligible: true,
+  })
+  for (const [fromId, toId] of [
+    [leftId, rightId],
+    [rightId, leftId],
+  ] as const) {
+    applyRealityRelationshipChange(state, {
+      sourceId: fromId,
+      targetId: toId,
+      eventId: event.id,
+      day: at.day,
+      phase: at.phase,
+      anchor: 'positive',
+      deltas: { trust: 12, respect: 8, strategicValue: 18, resentment: -5 },
+    })
+    getRealityRelationship(state, fromId, toId).perceivedLabel = 'UNEASY_TRUCE'
+  }
+}
+
+export function migrateDramaAlliances(
+  state: RealityDomainState,
+  alliances: readonly DramaAlliance[]
+): void {
+  for (const legacy of alliances) {
+    state.allianceManagement ??= {
+      version: 1,
+      nextRequestSequence: 0,
+      requests: {},
+      processedCommands: {},
+      importedLegacyIds: [],
+      aliases: {},
+    }
+    if (state.allianceManagement.importedLegacyIds.includes(legacy.id)) continue
+    state.allianceManagement.importedLegacyIds.push(legacy.id)
+    if (state.alliances[legacy.id]) continue
+    // Drama pairs were compatibility bookkeeping. Existing canonical episodes,
+    // including ended ones, take precedence and prevent phantom pact imports.
+    const canonical = Object.values(state.alliances).find((entry) =>
+      legacy.participantIds.every(
+        (id) =>
+          entry.memberIds.includes(id) ||
+          Object.values(entry.rosterKnowledgeByActor ?? {}).some((roster) =>
+            roster.memberIds.includes(id)
+          )
+      )
+    )
+    if (canonical) {
+      state.allianceManagement.aliases[legacy.id] = canonical.id
+      continue
+    }
+    state.alliances[legacy.id] = {
+      id: legacy.id,
+      kind: legacy.participantIds.length > 2 ? 'GROUP' : 'PACT',
+      provenance: 'LEGACY',
+      memberIds: [...legacy.participantIds],
+      founderIds: [legacy.participantIds[0]],
+      leaderIds: [...legacy.primaryForIds],
+      secrecy: legacy.secrecy === 'secret' ? 0.8 : 0.1,
+      cohesion:
+        Object.values(legacy.loyaltyByPlayer).reduce((sum, value) => sum + value, 0) /
+        Math.max(1, Object.keys(legacy.loyaltyByPlayer).length) /
+        100,
+      fractureRisk: legacy.status === 'strained' ? 0.65 : legacy.status === 'broken' ? 1 : 0.2,
+      purpose: 'Migrated strategic pact',
+      currentTargetIds: [],
+      fallbackTargetIds: [],
+      sharedPromiseIds: [],
+      memberCommitment: Object.fromEntries(
+        legacy.participantIds.map((id) => [id, (legacy.loyaltyByPlayer[id] ?? 50) / 100])
+      ),
+      memberPerceivedStatus: Object.fromEntries(
+        legacy.participantIds.map((id) => [
+          id,
+          legacy.primaryForIds.includes(id) ? 'CORE' : 'REGULAR',
+        ])
+      ),
+      memberPlanBeliefs: Object.fromEntries(legacy.participantIds.map((id) => [id, []])),
+      operationalRoles: Object.fromEntries(legacy.participantIds.map((id) => [id, []])),
+      suspectedByIds: [...legacy.discoveredByIds],
+      knownLeakEventIds: [],
+      overlapAllianceIds: [],
+      lastMeeting: { day: legacy.lastUpdatedWeek, phase: 'legacy' },
+      status:
+        legacy.status === 'broken'
+          ? 'DISSOLVED'
+          : legacy.status === 'strained'
+            ? 'FRACTURED'
+            : 'ACTIVE',
+      genuine: legacy.falsePretenceByIds.length === 0,
+      infiltratorIds: [...legacy.falsePretenceByIds],
+    }
+  }
+  for (const alliance of Object.values(state.alliances)) {
+    normalizeAllianceIdentity(state, alliance)
+    refreshRealityAllianceDynamics(alliance)
+    ensureRealityAllianceName(state, alliance)
+  }
+  refreshRealityAllianceOverlaps(state)
+}

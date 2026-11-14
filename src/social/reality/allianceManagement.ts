@@ -1,0 +1,1813 @@
+import { evaluateAllianceStrategicFit } from './allianceStrategicFit'
+import type { StrategicModeContext } from '../strategicModeContext'
+import { recordAllianceRequestEvent } from './allianceRequestEvents'
+import type { AiGameIdentity } from '../../ai/aiGameIdentity'
+import {
+  ALLIANCE_LIMITS,
+  allianceKind,
+  currentAllianceCounts,
+  getCurrentPact,
+  isCurrentAlliance,
+  normalizeAllianceManagement,
+  rememberAllianceRoster,
+  synchronizeAllianceOfficers,
+} from './allianceIdentity'
+import { getRealityAllianceKnowledgeView } from './allianceKnowledge'
+import { compareSocialClock, nextAllianceDeadline } from './clock'
+import { appendRealityEvent } from './events'
+import { reconcileConvergedAllianceRosters } from './allianceRosterConvergence'
+import {
+  createRealityAlliance,
+  refreshRealityAllianceOverlaps,
+  refreshRealityAllianceDynamics,
+  removeRealityAllianceMember,
+  renameRealityAlliance,
+  strengthenRealityAlliancePair,
+} from './relationshipForms'
+import type {
+  RealityAlliance,
+  RealityAllianceRequest,
+  RealityAllianceRequestKind,
+  RealityAllianceResponse,
+  RealityAllianceResponseStyle,
+  RealityClock,
+  RealityDomainState,
+} from './types'
+
+export interface AllianceManagementContext {
+  at: RealityClock
+  /** Public rules; absent on legacy contexts. New requests pin their policy version. */
+  strategicMode?: StrategicModeContext
+  strategicPreferencesEnabled?: boolean
+  activeActorIds: readonly string[]
+  humanActorIds: readonly string[]
+  /** Real same-day AI appeals to the human power holder; not inferred from power alone. */
+  protectionAppealsByActorId?: Readonly<
+    Record<string, { recipientId: string; day: number; scenarioKey: string }>
+  >
+  powerHolderIds?: readonly string[]
+  identityByActorId?: Readonly<Record<string, AiGameIdentity>>
+  /** A Classic-only contextual boost. Other modes retain their existing odds. */
+  classicGame?: boolean
+  /** Publicly known nomination state available to autonomous faction planning. */
+  atRiskActorIds?: readonly string[]
+  /** Jurors whose witnessed relationships can inform an endgame threat read. */
+  juryActorIds?: readonly string[]
+  /** Publicly observed competition results, scaled to a small strategic-threat bonus. */
+  competitionThreatByActorId?: Readonly<Record<string, number>>
+  displayNames?: Readonly<Record<string, string>>
+  viewerActorId?: string
+  seed: number
+  disabled?: boolean
+  terminal?: boolean
+}
+
+export type AllianceManagementCommand =
+  | {
+      type: 'PROPOSE'
+      kind: RealityAllianceRequestKind
+      actorId: string
+      candidateId?: string
+      allianceId?: string
+      memberIds?: string[]
+      basePactId?: string
+      name?: string
+      leaderId?: string
+      coLeaderId?: string
+      purpose?: string
+      commandId?: string
+    }
+  | {
+      type: 'RESPOND'
+      requestId: string
+      actorId: string
+      accept: boolean
+      /** Group to leave when an invitee accepts while already at the group limit. */
+      leaveAllianceId?: string
+      commandId?: string
+    }
+  | { type: 'WITHDRAW'; requestId: string; actorId: string; commandId?: string }
+  | {
+      type: 'LEAVE' | 'REMOVE' | 'DISSOLVE' | 'CLEAR_COLEADER'
+      allianceId: string
+      actorId: string
+      targetId?: string
+      commandId?: string
+    }
+  | { type: 'KEEP_INITIAL_NAME'; allianceId: string; actorId: string; commandId?: string }
+  | { type: 'RENAME'; allianceId: string; actorId: string; name: string; commandId?: string }
+  | {
+      type: 'SUGGEST_RENAME'
+      allianceId: string
+      actorId: string
+      name: string
+      commandId?: string
+    }
+
+export interface AllianceManagementResult {
+  receiptRecorded?: boolean
+  status: 'APPLIED' | 'NO_OP' | 'REJECTED'
+  reason: string
+  allianceId?: string
+  requestId?: string
+}
+
+export function isPendingAllianceRequest(request: RealityAllianceRequest): boolean {
+  return request.status === 'VOTING' || request.status === 'CONSENT'
+}
+
+const reject = (reason: string): AllianceManagementResult => ({ status: 'REJECTED', reason })
+
+function event(
+  state: RealityDomainState,
+  alliance: RealityAlliance,
+  actorId: string,
+  type: string,
+  at: RealityClock,
+  targetIds: string[] = [],
+  options: { endReason?: string } = {}
+) {
+  return appendRealityEvent(state, {
+    ...at,
+    type,
+    allianceId: alliance.id,
+    actorId,
+    targetIds,
+    participantIds: [...alliance.memberIds],
+    witnessIds: [],
+    visibility: 'GROUP_VISIBLE',
+    outcome: 'SUCCESS',
+    reason: `management:${alliance.id}`,
+    tags: ['ALLIANCE', 'MANAGEMENT'],
+    relatedFactIds: [],
+    relatedPromiseIds: [],
+    relatedThreadIds: [],
+    ...(type === 'ALLIANCE_ENDED'
+      ? {
+          allianceSnapshot: {
+            id: alliance.id,
+            kind: allianceKind(alliance),
+            ...(alliance.name ? { name: alliance.name } : {}),
+            memberIds: [...alliance.memberIds],
+            ...(options.endReason ? { endReason: options.endReason } : {}),
+          },
+        }
+      : {}),
+    publicEligible: false,
+    juryEligible: true,
+  })
+}
+
+function endAlliance(
+  state: RealityDomainState,
+  alliance: RealityAlliance,
+  actorId: string,
+  at: RealityClock,
+  reason: string
+): void {
+  rememberAllianceRoster(alliance)
+  event(state, alliance, actorId, 'ALLIANCE_ENDED', at, [], { endReason: reason })
+  alliance.status = 'DISSOLVED'
+  alliance.endedAt = { ...at }
+  alliance.endReason = reason
+  alliance.memberIds = []
+  alliance.currentTargetIds = []
+  alliance.fallbackTargetIds = []
+  alliance.rosterRevision = (alliance.rosterRevision ?? 0) + 1
+  synchronizeAllianceOfficers(alliance)
+}
+
+function capacityProblem(
+  state: RealityDomainState,
+  memberIds: string[],
+  kind: 'PACT' | 'GROUP'
+): string | undefined {
+  if (kind === 'GROUP' && memberIds.length > ALLIANCE_LIMITS.groupMembers)
+    return 'A group can have at most six members.'
+  for (const actorId of memberIds) {
+    const counts = currentAllianceCounts(state, actorId)
+    if (kind === 'GROUP' && counts.groups >= ALLIANCE_LIMITS.groupsPerMember)
+      return 'A founder or candidate already belongs to two groups.'
+  }
+  return undefined
+}
+
+function requestProblem(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  context: AllianceManagementContext
+): string | undefined {
+  if (context.disabled || context.terminal)
+    return 'Alliance decisions are closed in this game window.'
+  if (
+    [
+      request.proposerId,
+      ...request.memberIds,
+      ...request.electorateIds,
+      ...(request.candidateId ? [request.candidateId] : []),
+    ].some((id) => !context.activeActorIds.includes(id))
+  )
+    return 'A participant is no longer in the Hub.'
+  if (request.allianceId) {
+    const alliance = state.alliances[request.allianceId]
+    if (!alliance || !isCurrentAlliance(alliance)) return 'This alliance has ended.'
+    if (
+      alliance.rosterRevision !== request.rosterRevision ||
+      alliance.governanceRevision !== request.governanceRevision
+    )
+      return 'The roster or officers changed. A new request needs fresh consent.'
+  }
+  if (request.basePactId && !isCurrentAlliance(state.alliances[request.basePactId]))
+    return 'The selected pact has ended.'
+  return undefined
+}
+
+function recordAllianceDecision(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  actorId: string,
+  accept: boolean,
+  at: RealityClock,
+  response?: RealityAllianceResponse,
+  departureAllianceId?: string
+): void {
+  const voting = request.status === 'VOTING'
+  if (voting) request.votes[actorId] = accept
+  else request.consents[actorId] = accept
+  if (response) {
+    request.responsesByActorId ??= {}
+    request.responsesByActorId[actorId] = response
+  }
+  if (request.kind === 'ADMIT' && request.candidateId === actorId && accept && departureAllianceId)
+    request.candidateDepartureAllianceId = departureAllianceId
+  recordAllianceRequestEvent(
+    state,
+    request,
+    voting ? 'ALLIANCE_REQUEST_VOTE' : 'ALLIANCE_REQUEST_CONSENT',
+    at,
+    actorId,
+    accept
+  )
+}
+
+function settle(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  status: RealityAllianceRequest['status'],
+  reason: string,
+  at: RealityClock
+): void {
+  request.status = status
+  request.reason = reason
+  request.settledAt = { ...at }
+  recordAllianceRequestEvent(state, request, `ALLIANCE_REQUEST_${status}`, at)
+}
+
+function displayMemberNames(
+  memberIds: readonly string[],
+  context: AllianceManagementContext
+): string {
+  const names = memberIds.map((id) =>
+    id === context.viewerActorId ? 'You' : (context.displayNames?.[id] ?? id)
+  )
+  if (names.length < 2) return names[0] ?? 'The group'
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
+function finalize(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  context: AllianceManagementContext
+): void {
+  const problem = requestProblem(state, request, context)
+  if (problem) {
+    settle(state, request, 'INVALIDATED', problem, context.at)
+    return
+  }
+  const alliance = request.allianceId ? state.alliances[request.allianceId] : undefined
+  let successReason = 'The agreed change is now active.'
+  if (request.kind === 'RENAME_SUGGESTION' && alliance && request.proposedName) {
+    renameRealityAlliance(state, {
+      allianceId: alliance.id,
+      actorId: alliance.leaderId!,
+      name: request.proposedName,
+      at: context.at,
+      ignoreRequestId: request.id,
+    })
+    successReason = `The alliance is now called ${request.proposedName}.`
+  } else if (request.kind === 'PACT' || request.kind === 'FOUND') {
+    const kind = request.kind === 'PACT' ? 'PACT' : 'GROUP'
+    const capacity = capacityProblem(state, request.memberIds, kind)
+    if (capacity) {
+      settle(state, request, 'INVALIDATED', capacity, context.at)
+      return
+    }
+    if (kind === 'PACT') {
+      // Once the hostility is exposed, a personal pact must remain broken
+      // until the Nemesis objective has actually been reconciled.
+      const exposedEnemy = Object.values(state.relationshipAutonomy.nemeses).some(
+        (nemesis) =>
+          nemesis.status === 'ACTIVE' &&
+          Boolean(nemesis.revealEventId) &&
+          request.memberIds.includes(nemesis.ownerId) &&
+          request.memberIds.includes(nemesis.targetId)
+      )
+      if (exposedEnemy) {
+        settle(
+          state,
+          request,
+          'INVALIDATED',
+          'Resolve the Nemesis conflict before signing another personal pact.',
+          context.at
+        )
+        return
+      }
+      const existing = getCurrentPact(state, request.memberIds[0], request.memberIds[1])
+      if (existing && existing.id !== request.basePactId) {
+        settle(state, request, 'INVALIDATED', 'This personal pact already exists.', context.at)
+        return
+      }
+    } else if (
+      Object.values(state.alliances).some(
+        (entry) =>
+          isCurrentAlliance(entry) &&
+          allianceKind(entry) === 'GROUP' &&
+          [...entry.memberIds].sort().join('~') === [...request.memberIds].sort().join('~')
+      )
+    ) {
+      settle(
+        state,
+        request,
+        'INVALIDATED',
+        'A group with this exact roster already exists.',
+        context.at
+      )
+      return
+    }
+    const created = createRealityAlliance(state, {
+      id: `alliance:${request.id}`,
+      kind,
+      createdById: request.proposerId,
+      founderIds: [...request.memberIds],
+      memberIds: [],
+      purpose: request.purpose,
+      at: context.at,
+      name: request.name,
+      leaderId: request.leaderId,
+      coLeaderId: request.coLeaderId,
+      replacesPactId: kind === 'PACT' ? request.basePactId : undefined,
+    })
+    created.initialNamePending =
+      kind === 'GROUP' &&
+      request.proposerId === context.viewerActorId &&
+      request.leaderId === context.viewerActorId
+    request.resultAllianceId = created.id
+    for (const entry of request.history ?? []) {
+      entry.allianceId = created.id
+      entry.allianceSnapshot = {
+        id: created.id,
+        kind: created.kind,
+        name: created.name,
+        memberIds: [...created.memberIds],
+      }
+      created.history ??= []
+      if (!created.history.some((existing) => existing.id === entry.id)) created.history.push(entry)
+    }
+    const members = displayMemberNames(request.memberIds, context)
+    successReason =
+      kind === 'PACT'
+        ? `${members} made it official: ${
+            context.viewerActorId && request.memberIds.includes(context.viewerActorId)
+              ? 'your'
+              : 'their'
+          } personal pact is live.`
+        : created.initialNamePending
+          ? `${members} made it official. Your new alliance is ready to be named.`
+          : `${members} made it official: ${created.name ?? 'their alliance'} is born.`
+    if (request.basePactId) {
+      const base = state.alliances[request.basePactId]
+      // Starting a wider group does not revoke an independently accepted pact.
+      if (kind === 'PACT') {
+        created.predecessorIds = [base.id]
+        endAlliance(state, base, request.proposerId, context.at, 'RECONCILED')
+        base.supersededById = created.id
+      }
+    }
+    if (kind === 'PACT') {
+      for (const [actorId, response] of Object.entries(request.responsesByActorId ?? {})) {
+        // Survival-driven acceptance is not an oath of loyalty. Keep private
+        // strategic intent separate from the externally signed personal pact.
+        if (response.strategic && created.memberIds.includes(actorId)) {
+          created.genuine = false
+          if (!created.infiltratorIds.includes(actorId)) created.infiltratorIds.push(actorId)
+        }
+        const commitment =
+          response.style === 'ENTHUSIASTIC'
+            ? 0.68
+            : response.style === 'LIMITED'
+              ? 0.32
+              : response.style === 'HESITANT'
+                ? 0.44
+                : undefined
+        if (commitment !== undefined && created.memberIds.includes(actorId)) {
+          created.memberCommitment[actorId] = response.strategic
+            ? Math.min(commitment, 0.18)
+            : commitment
+        }
+      }
+      const aiResponse = request.memberIds
+        .filter((actorId) => actorId !== request.proposerId)
+        .map((actorId) => ({ actorId, response: request.responsesByActorId?.[actorId] }))
+        .find(({ response }) => response && response.style !== 'ENTHUSIASTIC')
+      if (aiResponse?.response) {
+        const respondentName =
+          aiResponse.actorId === context.viewerActorId
+            ? 'You'
+            : (context.displayNames?.[aiResponse.actorId] ?? aiResponse.actorId)
+        const responseLabel =
+          aiResponse.response.style === 'LIMITED' ? 'agreed with limits' : 'agreed cautiously'
+        successReason = `${respondentName} ${responseLabel}: “${aiResponse.response.reason}” ${successReason}`
+      }
+    }
+  } else if (alliance && request.kind === 'ADMIT' && request.candidateId) {
+    const counts = currentAllianceCounts(state, request.candidateId)
+    if (
+      alliance.memberIds.includes(request.candidateId) ||
+      alliance.memberIds.length >= ALLIANCE_LIMITS.groupMembers
+    ) {
+      settle(
+        state,
+        request,
+        'INVALIDATED',
+        'The group has no remaining member slot or the candidate is already a member.',
+        context.at
+      )
+      return
+    }
+    const candidateId = request.candidateId
+    if (counts.groups >= ALLIANCE_LIMITS.groupsPerMember) {
+      const departure = request.candidateDepartureAllianceId
+        ? state.alliances[request.candidateDepartureAllianceId]
+        : undefined
+      if (
+        counts.groups !== ALLIANCE_LIMITS.groupsPerMember ||
+        !departure ||
+        departure.id === alliance.id ||
+        !isCurrentAlliance(departure) ||
+        allianceKind(departure) !== 'GROUP' ||
+        !departure.memberIds.includes(candidateId)
+      ) {
+        settle(
+          state,
+          request,
+          'INVALIDATED',
+          'The invitee’s current alliances changed before they could make room.',
+          context.at
+        )
+        return
+      }
+      removeRealityAllianceMember(state, {
+        allianceId: departure.id,
+        memberId: candidateId,
+        actorId: candidateId,
+        kind: 'DEFECTION',
+        at: context.at,
+      })
+    } else if (request.candidateDepartureAllianceId) {
+      settle(
+        state,
+        request,
+        'INVALIDATED',
+        'The invitee’s selected alliance is no longer a current group.',
+        context.at
+      )
+      return
+    }
+    if (
+      currentAllianceCounts(state, candidateId).groups >= ALLIANCE_LIMITS.groupsPerMember ||
+      !isCurrentAlliance(state.alliances[alliance.id])
+    ) {
+      settle(
+        state,
+        request,
+        'INVALIDATED',
+        'The invitee could not make room in time for the new alliance.',
+        context.at
+      )
+      return
+    }
+    const resultingRoster = [...alliance.memberIds, candidateId].sort()
+    const existingRosterIds = Object.values(state.alliances)
+      .filter(
+        (candidate) =>
+          candidate.id !== alliance.id &&
+          isCurrentAlliance(candidate) &&
+          allianceKind(candidate) === 'GROUP' &&
+          [...candidate.memberIds].sort().join('~') === resultingRoster.join('~')
+      )
+      .map((candidate) => candidate.id)
+    const priorMemberIds = [...alliance.memberIds]
+    alliance.memberIds.push(candidateId)
+    alliance.memberJoinSequence ??= {}
+    alliance.memberJoinSequence[candidateId] = state.nextSequence++
+    alliance.memberCommitment[candidateId] = 0.5
+    alliance.memberPerceivedStatus[candidateId] = 'REGULAR'
+    alliance.memberPlanBeliefs[candidateId] = []
+    alliance.operationalRoles[candidateId] = []
+    alliance.rosterRevision = (alliance.rosterRevision ?? 0) + 1
+    rememberAllianceRoster(alliance)
+    const recruitmentEvent = event(
+      state,
+      alliance,
+      request.proposerId,
+      'ALLIANCE_MEMBER_RECRUITED',
+      context.at,
+      [candidateId]
+    )
+    for (const memberId of priorMemberIds) {
+      strengthenRealityAlliancePair(state, memberId, candidateId, context.at, recruitmentEvent.id)
+      strengthenRealityAlliancePair(state, candidateId, memberId, context.at, recruitmentEvent.id)
+    }
+    request.resultAllianceId = alliance.id
+    const candidateName = displayMemberNames([candidateId], context)
+    successReason = `${candidateName === 'You' ? "You're in" : `${candidateName} is in`}! ${alliance.name ?? 'The alliance'} now has ${alliance.memberIds.length} members.`
+    const converged = reconcileConvergedAllianceRosters(state, context.at, existingRosterIds)
+    const closedGroup = converged.find((entry) => entry.id === alliance.id)
+    if (closedGroup?.supersededById) {
+      const survivor = state.alliances[closedGroup.supersededById]
+      request.resultAllianceId = survivor?.id ?? closedGroup.supersededById
+      successReason = `${candidateName === 'You' ? "You're in" : `${candidateName} is in`}! ${survivor?.name ?? 'The matching alliance'} already has this exact roster, so it remains the active group.`
+    }
+  } else if (
+    alliance &&
+    (request.kind === 'APPOINT' || request.kind === 'TRANSFER') &&
+    request.candidateId
+  ) {
+    if (
+      alliance.leaderId !== request.proposerId ||
+      !alliance.memberIds.includes(request.candidateId)
+    ) {
+      settle(state, request, 'INVALIDATED', 'The appointment is no longer authorized.', context.at)
+      return
+    }
+    if (request.kind === 'TRANSFER') {
+      alliance.leaderId = request.candidateId
+      alliance.coLeaderId = undefined
+    } else alliance.coLeaderId = request.candidateId
+    alliance.governanceRevision = (alliance.governanceRevision ?? 0) + 1
+    synchronizeAllianceOfficers(alliance)
+    rememberAllianceRoster(alliance)
+    event(state, alliance, request.proposerId, 'ALLIANCE_OFFICERS_CHANGED', context.at, [
+      request.candidateId,
+    ])
+    request.resultAllianceId = alliance.id
+  } else if (alliance && request.kind === 'REMOVE_SUGGESTION' && request.candidateId) {
+    const officerId = request.officerIds.find(
+      (id) => request.consents[id] === true && id !== request.candidateId
+    )
+    if (
+      !officerId ||
+      (request.candidateId === alliance.coLeaderId && officerId !== alliance.leaderId)
+    ) {
+      settle(
+        state,
+        request,
+        'INVALIDATED',
+        'An authorized officer must approve this removal.',
+        context.at
+      )
+      return
+    }
+    removeRealityAllianceMember(state, {
+      allianceId: alliance.id,
+      memberId: request.candidateId,
+      actorId: officerId,
+      kind: 'EXPELLED',
+      at: context.at,
+    })
+    request.resultAllianceId = alliance.id
+  }
+  const resulting = request.resultAllianceId ? state.alliances[request.resultAllianceId] : undefined
+  if (
+    request.strategicPolicyVersion === 1 &&
+    resulting &&
+    allianceKind(resulting) === 'GROUP' &&
+    ['FOUND', 'ADMIT'].includes(request.kind)
+  ) {
+    for (const [actorId, response] of Object.entries(request.responsesByActorId ?? {})) {
+      if (
+        !resulting.memberIds.includes(actorId) ||
+        response.style === 'DECLINED' ||
+        (request.kind === 'ADMIT' && actorId !== request.candidateId)
+      )
+        continue
+      const commitment = response.strategic
+        ? 0.25
+        : response.style === 'LIMITED'
+          ? 0.32
+          : response.style === 'HESITANT'
+            ? 0.44
+            : 0.68
+      resulting.memberCommitment[actorId] = Math.min(
+        resulting.memberCommitment[actorId] ?? 0.5,
+        commitment
+      )
+    }
+  }
+  if (resulting && request.strategicPolicyVersion === 1) refreshRealityAllianceDynamics(resulting)
+  settle(state, request, 'ACCEPTED', successReason, context.at)
+  refreshRealityAllianceOverlaps(state)
+}
+
+function allianceDecisionRoll(
+  request: RealityAllianceRequest,
+  actorId: string,
+  seed: number
+): number {
+  let hash = seed >>> 0
+  for (const character of `${request.id}:${actorId}:${request.status}`)
+    hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0
+  return hash / 0x1_0000_0000
+}
+
+function groupAlliancePotential(
+  state: RealityDomainState,
+  alliance: RealityAlliance,
+  actorId: string
+): number {
+  const otherMembers = alliance.memberIds.filter((id) => id !== actorId)
+  const relationshipValue =
+    otherMembers.reduce((total, memberId) => {
+      const relationship = state.relationships[actorId]?.[memberId]
+      return (
+        total +
+        (relationship?.trust ?? 0) * 0.28 +
+        (relationship?.loyalty ?? 0) * 0.24 +
+        (relationship?.strategicValue ?? 0) * 0.2 +
+        (relationship?.reliability ?? 0) * 0.14 +
+        (relationship?.respect ?? 0) * 0.08 +
+        (relationship?.warmth ?? 0) * 0.06
+      )
+    }, 0) / Math.max(1, otherMembers.length)
+  const statusValue =
+    alliance.status === 'FRACTURED'
+      ? -18
+      : alliance.status === 'DORMANT'
+        ? -10
+        : alliance.status === 'PROBATIONARY'
+          ? -6
+          : 3
+  const alreadyMember = alliance.memberIds.includes(actorId)
+  const commitmentValue = alreadyMember ? (alliance.memberCommitment[actorId] ?? 0.5) * 12 : 6
+  const roleValue =
+    alreadyMember && alliance.leaderId === actorId
+      ? 12
+      : alreadyMember && alliance.coLeaderId === actorId
+        ? 7
+        : 0
+
+  return (
+    relationshipValue +
+    alliance.cohesion * 18 -
+    alliance.fractureRisk * 16 +
+    commitmentValue +
+    roleValue +
+    statusValue
+  )
+}
+
+function invitationSwitchOption(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  actorId: string
+): { allianceId: string; advantage: number } | undefined {
+  if (request.kind !== 'ADMIT' || request.status !== 'CONSENT' || request.candidateId !== actorId)
+    return undefined
+  const invitedAlliance = request.allianceId ? state.alliances[request.allianceId] : undefined
+  if (!invitedAlliance || !isCurrentAlliance(invitedAlliance)) return undefined
+  const currentGroups = Object.values(state.alliances).filter(
+    (alliance) =>
+      isCurrentAlliance(alliance) &&
+      allianceKind(alliance) === 'GROUP' &&
+      alliance.memberIds.includes(actorId)
+  )
+  if (currentGroups.length !== ALLIANCE_LIMITS.groupsPerMember) return undefined
+
+  const weakest = currentGroups
+    .map((alliance) => ({ alliance, potential: groupAlliancePotential(state, alliance, actorId) }))
+    .sort(
+      (left, right) =>
+        left.potential - right.potential || left.alliance.id.localeCompare(right.alliance.id)
+    )[0]
+  if (!weakest) return undefined
+  return {
+    allianceId: weakest.alliance.id,
+    advantage: groupAlliancePotential(state, invitedAlliance, actorId) - weakest.potential,
+  }
+}
+
+function pactDecision(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  actorId: string,
+  seed: number,
+  context: AllianceManagementContext
+): { accepted: boolean; response: RealityAllianceResponse } {
+  const proposerId = request.memberIds.find((id) => id !== actorId) ?? request.proposerId
+  const relationship = state.relationships[actorId]?.[proposerId]
+  const trust = relationship?.trust ?? 0
+  const reliability = relationship?.reliability ?? 0
+  const suspicion = relationship?.suspicion ?? 0
+  const resentment = relationship?.resentment ?? 0
+  const warmth = relationship?.warmth ?? 0
+  const loyalty = relationship?.loyalty ?? 0
+  const respect = relationship?.respect ?? 0
+  const strategicValue = relationship?.strategicValue ?? 0
+
+  const privateNemesis = Object.values(state.relationshipAutonomy.nemeses).find(
+    (nemesis) =>
+      nemesis.status === 'ACTIVE' && nemesis.ownerId === actorId && nemesis.targetId === proposerId
+  )
+  if (privateNemesis?.revealEventId) {
+    return {
+      accepted: false,
+      response: {
+        style: 'DECLINED',
+        reason: 'We cannot sign another personal pact while this conflict is unresolved.',
+      },
+    }
+  }
+  const appeal = context.protectionAppealsByActorId?.[actorId]
+  const isSurvivalOffer = Boolean(
+    context.classicGame &&
+    appeal &&
+    appeal.recipientId === proposerId &&
+    appeal.day === context.at.day &&
+    request.proposerId === proposerId &&
+    context.humanActorIds.includes(proposerId) &&
+    context.powerHolderIds?.includes(proposerId) &&
+    !['EXPIRED', 'INVALIDATED'].includes(request.status)
+  )
+  const identity = context.identityByActorId?.[actorId]
+  const honorDriven =
+    ['loyal_anchor', 'romantic_loyalist', 'lone_wolf', 'antihero', 'jury_artisan'].includes(
+      identity?.archetype ?? ''
+    ) &&
+    trust <= -18 &&
+    resentment >= 30 &&
+    (identity?.survivalFocus ?? 0.5) < 0.7
+  // An occasional principled refusal is grounded in character and a real
+  // grievance, not a generic "I am better than the power player" roll.
+  const prideRefusal = Boolean(
+    isSurvivalOffer && honorDriven && allianceDecisionRoll(request, actorId, seed ^ 0x1f42b) < 0.12
+  )
+  if (prideRefusal) {
+    return {
+      accepted: false,
+      response: {
+        style: 'DECLINED',
+        reason:
+          'I know you hold the power, but I will not make a promise I do not believe in. I would rather take my chances.',
+      },
+    }
+  }
+  if (privateNemesis) {
+    // Nemeses don't sincerely commit on an ordinary trust roll. A strategically
+    // useful minority can play along, but the signed pact is flagged as false
+    // pretense when the Reality alliance is created.
+    const deceptiveOffer = isSurvivalOffer
+      ? allianceDecisionRoll(request, actorId, seed) < 0.81
+      : strategicValue >= 35 && allianceDecisionRoll(request, actorId, seed) < 0.18
+    return deceptiveOffer
+      ? {
+          accepted: true,
+          response: {
+            style: 'LIMITED',
+            strategic: true,
+            reason: isSurvivalOffer
+              ? 'You have power this week, and I need a way to survive. I can work with you for now, but I cannot promise personal trust.'
+              : 'I can cooperate for now, but I will not promise blind loyalty.',
+          },
+        }
+      : {
+          accepted: false,
+          response: {
+            style: 'DECLINED',
+            reason: 'We have unresolved conflict. I cannot commit to this pact yet.',
+          },
+        }
+  }
+
+  const proposerNetwork = new Set<string>()
+  for (const alliance of Object.values(state.alliances)) {
+    if (!isCurrentAlliance(alliance) || !alliance.memberIds.includes(proposerId)) continue
+    const knowledge = getRealityAllianceKnowledgeView(state, alliance.id, actorId)
+    if (knowledge.level === 'UNKNOWN') continue
+    for (const memberId of knowledge.knownMemberIds) {
+      if (memberId !== actorId && memberId !== proposerId) proposerNetwork.add(memberId)
+    }
+  }
+  const networkBenefit = Math.min(0.16, proposerNetwork.size * 0.04)
+
+  const knownPromises = Object.values(state.promises).filter(
+    (promise) =>
+      promise.promisorId === proposerId &&
+      (promise.beneficiaryIds.includes(actorId) ||
+        promise.witnessIds.includes(actorId) ||
+        promise.visibility === 'HOUSE_PUBLIC' ||
+        promise.visibility === 'CEREMONY_PUBLIC')
+  )
+  const keptPromises = Math.min(
+    3,
+    knownPromises.filter((promise) => promise.status === 'KEPT').length
+  )
+  const brokenPromises = Math.min(
+    3,
+    knownPromises.filter((promise) => promise.status === 'BROKEN').length
+  )
+
+  const existingAlliances = Object.values(state.alliances).filter(
+    (alliance) => isCurrentAlliance(alliance) && alliance.memberIds.includes(actorId)
+  )
+  const otherAlliances = existingAlliances.filter(
+    (alliance) => !alliance.memberIds.includes(proposerId)
+  )
+  const allianceCommitmentPressure = otherAlliances.reduce((pressure, alliance) => {
+    const allyCare = alliance.memberIds
+      .filter((memberId) => memberId !== actorId)
+      .map((memberId) => {
+        const edge = state.relationships[actorId]?.[memberId]
+        return Math.max(edge?.trust ?? 0, edge?.loyalty ?? 0, edge?.warmth ?? 0) / 100
+      })
+    const commitment = Math.max(alliance.memberCommitment[actorId] ?? 0.5, ...allyCare)
+    return pressure + Math.max(0, commitment - 0.5) * 0.3
+  }, 0)
+  const activePromises = Object.values(state.promises).filter(
+    (promise) =>
+      promise.promisorId === actorId &&
+      promise.status === 'ACTIVE' &&
+      promise.beneficiaryIds.some((id) => id !== proposerId) &&
+      /(vote|protect|safety|alliance|loyal|final two)/i.test(promise.kind)
+  ).length
+  const commitmentPressure = Math.min(0.3, allianceCommitmentPressure + activePromises * 0.06)
+
+  const contestant = state.contestants[actorId]
+  const isolated = existingAlliances.length === 0
+  const survivalNeed =
+    (contestant?.primaryGoalId === 'SURVIVE_THE_VOTE' ? 0.14 : 0) +
+    (isolated ? 0.07 : existingAlliances.length === 1 ? 0.025 : 0) +
+    Math.min(0.05, Math.max(0, contestant?.loneliness ?? 0) / 1000) +
+    Math.min(0.04, Math.max(0, contestant?.emotions.fear ?? 0) / 1500)
+
+  const fit = evaluateAllianceStrategicFit(
+    state,
+    {
+      ...context,
+      strategicMode: request.strategicPolicyVersion === 1 ? context.strategicMode : undefined,
+    },
+    actorId,
+    [proposerId]
+  )
+  const chance = Math.max(
+    0.04,
+    Math.min(
+      0.92,
+      0.44 +
+        trust * 0.0012 +
+        reliability * 0.0014 +
+        warmth * 0.0006 +
+        loyalty * 0.0005 +
+        respect * 0.0003 +
+        strategicValue * 0.0008 -
+        suspicion * 0.0007 -
+        resentment * 0.0006 +
+        networkBenefit +
+        survivalNeed +
+        keptPromises * 0.035 -
+        brokenPromises * 0.09 -
+        commitmentPressure +
+        fit.modifier
+    )
+  )
+  // A person who just sought protection usually accepts an actual offer from
+  // that power holder. The benefit is strategic, so distrust does not become
+  // instant affection; refusal still remains possible. Without a real appeal,
+  // retain the established relationship-only pact decision unchanged.
+  const highDistrust = trust <= -12 || resentment >= 40 || suspicion >= 55
+  const survivalChance = Math.max(
+    0.66,
+    Math.min(
+      0.95,
+      0.87 +
+        (identity?.survivalFocus ?? 0.5) * 0.08 +
+        (['opportunist', 'double_agent', 'puppet_master', 'strategic_operator'].includes(
+          identity?.archetype ?? ''
+        )
+          ? 0.03
+          : 0) -
+        Math.min(0.13, brokenPromises * 0.05) -
+        Math.min(0.08, commitmentPressure * 0.22) -
+        (highDistrust ? 0.09 : 0)
+    )
+  )
+  const accepted =
+    allianceDecisionRoll(request, actorId, seed) < (isSurvivalOffer ? survivalChance : chance)
+
+  let style: RealityAllianceResponseStyle
+  let reason: string
+  if (!accepted) {
+    style = 'DECLINED'
+    if (brokenPromises > 0)
+      reason = 'You have broken deals I knew about, so I cannot rely on this protection.'
+    else if (commitmentPressure >= 0.08)
+      reason =
+        'I already have people I am committed to protecting, so I will not promise to turn on them.'
+    else if (chance < 0.3) reason = 'We do not have enough trust for me to risk this pact.'
+    else
+      reason =
+        'I need to see what we can actually do for each other before I promise long-term loyalty. A pact is bigger than one safe decision.'
+  } else if (isSurvivalOffer) {
+    const strategic = highDistrust
+    style = strategic || commitmentPressure >= 0.08 ? 'LIMITED' : 'HESITANT'
+    reason = strategic
+      ? 'You have power over my survival right now. I can cooperate, but I will not pretend our trust is repaired.'
+      : commitmentPressure >= 0.08
+        ? 'Your offer gives me a route through this week, but I still have commitments to other people.'
+        : 'I came to you for help this week. I will work with you, and we can see whether that becomes a stronger partnership.'
+    return { accepted, response: { style, reason, ...(strategic ? { strategic: true } : {}) } }
+  } else if (commitmentPressure >= 0.08) {
+    style = 'LIMITED'
+    reason = 'I can work with you, but I will not break my existing commitments for this pact.'
+  } else if (chance >= 0.72 && brokenPromises === 0) {
+    style = 'ENTHUSIASTIC'
+    reason =
+      networkBenefit >= 0.08 && reliability >= 25
+        ? 'You have useful connections, and I trust you to follow through for both of us.'
+        : survivalNeed >= 0.14
+          ? 'Working together gives me a real chance to stay safe, and protection goes both ways.'
+          : reliability >= 35
+            ? 'I trust you to follow through, and this gives us both useful protection.'
+            : 'This gives us both something useful. Let us make the protection count.'
+  } else {
+    style = 'HESITANT'
+    reason = 'I will agree for now, but I need to see us follow through for each other.'
+  }
+  if (
+    request.strategicPolicyVersion === 1 &&
+    accepted &&
+    fit.reason &&
+    (fit.tactical || fit.modifier < -0.025)
+  ) {
+    return {
+      accepted,
+      response: {
+        style: 'LIMITED',
+        reason: fit.reason,
+        ...(fit.tactical ? { strategic: true } : {}),
+      },
+    }
+  }
+  return { accepted, response: { style, reason } }
+}
+
+function aiDecision(
+  state: RealityDomainState,
+  request: RealityAllianceRequest,
+  actorId: string,
+  seed: number,
+  context: AllianceManagementContext
+): { accepted: boolean; response?: RealityAllianceResponse; departureAllianceId?: string } {
+  const otherIds =
+    request.kind === 'ADMIT' && request.status === 'VOTING'
+      ? [request.candidateId!]
+      : request.memberIds.filter((id) => id !== actorId)
+  const trust =
+    otherIds.reduce((sum, id) => sum + (state.relationships[actorId]?.[id]?.trust ?? 0), 0) /
+    Math.max(1, otherIds.length)
+  if (request.kind === 'PACT') return pactDecision(state, request, actorId, seed, context)
+  if (request.kind === 'REMOVE_SUGGESTION')
+    return { accepted: (state.relationships[actorId]?.[request.candidateId!]?.trust ?? 0) < -10 }
+  if (request.kind === 'RENAME_SUGGESTION')
+    return { accepted: (state.relationships[actorId]?.[request.proposerId]?.trust ?? 0) >= 0 }
+  const fit = evaluateAllianceStrategicFit(
+    state,
+    {
+      ...context,
+      strategicMode: request.strategicPolicyVersion === 1 ? context.strategicMode : undefined,
+    },
+    actorId,
+    otherIds
+  )
+  const chance = Math.max(0.12, Math.min(0.92, 0.62 + trust / 200 + fit.modifier))
+  const isInviteeDecision =
+    request.kind === 'ADMIT' && request.status === 'CONSENT' && request.candidateId === actorId
+  const groupCount = isInviteeDecision ? currentAllianceCounts(state, actorId).groups : 0
+  if (groupCount > ALLIANCE_LIMITS.groupsPerMember)
+    return {
+      accepted: false,
+      response: {
+        style: 'DECLINED',
+        reason: 'I cannot take on another group commitment right now.',
+      },
+    }
+  const switchOption = isInviteeDecision
+    ? invitationSwitchOption(state, request, actorId)
+    : undefined
+  if (groupCount === ALLIANCE_LIMITS.groupsPerMember && !switchOption)
+    return {
+      accepted: false,
+      response: {
+        style: 'DECLINED',
+        reason: 'I cannot make room for another group commitment right now.',
+      },
+    }
+  if (switchOption) {
+    // Switching groups is a higher-risk choice than accepting an open slot.
+    // A healthier current alliance wins unless the proposed group has a clear edge.
+    const requiredAdvantage = 12
+    const decisiveAdvantage = 32
+    const acceptsSwitch =
+      (switchOption.advantage >= decisiveAdvantage && request.strategicPolicyVersion !== 1) ||
+      (switchOption.advantage >= requiredAdvantage &&
+        allianceDecisionRoll(request, actorId, seed) <
+          Math.min(
+            0.82,
+            chance + Math.min(0.16, (switchOption.advantage - requiredAdvantage) / 160)
+          ))
+    return {
+      accepted: acceptsSwitch,
+      ...(acceptsSwitch ? { departureAllianceId: switchOption.allianceId } : {}),
+      response: {
+        style: acceptsSwitch ? 'HESITANT' : 'DECLINED',
+        reason: acceptsSwitch
+          ? 'This group offers a stronger path for me, so I am willing to leave a weaker alliance.'
+          : 'My current alliances still feel safer than risking a switch to a new group.',
+      },
+    }
+  }
+  const accepted = allianceDecisionRoll(request, actorId, seed) < chance
+  return {
+    accepted,
+    ...(request.strategicPolicyVersion === 1
+      ? {
+          response: {
+            style: !accepted
+              ? ('DECLINED' as const)
+              : fit.tactical || fit.modifier < -0.025
+                ? ('LIMITED' as const)
+                : chance >= 0.75
+                  ? ('ENTHUSIASTIC' as const)
+                  : ('HESITANT' as const),
+            reason: accepted
+              ? fit.reason || 'I can work with these terms, while keeping my own decisions.'
+              : 'I cannot commit to these terms yet. ' +
+                (fit.reason || 'I need a more reliable fit with my current commitments.'),
+            ...(accepted && fit.tactical ? { strategic: true } : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+function admissionVoteSummary(
+  request: RealityAllianceRequest,
+  context: AllianceManagementContext
+): { approved: boolean; summary: string } {
+  const displayName = (id: string) =>
+    id === context.viewerActorId ? 'You' : (context.displayNames?.[id] ?? id)
+  const yesVotes = request.electorateIds.filter((id) => request.votes[id] === true).length
+  const noVotes = request.electorateIds.filter((id) => request.votes[id] === false).length
+  const missingVotes = request.electorateIds.length - yesVotes - noVotes
+  const opposedOrMissing = request.electorateIds.length - yesVotes
+  const tied = yesVotes === opposedOrMissing
+  const leaderVote = request.leaderId ? request.votes[request.leaderId] : undefined
+  const approved = yesVotes > opposedOrMissing || (tied && leaderVote === true)
+  const ballots = request.electorateIds.map((id) => {
+    const vote = request.votes[id]
+    return `${displayName(id)} ${vote === true ? 'voted yes' : vote === false ? 'voted no' : 'did not vote'}`
+  })
+  const tally = `${yesVotes} yes, ${noVotes} no${missingVotes ? `, ${missingVotes} did not vote` : ''}`
+  const decision = tied
+    ? request.leaderId && leaderVote !== undefined
+      ? `${missingVotes ? 'With missing votes counted against approval, ' : ''}the vote was tied ${yesVotes}–${opposedOrMissing}; leader ${displayName(request.leaderId)} broke the tie with a ${leaderVote ? 'yes' : 'no'} vote.`
+      : `${missingVotes ? 'With missing votes counted against approval, ' : ''}the vote was tied ${yesVotes}–${opposedOrMissing}, and the leader did not vote yes to break it.`
+    : approved
+      ? `${yesVotes} of ${request.electorateIds.length} members voted yes, so the proposal passed.`
+      : `Only ${yesVotes} of ${request.electorateIds.length} members voted yes, so the proposal did not win a majority.`
+  return {
+    approved,
+    summary: `Votes: ${ballots.join('; ')}. Tally: ${tally}. ${decision}${request.electorateIds.some((id) => !context.humanActorIds.includes(id)) ? (request.strategicPolicyVersion === 1 ? ' AI members weigh trust, current risks and the proposed terms.' : ' AI members weigh their current trust in the invitee.') : ''}`,
+  }
+}
+
+export function canSeeAllianceRequest(request: RealityAllianceRequest, actorId: string): boolean {
+  return (
+    request.memberIds.includes(actorId) ||
+    request.proposerId === actorId ||
+    Boolean(request.candidateInvitedAt && request.candidateId === actorId)
+  )
+}
+
+export function allianceRequestDecisionActors(request: RealityAllianceRequest): string[] {
+  if (request.status === 'VOTING')
+    return request.electorateIds.filter((id) => request.votes[id] === undefined)
+  if (request.status !== 'CONSENT') return []
+  const actors =
+    request.kind === 'PACT' || request.kind === 'FOUND'
+      ? request.memberIds
+      : request.kind === 'RENAME_SUGGESTION'
+        ? request.leaderId
+          ? [request.leaderId]
+          : []
+        : request.kind === 'REMOVE_SUGGESTION'
+          ? request.officerIds.filter((id) => id !== request.candidateId)
+          : request.candidateId
+            ? [request.candidateId]
+            : []
+  return actors.filter((id) => request.consents[id] === undefined)
+}
+
+export function advanceAllianceRequests(
+  state: RealityDomainState,
+  context: AllianceManagementContext
+): boolean {
+  const initialSequence = state.nextSequence
+  const initialRequests = state.allianceManagement?.requests
+  const initialReceipts = state.allianceManagement?.processedCommands
+  normalizeAllianceManagement(state)
+  const normalizedRecordsChanged =
+    initialRequests !== state.allianceManagement.requests ||
+    initialReceipts !== state.allianceManagement.processedCommands
+  for (const request of Object.values(state.allianceManagement.requests)) {
+    if (!isPendingAllianceRequest(request)) continue
+    const problem = requestProblem(state, request, context)
+    if (problem) {
+      settle(state, request, 'INVALIDATED', problem, context.at)
+      continue
+    }
+    for (const actorId of allianceRequestDecisionActors(request)) {
+      if (context.humanActorIds.includes(actorId)) continue
+      const decision = aiDecision(state, request, actorId, context.seed, context)
+      recordAllianceDecision(
+        state,
+        request,
+        actorId,
+        decision.accepted,
+        context.at,
+        decision.response,
+        decision.departureAllianceId
+      )
+    }
+    const overdue = compareSocialClock(request.deadline, context.at) < 0
+    if (request.status === 'VOTING') {
+      if (!overdue && allianceRequestDecisionActors(request).length > 0) continue
+      const decision = admissionVoteSummary(request, context)
+      request.voteSummary = decision.summary
+      if (!decision.approved) {
+        settle(state, request, 'DECLINED', 'The group did not approve the invitation.', context.at)
+        continue
+      }
+      request.status = 'CONSENT'
+      const candidateName =
+        context.displayNames?.[request.candidateId!] ?? request.candidateId ?? 'the candidate'
+      const allianceName =
+        state.alliances[request.allianceId!]?.name ?? request.name ?? 'the alliance'
+      request.reason = `${allianceName} approved inviting ${candidateName}. The invitation is waiting for their acceptance.`
+      request.candidateInvitedAt = { ...context.at }
+      request.deadline = nextAllianceDeadline(context.at)
+      recordAllianceRequestEvent(state, request, 'ALLIANCE_INVITATION_SENT', context.at)
+      const alliance = state.alliances[request.allianceId!]
+      alliance.rosterKnowledgeByActor ??= {}
+      alliance.rosterKnowledgeByActor[request.candidateId!] = {
+        memberIds: [...alliance.memberIds],
+        rosterRevision: alliance.rosterRevision ?? 0,
+        name: alliance.name,
+        leaderId: alliance.leaderId,
+        coLeaderId: alliance.coLeaderId,
+      }
+      // Candidate consent is a separate stage with its own complete window.
+      if (!context.humanActorIds.includes(request.candidateId!)) {
+        const decision = aiDecision(state, request, request.candidateId!, context.seed, context)
+        recordAllianceDecision(
+          state,
+          request,
+          request.candidateId!,
+          decision.accepted,
+          context.at,
+          decision.response,
+          decision.departureAllianceId
+        )
+      }
+    }
+    if (request.status === 'CONSENT') {
+      const answers = Object.values(request.consents)
+      if (request.kind === 'REMOVE_SUGGESTION' && answers.includes(true)) {
+        finalize(state, request, context)
+        continue
+      }
+      if (request.kind === 'RENAME_SUGGESTION') {
+        if (answers.includes(false)) {
+          settle(
+            state,
+            request,
+            'DECLINED',
+            'The leader declined the rename suggestion.',
+            context.at
+          )
+          continue
+        }
+        if (allianceRequestDecisionActors(request).length === 0) {
+          finalize(state, request, context)
+          continue
+        }
+        if (overdue)
+          settle(
+            state,
+            request,
+            'EXPIRED',
+            'The response window ended without a decision.',
+            context.at
+          )
+        continue
+      }
+      if (request.kind !== 'REMOVE_SUGGESTION' && answers.includes(false)) {
+        settle(
+          state,
+          request,
+          'DECLINED',
+          request.kind === 'ADMIT'
+            ? 'The invited candidate declined and was not added to the group.'
+            : (request.memberIds
+                .map((actorId) => request.responsesByActorId?.[actorId])
+                .find((response) => response?.style === 'DECLINED')?.reason ??
+                'The proposed terms were declined.'),
+          context.at
+        )
+        continue
+      }
+      if (allianceRequestDecisionActors(request).length === 0) {
+        if (request.kind === 'REMOVE_SUGGESTION')
+          settle(state, request, 'DECLINED', 'The officers declined the suggestion.', context.at)
+        else finalize(state, request, context)
+      } else if (compareSocialClock(request.deadline, context.at) < 0)
+        settle(
+          state,
+          request,
+          'EXPIRED',
+          'The response window ended without complete consent.',
+          context.at
+        )
+    }
+  }
+  return normalizedRecordsChanged || state.nextSequence !== initialSequence
+}
+
+function propose(
+  state: RealityDomainState,
+  command: Extract<AllianceManagementCommand, { type: 'PROPOSE' }>,
+  context: AllianceManagementContext,
+  advance = true
+): AllianceManagementResult {
+  const alliance = command.allianceId ? state.alliances[command.allianceId] : undefined
+  if (
+    command.allianceId &&
+    (!alliance || !isCurrentAlliance(alliance) || !alliance.memberIds.includes(command.actorId))
+  )
+    return reject('Choose a current alliance you belong to.')
+  const members = [
+    ...new Set(
+      command.kind === 'PACT'
+        ? [command.actorId, command.candidateId ?? '']
+        : command.kind === 'FOUND'
+          ? [command.actorId, ...(command.memberIds ?? [])]
+          : (alliance?.memberIds ?? [])
+    ),
+  ]
+  if (
+    members.some((id) => !id || !context.activeActorIds.includes(id)) ||
+    (command.candidateId && !context.activeActorIds.includes(command.candidateId))
+  )
+    return reject('Every participant must still be in the Hub.')
+  if (command.kind === 'PACT') {
+    if (members.length !== 2) return reject('A personal pact needs two different people.')
+    const pact = getCurrentPact(state, members[0], members[1])
+    if (pact && !(pact.provenance === 'UNRESOLVED' && command.basePactId === pact.id))
+      return { status: 'NO_OP', reason: 'You already share a personal pact.', allianceId: pact.id }
+  }
+  if (command.kind === 'FOUND') {
+    const pendingFounding = Object.values(state.allianceManagement.requests).find(
+      (entry) =>
+        entry.kind === 'FOUND' &&
+        entry.proposerId === command.actorId &&
+        isPendingAllianceRequest(entry)
+    )
+    if (pendingFounding)
+      return {
+        status: 'NO_OP',
+        reason: 'Your founding draft is already waiting for consent.',
+        requestId: pendingFounding.id,
+      }
+  }
+  if (command.kind === 'FOUND' && members.length < 3)
+    return reject('Founding a group needs at least three people.')
+  if (
+    command.kind === 'FOUND' &&
+    Object.values(state.alliances).some(
+      (entry) =>
+        isCurrentAlliance(entry) &&
+        allianceKind(entry) === 'GROUP' &&
+        [...entry.memberIds].sort().join('~') === [...members].sort().join('~')
+    )
+  )
+    return { status: 'NO_OP', reason: 'A group with this exact roster already exists.' }
+  if (command.basePactId) {
+    const base = state.alliances[command.basePactId]
+    if (
+      !base ||
+      !isCurrentAlliance(base) ||
+      allianceKind(base) !== 'PACT' ||
+      !base.memberIds.every((id) => members.includes(id))
+    )
+      return reject('The selected pact must belong to the agreed founding roster.')
+    if (command.kind === 'FOUND' && base.provenance === 'UNRESOLVED')
+      return reject('End or mutually renew the unresolved personal pact before converting it.')
+  }
+  if (command.kind === 'PACT' || command.kind === 'FOUND') {
+    const capacity = capacityProblem(state, members, command.kind === 'PACT' ? 'PACT' : 'GROUP')
+    if (capacity) return reject(capacity)
+  } else if (!alliance || allianceKind(alliance) !== 'GROUP')
+    return reject('This decision requires a group alliance.')
+  if (command.kind === 'ADMIT') {
+    const pendingAdmission = Object.values(state.allianceManagement.requests).find(
+      (entry) =>
+        entry.kind === 'ADMIT' &&
+        entry.allianceId === command.allianceId &&
+        isPendingAllianceRequest(entry)
+    )
+    if (pendingAdmission)
+      return {
+        status: 'NO_OP',
+        reason: 'This group already has an admission decision pending.',
+        requestId: pendingAdmission.id,
+      }
+    if (!command.candidateId || members.includes(command.candidateId))
+      return reject('Choose someone outside this group.')
+    if (members.length >= ALLIANCE_LIMITS.groupMembers)
+      return reject('This group has no remaining member slot.')
+  }
+  if (command.kind === 'APPOINT' || command.kind === 'TRANSFER') {
+    if (alliance?.leaderId !== command.actorId)
+      return reject('Only the leader may offer an officer role.')
+    if (
+      !command.candidateId ||
+      !members.includes(command.candidateId) ||
+      command.candidateId === command.actorId
+    )
+      return reject('Choose another current group member.')
+    if (
+      Object.values(state.allianceManagement.requests).some(
+        (request) =>
+          isPendingAllianceRequest(request) &&
+          request.allianceId === command.allianceId &&
+          ['APPOINT', 'TRANSFER'].includes(request.kind)
+      )
+    )
+      return reject('An officer offer is already awaiting a response.')
+  }
+  if (
+    command.kind === 'REMOVE_SUGGESTION' &&
+    (!command.candidateId ||
+      !members.includes(command.candidateId) ||
+      command.candidateId === command.actorId ||
+      command.candidateId === alliance?.leaderId)
+  )
+    return reject('Choose another removable group member.')
+  const matching = Object.values(state.allianceManagement.requests).find(
+    (request) =>
+      request.kind === command.kind &&
+      request.allianceId === command.allianceId &&
+      (command.kind === 'PACT'
+        ? [...request.memberIds].sort().join('~') === [...members].sort().join('~')
+        : request.candidateId === command.candidateId) &&
+      (command.kind !== 'FOUND' ||
+        [...request.memberIds].sort().join('~') === [...members].sort().join('~')) &&
+      (command.kind !== 'REMOVE_SUGGESTION' || request.proposerId === command.actorId) &&
+      (isPendingAllianceRequest(request) ||
+        (['DECLINED', 'EXPIRED'].includes(request.status) &&
+          request.settledAt?.day === context.at.day))
+  )
+  if (matching)
+    return {
+      status: 'NO_OP',
+      reason: isPendingAllianceRequest(matching)
+        ? 'This request is already pending; its deadline is unchanged.'
+        : 'Give this decision until the next game day before asking again.',
+      requestId: matching.id,
+    }
+  const leaderId =
+    command.kind === 'FOUND' ? command.actorId : (alliance?.leaderId ?? alliance?.createdById)
+  if (
+    command.kind === 'FOUND' &&
+    (!members.includes(leaderId!) ||
+      (command.coLeaderId &&
+        (!members.includes(command.coLeaderId) || command.coLeaderId === leaderId)))
+  )
+    return reject('The proposed officers must be different founding members.')
+  const id = `request:${state.allianceManagement.nextRequestSequence++}`
+  const request: RealityAllianceRequest = {
+    id,
+    ...(context.strategicPreferencesEnabled !== false &&
+    ['classic', 'vox'].includes(context.strategicMode?.format ?? '')
+      ? { strategicPolicyVersion: 1 as const }
+      : {}),
+    kind: command.kind,
+    status: command.kind === 'ADMIT' ? 'VOTING' : 'CONSENT',
+    proposerId: command.actorId,
+    allianceId: command.allianceId,
+    candidateId: command.candidateId,
+    memberIds: members,
+    electorateIds: command.kind === 'ADMIT' ? [...members] : [],
+    officerIds: alliance ? [...alliance.leaderIds] : [],
+    votes: command.kind === 'ADMIT' ? { [command.actorId]: true } : {},
+    consents:
+      command.kind === 'PACT' || command.kind === 'FOUND' ? { [command.actorId]: true } : {},
+    rosterRevision: alliance?.rosterRevision,
+    governanceRevision: alliance?.governanceRevision,
+    leaderId,
+    coLeaderId: command.coLeaderId ?? alliance?.coLeaderId,
+    basePactId: command.basePactId,
+    name: alliance?.name ?? command.name?.trim().replace(/\s+/g, ' ').slice(0, 28),
+    purpose: command.purpose?.trim() || 'Mutual protection',
+    createdAt: { ...context.at },
+    deadline: nextAllianceDeadline(context.at),
+  }
+  state.allianceManagement.requests[id] = request
+  recordAllianceRequestEvent(state, request, 'ALLIANCE_REQUEST_SUBMITTED', context.at)
+  if (request.votes[command.actorId] === true)
+    recordAllianceRequestEvent(
+      state,
+      request,
+      'ALLIANCE_REQUEST_VOTE',
+      context.at,
+      command.actorId,
+      true
+    )
+  if (advance) advanceAllianceRequests(state, context)
+  return {
+    status: 'APPLIED',
+    reason: request.reason ?? 'The request is waiting for the required decisions.',
+    requestId: id,
+    allianceId: request.resultAllianceId,
+  }
+}
+
+function suggestAllianceRename(
+  state: RealityDomainState,
+  command: Extract<AllianceManagementCommand, { type: 'SUGGEST_RENAME' }>,
+  context: AllianceManagementContext
+): AllianceManagementResult {
+  const alliance = state.alliances[command.allianceId]
+  if (!alliance || !isCurrentAlliance(alliance) || allianceKind(alliance) !== 'GROUP')
+    return reject('Choose a current group alliance.')
+  if (!alliance.leaderId) return reject('This group has no current leader.')
+  if (!alliance.memberIds.includes(command.actorId))
+    return reject('Only a current member can suggest a rename.')
+  if (alliance.leaderId === command.actorId)
+    return reject('As leader, you can rename the alliance directly.')
+  const leaderId = alliance.leaderId
+  const proposedName = command.name.trim().replace(/\s+/g, ' ').slice(0, 28)
+  if (proposedName.length < 2) return reject('Alliance names must be 2 to 28 characters.')
+  if (proposedName === alliance.name)
+    return { status: 'NO_OP', reason: 'That is already the alliance name.' }
+  const pending = Object.values(state.allianceManagement.requests).find(
+    (request) =>
+      request.kind === 'RENAME_SUGGESTION' &&
+      request.allianceId === alliance.id &&
+      isPendingAllianceRequest(request)
+  )
+  if (pending)
+    return {
+      status: 'NO_OP',
+      reason: 'A rename suggestion is already awaiting the leader.',
+      requestId: pending.id,
+    }
+
+  const id = `request:${state.allianceManagement.nextRequestSequence++}`
+  const request: RealityAllianceRequest = {
+    id,
+    kind: 'RENAME_SUGGESTION',
+    status: 'CONSENT',
+    proposerId: command.actorId,
+    allianceId: alliance.id,
+    memberIds: [...alliance.memberIds],
+    electorateIds: [],
+    officerIds: [leaderId],
+    votes: {},
+    consents: {},
+    rosterRevision: alliance.rosterRevision,
+    governanceRevision: alliance.governanceRevision,
+    leaderId,
+    name: alliance.name,
+    proposedName,
+    purpose: 'Suggest an alliance rename',
+    createdAt: { ...context.at },
+    deadline: nextAllianceDeadline(context.at),
+  }
+  state.allianceManagement.requests[id] = request
+  recordAllianceRequestEvent(state, request, 'ALLIANCE_REQUEST_SUBMITTED', context.at)
+  advanceAllianceRequests(state, context)
+  return {
+    status: 'APPLIED',
+    reason:
+      request.reason ??
+      `Rename suggestion sent to ${context.displayNames?.[leaderId] ?? 'the leader'} for approval.`,
+    requestId: id,
+    allianceId: alliance.id,
+  }
+}
+
+export function manageAlliance(
+  state: RealityDomainState,
+  command: AllianceManagementCommand,
+  context: AllianceManagementContext
+): AllianceManagementResult {
+  normalizeAllianceManagement(state)
+  const receipt = command.commandId && state.allianceManagement.processedCommands[command.commandId]
+  if (receipt)
+    return { ...receipt, status: 'NO_OP', reason: 'This command has already been processed.' }
+  advanceAllianceRequests(state, context)
+  let result: AllianceManagementResult
+  if (context.disabled || context.terminal || !context.activeActorIds.includes(command.actorId))
+    result = reject('Alliance management is unavailable for this contestant or game window.')
+  else if (command.type === 'PROPOSE') result = propose(state, command, context)
+  else if (command.type === 'SUGGEST_RENAME')
+    result = suggestAllianceRename(state, command, context)
+  else if (command.type === 'RESPOND' || command.type === 'WITHDRAW') {
+    const request = state.allianceManagement.requests[command.requestId]
+    if (!request || !isPendingAllianceRequest(request))
+      result = {
+        status: 'NO_OP',
+        reason: request?.reason ?? 'This request is no longer pending.',
+        requestId: command.requestId,
+      }
+    else if (command.type === 'WITHDRAW') {
+      if (request.proposerId !== command.actorId)
+        result = reject('Only the proposer may withdraw this request.')
+      else {
+        settle(state, request, 'WITHDRAWN', 'The proposer withdrew this request.', context.at)
+        result = { status: 'APPLIED', reason: request.reason!, requestId: request.id }
+      }
+    } else if (!allianceRequestDecisionActors(request).includes(command.actorId))
+      result = reject('You have already answered or are not a decision maker for this request.')
+    else {
+      const acceptingInvite =
+        request.kind === 'ADMIT' && request.candidateId === command.actorId && command.accept
+      const groupCount = acceptingInvite ? currentAllianceCounts(state, command.actorId).groups : 0
+      const departure = command.leaveAllianceId
+        ? state.alliances[command.leaveAllianceId]
+        : undefined
+      const decisionError = acceptingInvite
+        ? groupCount > ALLIANCE_LIMITS.groupsPerMember
+          ? 'This contestant has too many current group commitments to switch with one departure.'
+          : groupCount === ALLIANCE_LIMITS.groupsPerMember
+            ? !departure ||
+              departure.id === request.allianceId ||
+              !isCurrentAlliance(departure) ||
+              allianceKind(departure) !== 'GROUP' ||
+              !departure.memberIds.includes(command.actorId)
+              ? 'Choose one current alliance to leave before accepting this invitation.'
+              : undefined
+            : command.leaveAllianceId
+              ? 'You do not need to leave an alliance to accept this invitation.'
+              : undefined
+        : undefined
+      if (decisionError) result = reject(decisionError)
+      else {
+        recordAllianceDecision(
+          state,
+          request,
+          command.actorId,
+          command.accept,
+          context.at,
+          undefined,
+          acceptingInvite ? departure?.id : undefined
+        )
+        advanceAllianceRequests(state, context)
+        result = {
+          status: 'APPLIED',
+          reason: request.reason ?? 'Your decision was recorded.',
+          requestId: request.id,
+          allianceId: request.resultAllianceId,
+        }
+      }
+    }
+  } else {
+    const alliance = state.alliances[command.allianceId]
+    if (!alliance || !isCurrentAlliance(alliance) || !alliance.memberIds.includes(command.actorId))
+      result = {
+        status: 'NO_OP',
+        reason: 'You no longer belong to this commitment.',
+        allianceId: command.allianceId,
+      }
+    else if (command.type === 'KEEP_INITIAL_NAME') {
+      if (allianceKind(alliance) !== 'GROUP' || alliance.leaderId !== command.actorId)
+        result = reject('Only the group leader can confirm its initial name.')
+      else if (!alliance.initialNamePending)
+        result = { status: 'NO_OP', reason: 'The alliance already has a confirmed name.' }
+      else {
+        try {
+          renameRealityAlliance(state, {
+            allianceId: alliance.id,
+            actorId: command.actorId,
+            name: alliance.name ?? 'The Winners',
+            at: context.at,
+          })
+          result = {
+            status: 'APPLIED',
+            reason: `${alliance.name ?? 'The alliance'} will keep its suggested name.`,
+            allianceId: alliance.id,
+          }
+        } catch (error) {
+          result = reject(
+            error instanceof Error ? error.message : 'The alliance name could not be confirmed.'
+          )
+        }
+      }
+    } else if (command.type === 'LEAVE') {
+      if (allianceKind(alliance) === 'PACT')
+        endAlliance(state, alliance, command.actorId, context.at, 'ENDED_BY_PARTNER')
+      else
+        removeRealityAllianceMember(state, {
+          allianceId: alliance.id,
+          memberId: command.actorId,
+          actorId: command.actorId,
+          kind: 'VOLUNTARY',
+          at: context.at,
+        })
+      result = {
+        status: 'APPLIED',
+        reason: 'You left this commitment. Other independent agreements remain.',
+        allianceId: alliance.id,
+      }
+    } else if (command.type === 'RENAME') {
+      if (allianceKind(alliance) !== 'GROUP' || alliance.leaderId !== command.actorId)
+        result = reject('Only the group leader may rename the group.')
+      else {
+        try {
+          const normalizedName = command.name.trim().replace(/\s+/g, ' ').slice(0, 28)
+          if (normalizedName === alliance.name && !alliance.initialNamePending) {
+            result = { status: 'NO_OP', reason: 'The alliance already has that name.' }
+          } else {
+            const firstName = alliance.initialNamePending === true
+            renameRealityAlliance(state, {
+              allianceId: alliance.id,
+              actorId: command.actorId,
+              name: command.name,
+              at: context.at,
+            })
+            result = {
+              status: 'APPLIED',
+              reason: firstName
+                ? `You named the alliance ${alliance.name}.`
+                : `The alliance is now called ${alliance.name}.`,
+              allianceId: alliance.id,
+            }
+          }
+        } catch (error) {
+          result = reject(
+            error instanceof Error ? error.message : 'The alliance could not be renamed.'
+          )
+        }
+      }
+    } else if (command.type === 'DISSOLVE') {
+      if (allianceKind(alliance) !== 'GROUP' || alliance.leaderId !== command.actorId)
+        result = reject('Only the group leader may dissolve the group.')
+      else {
+        endAlliance(state, alliance, command.actorId, context.at, 'DISSOLVED_BY_LEADER')
+        result = {
+          status: 'APPLIED',
+          reason: 'The group has ended for every member.',
+          allianceId: alliance.id,
+        }
+      }
+    } else if (command.type === 'CLEAR_COLEADER') {
+      if (alliance.leaderId !== command.actorId)
+        result = reject('Only the leader may clear the co-leader role.')
+      else if (!alliance.coLeaderId)
+        result = { status: 'NO_OP', reason: 'There is no co-leader to remove.' }
+      else {
+        alliance.coLeaderId = undefined
+        alliance.governanceRevision = (alliance.governanceRevision ?? 0) + 1
+        synchronizeAllianceOfficers(alliance)
+        rememberAllianceRoster(alliance)
+        event(state, alliance, command.actorId, 'ALLIANCE_OFFICERS_CHANGED', context.at)
+        result = {
+          status: 'APPLIED',
+          reason: 'The co-leader is now a regular member.',
+          allianceId: alliance.id,
+        }
+      }
+    } else if (
+      !command.targetId ||
+      !alliance.memberIds.includes(command.targetId) ||
+      command.targetId === command.actorId ||
+      command.targetId === alliance.leaderId ||
+      !alliance.leaderIds.includes(command.actorId) ||
+      (command.targetId === alliance.coLeaderId && command.actorId !== alliance.leaderId)
+    )
+      result = reject('Your role does not allow removing that member.')
+    else {
+      removeRealityAllianceMember(state, {
+        allianceId: alliance.id,
+        memberId: command.targetId,
+        actorId: command.actorId,
+        kind: 'EXPELLED',
+        at: context.at,
+      })
+      result = {
+        status: 'APPLIED',
+        reason: 'The member was removed from this group.',
+        allianceId: alliance.id,
+      }
+    }
+  }
+  advanceAllianceRequests(state, context)
+  refreshRealityAllianceOverlaps(state)
+  if (command.commandId)
+    state.allianceManagement.processedCommands[command.commandId] = { ...result }
+  return result
+}
+
+/** Called only after an interaction has recorded both participants' acceptance. */
+export function finalizeAcceptedPersonalPact(
+  state: RealityDomainState,
+  input: {
+    actorId: string
+    targetId: string
+    at: RealityClock
+    interactionId: string
+    purpose?: string
+    displayNames?: Readonly<Record<string, string>>
+    humanActorIds?: readonly string[]
+    viewerActorId?: string
+  }
+): AllianceManagementResult {
+  const context: AllianceManagementContext = {
+    at: input.at,
+    activeActorIds: [input.actorId, input.targetId],
+    humanActorIds: input.humanActorIds ?? [],
+    displayNames: input.displayNames,
+    viewerActorId: input.viewerActorId ?? input.humanActorIds?.[0],
+    seed: 0,
+  }
+  normalizeAllianceManagement(state)
+  const receiptId = `accepted-pact:${input.interactionId}`
+  const receipt = state.allianceManagement.processedCommands[receiptId]
+  if (receipt)
+    return {
+      ...receipt,
+      status: 'NO_OP',
+      reason: 'This accepted interaction has already been processed.',
+    }
+  const existing = getCurrentPact(state, input.actorId, input.targetId)
+  if (existing) {
+    const result: AllianceManagementResult = {
+      status: 'NO_OP',
+      reason: 'The personal pact is already active.',
+      allianceId: existing.id,
+    }
+    state.allianceManagement.processedCommands[receiptId] = result
+    return result
+  }
+  const result = propose(
+    state,
+    {
+      type: 'PROPOSE',
+      kind: 'PACT',
+      actorId: input.actorId,
+      candidateId: input.targetId,
+      purpose: input.purpose,
+    },
+    context,
+    false
+  )
+  if (!result.requestId || result.status !== 'APPLIED') {
+    state.allianceManagement.processedCommands[receiptId] = result
+    return result
+  }
+  const request = state.allianceManagement.requests[result.requestId]
+  request.consents = { [input.actorId]: true, [input.targetId]: true }
+  finalize(state, request, context)
+  const finalized =
+    request.status === 'ACCEPTED'
+      ? {
+          status: 'APPLIED' as const,
+          reason: request.reason!,
+          allianceId: request.resultAllianceId,
+          requestId: request.id,
+        }
+      : reject(request.reason ?? 'The pact could not be finalized.')
+  state.allianceManagement.processedCommands[receiptId] = finalized
+  return finalized
+}

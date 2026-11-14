@@ -1,0 +1,358 @@
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import {
+  addRealityFact,
+  createDirectedRelationship,
+  createInitialRealityDomainState,
+  createRealityAlliance,
+  createRealityNemesisObjective,
+  learnRealityFact,
+  normalizeRealityDomainState,
+  recordRelationshipEvidence,
+  reconcileNemesisWithVoluntarySafety,
+  recordRealityAllianceBetrayal,
+  recordRealityAllianceDiscovery,
+} from '../../../social/reality'
+import type { Player } from '../../../types'
+import RealityLedger from '../RealityLedger'
+import { advanceNemesisNarrative } from '../../../social/reality/nemesisNarrative'
+
+const players = [
+  { id: 'human', name: 'You', status: 'active', isUser: true },
+  { id: 'lia', name: 'Lia', status: 'active' },
+  { id: 'kai', name: 'Kai', status: 'active' },
+  { id: 'nova', name: 'Nova', status: 'active' },
+] as Player[]
+
+describe('RealityLedger privacy projection', () => {
+  it('keeps an unrevealed Nemesis out of Hub stories even with unrelated bond evidence', () => {
+    const reality = createInitialRealityDomainState()
+    createRealityNemesisObjective(reality, {
+      ownerId: 'lia',
+      targetId: 'human',
+      sourceEventId: 'private-hostility',
+      reason: 'SOCIAL_REACH',
+      at: { day: 3, phase: 'social_1' },
+    })
+    // Being friendly once is not evidence that Lia secretly wants to undermine us.
+    recordRelationshipEvidence(reality, {
+      id: 'unrelated-bond',
+      ownerId: 'lia',
+      targetId: 'human',
+      family: 'BOND',
+      eventId: 'public-compliment',
+      day: 2,
+      reciprocal: true,
+      significance: 0.2,
+    })
+    const { rerender } = render(
+      <RealityLedger reality={reality} players={players} humanId="human" section="house" />
+    )
+    expect(screen.getByText('No known Hub story is active.')).toBeInTheDocument()
+    expect(screen.queryByText('A strategic conflict')).toBeNull()
+    expect(screen.queryByText('Player Nemesis')).toBeNull()
+
+    const story = {
+      humanId: 'human',
+      playerNames: { human: 'You', lia: 'Lia', kai: 'Kai' },
+      activePlayerIds: new Set(['human', 'lia', 'kai']),
+    }
+    expect(advanceNemesisNarrative(reality, { ...story, day: 3, phase: 'social_2' })[0]?.kind).toBe(
+      'clue'
+    )
+    expect(advanceNemesisNarrative(reality, { ...story, day: 4, phase: 'social_1' })[0]?.kind).toBe(
+      'reveal'
+    )
+    rerender(
+      <RealityLedger
+        reality={normalizeRealityDomainState(reality)}
+        players={players}
+        humanId="human"
+        section="house"
+      />
+    )
+    expect(screen.getByText('A strategic conflict')).toBeInTheDocument()
+    expect(screen.getByText('Player Nemesis')).toBeInTheDocument()
+  })
+
+  it('keeps a known, resolved Nemesis story visible without showing an active enemy', () => {
+    const reality = createInitialRealityDomainState()
+    createRealityNemesisObjective(reality, {
+      ownerId: 'lia',
+      targetId: 'human',
+      sourceEventId: 'private-grudge',
+      reason: 'PERSONAL_FRICTION',
+      at: { day: 3, phase: 'social_1' },
+    })
+    reconcileNemesisWithVoluntarySafety(reality, {
+      actorId: 'human',
+      savedIds: ['lia'],
+      eventId: 'rescued-lia',
+      at: { day: 3, phase: 'pos_ceremony_results' },
+    })
+    const epilogue = advanceNemesisNarrative(reality, {
+      humanId: 'human',
+      day: 4,
+      phase: 'social_1',
+      playerNames: { human: 'You', lia: 'Lia' },
+      activePlayerIds: new Set(['human', 'lia']),
+    })
+    expect(epilogue[0]?.text).toContain('once saw you as a rival')
+    render(<RealityLedger reality={reality} players={players} humanId="human" section="house" />)
+    expect(screen.getByText('Player Nemesis')).toBeInTheDocument()
+    expect(screen.getByText('A strategic conflict')).toBeInTheDocument()
+  })
+
+  it('does not describe all relationships as still forming after the opening days', () => {
+    render(
+      <RealityLedger
+        reality={createInitialRealityDomainState()}
+        players={players}
+        humanId="human"
+        currentDay={7}
+        section="relationships"
+      />
+    )
+
+    expect(
+      screen.getByText(
+        'No detailed relationship reads to show yet. Personal interactions will shape them.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Your relationships are still forming.')).toBeNull()
+  })
+
+  it('shows learned claims and the player’s own relationship read without leaking hidden facts', () => {
+    const reality = createInitialRealityDomainState()
+    reality.relationships.human = {
+      lia: createDirectedRelationship('human', 'lia', 42, ['alliance']),
+    }
+    reality.relationships.lia = {
+      human: createDirectedRelationship('lia', 'human', -80, ['betrayal']),
+    }
+    addRealityFact(reality, {
+      id: 'known-claim',
+      propositionType: 'TARGETING_PLAN',
+      subjectIds: ['kai'],
+      objectId: 'human',
+      value: true,
+      day: 3,
+      phase: 'social_2',
+      visibility: 'PAIR_ONLY',
+      participantIds: ['lia', 'kai'],
+      witnessIds: [],
+      viewerVisible: false,
+      publicVisible: false,
+      juryVisible: false,
+      sourceEventId: 'event-1',
+    })
+    addRealityFact(reality, {
+      id: 'hidden-fact',
+      propositionType: 'SECRET_FINAL_TWO',
+      subjectIds: ['lia', 'kai'],
+      value: true,
+      day: 3,
+      phase: 'social_2',
+      visibility: 'PRIVATE',
+      participantIds: ['lia', 'kai'],
+      witnessIds: [],
+      viewerVisible: false,
+      publicVisible: false,
+      juryVisible: false,
+      sourceEventId: 'event-2',
+    })
+    learnRealityFact(reality, {
+      ownerId: 'human',
+      factId: 'known-claim',
+      memory: {
+        id: 'memory-claim',
+        ownerId: 'human',
+        eventId: 'event-1',
+        day: 3,
+        phase: 'social_2',
+        participantIds: ['lia', 'kai'],
+        sourceType: 'HEARSAY',
+        sourceChain: ['lia'],
+        confidence: 0.66,
+        importance: 0.6,
+        surprise: 0.4,
+        emotionalValence: -0.2,
+        emotionalIntensity: 0.4,
+        secrecy: 0.8,
+        strategicRelevance: 0.9,
+        visibility: 'PAIR_ONLY',
+        tags: ['targeting'],
+        relatedPromiseIds: [],
+        relatedSecretIds: [],
+        recallStrength: 1,
+      },
+    })
+
+    render(<RealityLedger reality={reality} players={players} humanId="human" />)
+
+    expect(screen.getByText('Your relationship reads')).toBeInTheDocument()
+    expect(screen.getAllByText('Ally')).toHaveLength(2)
+    expect(screen.queryByText('Enemy')).toBeNull()
+    expect(screen.getByText(/private opinion of you remains hidden/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Known' }))
+    expect(screen.getByText('Targeting Plan')).toBeInTheDocument()
+    expect(screen.getByText('Heard through Lia')).toBeInTheDocument()
+    expect(screen.queryByText('Secret Final Two')).toBeNull()
+  })
+
+  it('keeps the focused read to relationship dimensions without repeating its summary label', () => {
+    const reality = createInitialRealityDomainState()
+    const edge = createDirectedRelationship('human', 'lia', 10)
+    edge.perceivedLabel = 'FRIENDLY'
+    reality.relationships.human = { lia: edge }
+
+    render(
+      <RealityLedger
+        reality={reality}
+        players={players}
+        humanId="human"
+        relationships={{ human: { lia: { affinity: 10, tags: [] } } }}
+        focusPlayerId="lia"
+        section="relationships"
+        compact
+      />
+    )
+
+    expect(screen.queryByText('Your relationship reads')).toBeNull()
+    expect(screen.getByRole('article', { name: 'Lia relationship details' })).toBeInTheDocument()
+    expect(screen.getByText('Trust')).toBeInTheDocument()
+    expect(screen.getByText('Warmth')).toBeInTheDocument()
+    expect(screen.queryByText('Friendly')).toBeNull()
+  })
+
+  it('opens the exact player-readable betrayal cause from the Intel event focus', () => {
+    const reality = createInitialRealityDomainState()
+    const alliance = createRealityAlliance(reality, {
+      id: 'human-and-lia',
+      founderIds: ['human', 'lia'],
+      memberIds: [],
+      purpose: 'Work together',
+      at: { day: 1, phase: 'social_1' },
+    })
+    alliance.status = 'ACTIVE'
+    recordRealityAllianceBetrayal(reality, {
+      actorId: 'lia',
+      targetId: 'human',
+      kind: 'VOTE',
+      at: { day: 3, phase: 'social_2' },
+      sourceEventId: 'vote-record-3',
+    })
+    const event = reality.events.find((entry) => entry.type === 'ALLIANCE_BETRAYAL')!
+
+    render(
+      <RealityLedger
+        reality={reality}
+        players={players}
+        humanId="human"
+        section="knowledge"
+        focusEventId={event.id}
+      />
+    )
+
+    expect(screen.getByLabelText('Betrayal event evidence')).toHaveTextContent(
+      'Day 3 · Before the vote'
+    )
+    expect(screen.getByText('Lia · Alliance vote defiance')).toBeInTheDocument()
+    expect(screen.getByText(/Affected: You\./)).toBeInTheDocument()
+  })
+
+  it('uses the Reality category when the legacy affinity projects to Neutral', () => {
+    const reality = createInitialRealityDomainState()
+    const edge = createDirectedRelationship('human', 'lia', 8)
+    edge.perceivedLabel = 'FRIENDLY'
+    reality.relationships.human = { lia: edge }
+
+    render(
+      <RealityLedger
+        reality={reality}
+        players={players}
+        humanId="human"
+        relationships={{ human: { lia: { affinity: 8, tags: [] } } }}
+        section="relationships"
+        compact
+      />
+    )
+
+    expect(screen.getAllByText('Friendly')).toHaveLength(2)
+    expect(screen.queryByText('Neutral')).toBeNull()
+  })
+
+  it('shows only discovered alliance members supported by the player’s evidence', () => {
+    const reality = createInitialRealityDomainState()
+    const alliance = createRealityAlliance(reality, {
+      id: 'hidden-coalition',
+      founderIds: ['lia'],
+      memberIds: ['kai', 'nova'],
+      purpose: 'Control the middle',
+      at: { day: 2, phase: 'social_1' },
+    })
+    recordRealityAllianceDiscovery(reality, {
+      allianceId: alliance.id,
+      observerId: 'human',
+      revealedMemberIds: ['lia', 'kai'],
+      confidence: 0.68,
+      at: { day: 3, phase: 'social_2' },
+      sourceEventId: 'heard-about-coalition',
+      sourceId: 'lia',
+      sourceType: 'HEARSAY',
+    })
+
+    render(<RealityLedger reality={reality} players={players} humanId="human" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Known' }))
+
+    expect(screen.getByText('Suspected pact')).toBeInTheDocument()
+    expect(
+      screen.getByText('Known links: Lia · Kai. The full roster has not been confirmed.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Nova/)).toBeNull()
+    expect(screen.queryByText(/cohesion/i)).toBeNull()
+    expect(screen.queryByText(alliance.name ?? 'not-a-name')).toBeNull()
+  })
+
+  it('keeps alliance membership and controls in Social instead of duplicating them in the notebook', () => {
+    const reality = createInitialRealityDomainState()
+    const alliance = createRealityAlliance(reality, {
+      id: 'player-coalition',
+      founderIds: ['human', 'lia'],
+      memberIds: ['kai'],
+      purpose: 'Control the middle',
+      at: { day: 2, phase: 'social_1' },
+    })
+    alliance.status = 'ACTIVE'
+    alliance.leaderIds = ['human', 'lia']
+    alliance.memberPerceivedStatus.human = 'CORE'
+    alliance.memberPerceivedStatus.lia = 'CORE'
+    alliance.memberPerceivedStatus.kai = 'REGULAR'
+    render(<RealityLedger reality={reality} players={players} humanId="human" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Known' }))
+    expect(screen.queryByText('Night Shift')).toBeNull()
+    expect(screen.queryByText(/cohesion/i)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hub stories' }))
+    expect(screen.queryByText(/You \(Leader\)/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Rename alliance' })).toBeNull()
+  })
+
+  it('keeps your current group out of Intel, where only discovered groups appear', () => {
+    const reality = createInitialRealityDomainState()
+    createRealityAlliance(reality, {
+      id: 'new-coalition',
+      founderIds: ['lia', 'kai'],
+      memberIds: ['human'],
+      purpose: 'Control the middle',
+      at: { day: 2, phase: 'social_1' },
+    })
+
+    render(<RealityLedger reality={reality} players={players} humanId="human" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Known' }))
+
+    expect(screen.queryByText('New group')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Rename alliance' })).toBeNull()
+  })
+})

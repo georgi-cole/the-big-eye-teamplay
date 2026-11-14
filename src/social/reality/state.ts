@@ -1,0 +1,450 @@
+import type { RelationshipsMap } from '../types'
+import { MAX_REALITY_MEMORIES_PER_ACTOR } from './memory'
+import { importLegacyPairMemberships, normalizeAllianceManagement } from './allianceIdentity'
+import { allianceForEvent } from './allianceHistory'
+import { reconcileConvergedAllianceRosters } from './allianceRosterConvergence'
+import { retainAllianceHistory, retainAllianceRequestHistory } from './events'
+import { enforceNemesisAllianceConsistency } from './relationshipAutonomy'
+import { getCurrentAlliancesBetween, allianceKind } from './allianceIdentity'
+import { removeRealityAllianceMember } from './relationshipForms'
+import type {
+  DirectedRelationship,
+  RealityContestantState,
+  RealityDomainState,
+  RealityPerception,
+  RealityProvocateurCause,
+  RealityProvocateurSeason,
+  RealityProvocateurStyle,
+  RealityRelationshipLabel,
+  RealityRelationshipMap,
+} from './types'
+
+const clamp = (value: number, minimum = -100, maximum = 100) =>
+  Math.max(minimum, Math.min(maximum, Number.isFinite(value) ? value : 0))
+
+export function createRealityContestantState(actorId: string): RealityContestantState {
+  return {
+    actorId,
+    mood: { valence: 0, arousal: 0, control: 0 },
+    emotions: {
+      joy: 0,
+      anger: 0,
+      fear: 0,
+      sadness: 0,
+      guilt: 0,
+      shame: 0,
+      gratitude: 0,
+      attraction: 0,
+      jealousy: 0,
+      humiliation: 0,
+    },
+    stress: 0,
+    fatigue: 0,
+    boredom: 0,
+    loneliness: 0,
+    confidence: 0,
+    socialEnergy: 0,
+    secondaryGoalIds: [],
+    openness: 0.5,
+    recentActionFamilies: [],
+    actionExperience: {},
+  }
+}
+
+export function createRealityPerception(): RealityPerception {
+  return {
+    authenticity: 0,
+    entertainment: 0,
+    likability: 0,
+    underdog: 0,
+    strategicRespect: 0,
+    competitionRespect: 0,
+    loyalty: 0,
+    controversy: 0,
+    fatigue: 0,
+    sourceEventIds: [],
+  }
+}
+
+export function createDirectedRelationship(
+  fromId: string,
+  toId: string,
+  affinity = 0,
+  tags: readonly string[] = []
+): DirectedRelationship {
+  const safeAffinity = clamp(affinity)
+  const isAlliance = tags.includes('alliance')
+  const isRomance = tags.includes('romance')
+  const isBromance = tags.includes('bromance')
+  const isBetrayal = tags.includes('betrayal')
+  const isRivalry = tags.includes('rivalry')
+  const anchorIds = tags.map((tag) => `legacy:${fromId}:${toId}:${tag}`)
+  return {
+    fromId,
+    toId,
+    warmth: safeAffinity,
+    trust: clamp(safeAffinity * 0.7 + (isAlliance ? 15 : 0) - (isBetrayal ? 45 : 0)),
+    loyalty: clamp(safeAffinity * 0.35 + (isAlliance ? 35 : 0) + (isBromance ? 15 : 0)),
+    respect: clamp(safeAffinity * 0.35),
+    attraction: clamp(isRomance ? Math.max(35, safeAffinity) : 0),
+    intimacy: clamp(safeAffinity * 0.25 + (isRomance ? 35 : 0) + (isBromance ? 25 : 0)),
+    gratitude: 0,
+    resentment: clamp(
+      Math.max(0, -safeAffinity * 0.45) + (isBetrayal ? 55 : 0) + (isRivalry ? 25 : 0),
+      0,
+      100
+    ),
+    fear: clamp(Math.max(0, -safeAffinity * 0.2), 0, 100),
+    envy: 0,
+    suspicion: clamp(Math.max(0, -safeAffinity * 0.4) + (isBetrayal ? 35 : 0), 0, 100),
+    strategicValue: clamp(Math.max(0, safeAffinity * 0.35), 0, 100),
+    perceivedThreat: clamp(Math.max(0, -safeAffinity * 0.35), 0, 100),
+    reliability: clamp(safeAffinity * 0.55 + (isAlliance ? 20 : 0)),
+    familiarity: clamp(Math.abs(safeAffinity) + tags.length * 8, 0, 100),
+    publicCloseness: clamp(isAlliance || isRomance || isBromance ? 25 : safeAffinity * 0.15),
+    secretCloseness: clamp(isAlliance || isRomance || isBromance ? 40 : safeAffinity * 0.2),
+    acuteTension: 0,
+    acuteTensionDay: 0,
+    trend: 0,
+    positiveAnchorEventIds: isBetrayal || isRivalry ? [] : anchorIds,
+    negativeAnchorEventIds: isBetrayal || isRivalry ? anchorIds : [],
+    unresolvedGrievanceIds: [],
+    activePromiseIds: [],
+    activeDebtIds: [],
+    perceivedLabel: legacyLabel(safeAffinity, tags),
+    publicLabel: tags.includes('romance') ? 'ROMANCE' : 'ACQUAINTANCE',
+    labelConfidence: tags.length > 0 ? 0.7 : Math.min(0.55, Math.abs(safeAffinity) / 100),
+  }
+}
+
+function legacyLabel(affinity: number, tags: readonly string[]): RealityRelationshipLabel {
+  if (tags.includes('betrayal')) return 'ENEMY'
+  if (tags.includes('rivalry')) return 'RIVAL'
+  if (tags.includes('romance')) return 'ROMANCE'
+  if (tags.includes('alliance')) return affinity >= 60 ? 'CORE_ALLY' : 'ALLY'
+  if (tags.includes('bromance')) return 'CLOSE_FRIEND'
+  if (affinity <= -55) return 'ENEMY'
+  if (affinity <= -25) return 'RIVAL'
+  if (affinity >= 60) return 'CLOSE_FRIEND'
+  if (affinity >= 35) return 'FRIEND'
+  if (affinity >= 12) return 'FRIENDLY'
+  return affinity === 0 ? 'UNKNOWN' : 'ACQUAINTANCE'
+}
+
+export function projectLegacyRelationships(
+  relationships: RelationshipsMap
+): RealityRelationshipMap {
+  return Object.fromEntries(
+    Object.entries(relationships).map(([fromId, targets]) => [
+      fromId,
+      Object.fromEntries(
+        Object.entries(targets).map(([toId, relationship]) => [
+          toId,
+          createDirectedRelationship(fromId, toId, relationship.affinity, relationship.tags),
+        ])
+      ),
+    ])
+  )
+}
+
+export function createInitialRealityDomainState(
+  legacyRelationships: RelationshipsMap = {}
+): RealityDomainState {
+  return {
+    version: 2,
+    nextSequence: 0,
+    relationships: projectLegacyRelationships(legacyRelationships),
+    memoriesByOwner: {},
+    beliefsByOwner: {},
+    facts: {},
+    promises: {},
+    debts: {},
+    secrets: {},
+    grievances: {},
+    threads: {},
+    alliances: {},
+    allianceManagement: {
+      version: 1,
+      nextRequestSequence: 0,
+      requests: {},
+      processedCommands: {},
+      importedLegacyIds: [],
+      aliases: {},
+    },
+    romances: {},
+    contestants: {},
+    interactions: {},
+    events: [],
+    cooldowns: {},
+    voteIntents: {},
+    facadeAgreements: {},
+    publicPerception: {},
+    juryEvaluations: [],
+    reentryProfiles: {},
+    relationshipAutonomy: {
+      intents: {},
+      boundaries: {},
+      evidence: {},
+      nemeses: {},
+      provocateurSeason: null,
+      reservedBeatIds: [],
+    },
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+const PROVOCATEUR_STYLES = new Set([
+  'ACCOUNTABILITY',
+  'DOMINANCE',
+  'SCHEMER',
+  'INTIMIDATOR',
+  'SORE_WINNER',
+  'SPOTLIGHT_SEEKER',
+])
+const PROVOCATEUR_CAUSES = new Set([
+  'PERSONALITY_CLASH',
+  'NOMINATION',
+  'BETRAYAL',
+  'PLAN_DEFIED',
+  'RETURNED',
+  'COMPETITION_THREAT',
+  'SOCIAL_REACH',
+  'SUCCESSOR',
+])
+
+function normalizeProvocateurSeason(value: unknown): RealityProvocateurSeason | null {
+  if (!isRecord(value) || typeof value.targetId !== 'string' || !Array.isArray(value.roles)) {
+    return null
+  }
+  const roles = value.roles
+    .filter(
+      (role): role is Record<string, unknown> =>
+        isRecord(role) &&
+        typeof role.actorId === 'string' &&
+        typeof role.style === 'string' &&
+        PROVOCATEUR_STYLES.has(role.style) &&
+        typeof role.cause === 'string' &&
+        PROVOCATEUR_CAUSES.has(role.cause)
+    )
+    .slice(0, 2)
+    .map((role) => ({
+      actorId: role.actorId as string,
+      style: role.style as RealityProvocateurStyle,
+      introducedDay: Math.max(1, Math.round(Number(role.introducedDay) || 1)),
+      ...(typeof role.lastSceneDay === 'number' && Number.isFinite(role.lastSceneDay)
+        ? { lastSceneDay: Math.max(0, Math.round(role.lastSceneDay)) }
+        : {}),
+      escalation: Math.max(0, Math.min(2, Math.round(Number(role.escalation) || 0))) as 0 | 1 | 2,
+      cause: role.cause as RealityProvocateurCause,
+      ...(typeof role.predecessorId === 'string' ? { predecessorId: role.predecessorId } : {}),
+    }))
+  return {
+    targetId: value.targetId,
+    roles,
+    ...(typeof value.lastSceneDay === 'number' && Number.isFinite(value.lastSceneDay)
+      ? { lastSceneDay: Math.max(0, Math.round(value.lastSceneDay)) }
+      : {}),
+    observedThroughSequence: Math.max(-1, Math.round(Number(value.observedThroughSequence) || 0)),
+  }
+}
+
+function cloneRealitySnapshot(value: unknown): unknown {
+  if (typeof structuredClone === 'function') return structuredClone(value)
+  return JSON.parse(JSON.stringify(value)) as unknown
+}
+
+function retainRealityMemories(value: unknown): RealityDomainState['memoriesByOwner'] {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([ownerId, memories]) =>
+      Array.isArray(memories) ? [[ownerId, memories.slice(-MAX_REALITY_MEMORIES_PER_ACTOR)]] : []
+    )
+  ) as RealityDomainState['memoriesByOwner']
+}
+
+/** Keep active conversations intact while bounding resolved interaction history. */
+export const REALITY_RESOLVED_INTERACTION_LIMIT = 240
+
+function retainRealityInteractions(
+  value: unknown
+): Record<string, RealityDomainState['interactions'][string]> {
+  if (!isRecord(value)) return {}
+  const rawKeys = Object.keys(value)
+  if (rawKeys.length <= REALITY_RESOLVED_INTERACTION_LIMIT) {
+    return value as Record<string, RealityDomainState['interactions'][string]>
+  }
+  const entries = Object.entries(value).filter(([, interaction]) => isRecord(interaction)) as Array<
+    [string, RealityDomainState['interactions'][string]]
+  >
+  const active = entries.filter(
+    ([, interaction]) => interaction.status === 'PENDING' || interaction.status === 'AWAITING_HUMAN'
+  )
+  const resolved = entries
+    .filter(
+      ([, interaction]) =>
+        interaction.status !== 'PENDING' && interaction.status !== 'AWAITING_HUMAN'
+    )
+    .sort(
+      ([leftId, left], [rightId, right]) =>
+        left.createdSequence - right.createdSequence || leftId.localeCompare(rightId)
+    )
+    .slice(-REALITY_RESOLVED_INTERACTION_LIMIT)
+  return Object.fromEntries([...active, ...resolved])
+}
+
+/** Bound live history as well as hydrated history without copying small domains. */
+export function retainResolvedRealityInteractionHistory(
+  domain: RealityDomainState
+): RealityDomainState {
+  const interactions = retainRealityInteractions(domain.interactions)
+  return interactions === domain.interactions ? domain : { ...domain, interactions }
+}
+
+export function normalizeRealityDomainState(
+  value: unknown,
+  legacyRelationships: RelationshipsMap = {}
+): RealityDomainState {
+  const base = createInitialRealityDomainState(legacyRelationships)
+  if (!isRecord(value)) {
+    importLegacyPairMemberships(base, legacyRelationships)
+    return base
+  }
+  if (value.version !== 1 && value.version !== 2) {
+    throw new Error(
+      `Unsupported Reality save version ${String(value.version)}. The original save must be retained for recovery.`
+    )
+  }
+  // Hydration and migrations must never mutate the source recovery snapshot.
+  const input = cloneRealitySnapshot(value) as Partial<RealityDomainState>
+  const inputRelationships =
+    input.relationships && isRecord(input.relationships) ? input.relationships : {}
+  const relationships = { ...base.relationships }
+  for (const [sourceId, targets] of Object.entries(inputRelationships)) {
+    relationships[sourceId] = {
+      ...(relationships[sourceId] ?? {}),
+      ...targets,
+    }
+  }
+  const normalized: RealityDomainState = {
+    ...base,
+    ...input,
+    version: 2,
+    nextSequence: Math.max(0, Math.round(Number(input.nextSequence) || 0)),
+    relationships,
+    memoriesByOwner: retainRealityMemories(input.memoriesByOwner),
+    beliefsByOwner:
+      input.beliefsByOwner && isRecord(input.beliefsByOwner) ? input.beliefsByOwner : {},
+    facts: input.facts && isRecord(input.facts) ? input.facts : {},
+    promises: input.promises && isRecord(input.promises) ? input.promises : {},
+    debts: input.debts && isRecord(input.debts) ? input.debts : {},
+    secrets: input.secrets && isRecord(input.secrets) ? input.secrets : {},
+    grievances: input.grievances && isRecord(input.grievances) ? input.grievances : {},
+    threads: input.threads && isRecord(input.threads) ? input.threads : {},
+    alliances: input.alliances && isRecord(input.alliances) ? input.alliances : {},
+    romances: input.romances && isRecord(input.romances) ? input.romances : {},
+    contestants: input.contestants && isRecord(input.contestants) ? input.contestants : {},
+    interactions: retainRealityInteractions(input.interactions),
+    events: Array.isArray(input.events) ? input.events.slice(-500) : [],
+    cooldowns: input.cooldowns && isRecord(input.cooldowns) ? input.cooldowns : {},
+    voteIntents: input.voteIntents && isRecord(input.voteIntents) ? input.voteIntents : {},
+    facadeAgreements:
+      input.facadeAgreements && isRecord(input.facadeAgreements) ? input.facadeAgreements : {},
+    publicPerception:
+      input.publicPerception && isRecord(input.publicPerception) ? input.publicPerception : {},
+    juryEvaluations: Array.isArray(input.juryEvaluations) ? input.juryEvaluations.slice(-500) : [],
+    reentryProfiles:
+      input.reentryProfiles && isRecord(input.reentryProfiles) ? input.reentryProfiles : {},
+    relationshipAutonomy: {
+      ...base.relationshipAutonomy,
+      ...(input.relationshipAutonomy && isRecord(input.relationshipAutonomy)
+        ? input.relationshipAutonomy
+        : {}),
+      intents:
+        input.relationshipAutonomy?.intents && isRecord(input.relationshipAutonomy.intents)
+          ? input.relationshipAutonomy.intents
+          : {},
+      boundaries:
+        input.relationshipAutonomy?.boundaries && isRecord(input.relationshipAutonomy.boundaries)
+          ? input.relationshipAutonomy.boundaries
+          : {},
+      evidence:
+        input.relationshipAutonomy?.evidence && isRecord(input.relationshipAutonomy.evidence)
+          ? input.relationshipAutonomy.evidence
+          : {},
+      nemeses:
+        input.relationshipAutonomy?.nemeses && isRecord(input.relationshipAutonomy.nemeses)
+          ? input.relationshipAutonomy.nemeses
+          : {},
+      provocateurSeason: normalizeProvocateurSeason(input.relationshipAutonomy?.provocateurSeason),
+      reservedBeatIds: Array.isArray(input.relationshipAutonomy?.reservedBeatIds)
+        ? input.relationshipAutonomy.reservedBeatIds
+            .slice(-240)
+            .filter((id): id is string => typeof id === 'string')
+        : [],
+    },
+  }
+  normalizeAllianceManagement(normalized, value.version === 1)
+  if (value.version === 1) importLegacyPairMemberships(normalized, legacyRelationships)
+  for (const alliance of Object.values(normalized.alliances)) {
+    alliance.history = retainAllianceHistory(
+      Array.isArray(alliance.history) ? alliance.history : []
+    )
+  }
+  for (const request of Object.values(normalized.allianceManagement.requests)) {
+    request.history = retainAllianceRequestHistory(
+      Array.isArray(request.history) ? request.history : []
+    )
+  }
+  // Adopt the legacy feed while its events are still available; never invent lost events.
+  for (const event of Array.isArray(input.events) ? input.events : []) {
+    const id = allianceForEvent(normalized, event)
+    const alliance = id ? normalized.alliances[id] : undefined
+    if (alliance && !alliance.history!.some((entry) => entry.id === event.id))
+      alliance.history!.push(event)
+  }
+  // Old saves can contain duplicate groups created before the managed
+  // founding guard existed. Reconcile once at hydration without inventing a
+  // historical day when the save has no current clock available.
+  reconcileConvergedAllianceRosters(normalized)
+  // Migrate older saves containing a private Nemesis and a genuine pact.
+  // Preserve membership, but make the hidden loyalty conflict operational.
+  enforceNemesisAllianceConsistency(normalized)
+  // Older campaign saves from before automatic breakup can contain a *known*
+  // Nemesis inside a live personal pact. Correct them once using the normal
+  // exit/history pathway; do not dissolve a larger group or mutate the source.
+  for (const nemesis of Object.values(normalized.relationshipAutonomy.nemeses)) {
+    if (nemesis.status !== 'ACTIVE' || !nemesis.revealEventId) continue
+    for (const pact of getCurrentAlliancesBetween(
+      normalized,
+      nemesis.ownerId,
+      nemesis.targetId
+    ).filter((alliance) => allianceKind(alliance) === 'PACT')) {
+      removeRealityAllianceMember(normalized, {
+        allianceId: pact.id,
+        memberId: nemesis.ownerId,
+        actorId: nemesis.ownerId,
+        kind: 'DEFECTION',
+        at: nemesis.revealedAt ?? nemesis.createdAt,
+        sourceEventId: nemesis.revealEventId,
+        endReason: 'NEMESIS_REVEALED',
+      })
+    }
+  }
+  for (const alliance of Object.values(normalized.alliances))
+    alliance.history = retainAllianceHistory(alliance.history ?? [])
+  return normalized
+}
+
+export function ensureRealityActors(state: RealityDomainState, actorIds: readonly string[]): void {
+  for (const actorId of actorIds) {
+    if (!state.contestants[actorId]) {
+      state.contestants[actorId] = createRealityContestantState(actorId)
+    }
+    if (!state.publicPerception[actorId]) {
+      state.publicPerception[actorId] = createRealityPerception()
+    }
+  }
+}

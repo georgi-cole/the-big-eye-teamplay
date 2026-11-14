@@ -1,0 +1,310 @@
+import { isCurrentAlliance } from '../social/reality/allianceIdentity'
+import type { Player } from '../types'
+import { hasAllianceBetween } from '../social/socialAlliance'
+import type { DramaAlliance, RelationshipsMap } from '../social/types'
+import type { RealityAlliance } from '../social/reality/types'
+import type { DirectionType, PublicDirection } from './types'
+
+export interface RelationshipFacts {
+  affinity: number
+  mutualAffinity: number
+  activeAlliance: boolean
+  fracturedAlliance: boolean
+  rivalry: boolean
+  betrayal: boolean
+}
+
+export interface DirectionCandidate {
+  type: DirectionType
+  relatedPlayer?: Player
+  targetPlayer?: Player
+  actionHint: string
+  rationale: string
+  completionLabel: string
+}
+
+export interface DirectionContractContext {
+  players: readonly Player[]
+  week?: number
+  relationships?: RelationshipsMap
+  realityAlliances?: Record<string, RealityAlliance>
+  dramaAlliances?: readonly DramaAlliance[]
+  cupidPairIds?: readonly string[]
+  voxPopuliActive?: boolean
+  dramaMode?: boolean
+  /** Previously issued directions, used to keep a story arc coherent. */
+  existingDirections?: readonly PublicDirection[]
+}
+
+function hasRealityAlliance(
+  alliances: Record<string, RealityAlliance> | undefined,
+  actorId: string,
+  targetId: string
+): { present: boolean; active: boolean; fractured: boolean } {
+  const matches = Object.values(alliances ?? {}).filter(
+    (alliance) => alliance.memberIds.includes(actorId) && alliance.memberIds.includes(targetId)
+  )
+  return {
+    present: matches.length > 0,
+    active: matches.some(isCurrentAlliance),
+    fractured: matches.some(
+      (alliance) => isCurrentAlliance(alliance) && alliance.status === 'FRACTURED'
+    ),
+  }
+}
+
+function hasDramaAlliance(
+  alliances: readonly DramaAlliance[] | undefined,
+  actorId: string,
+  targetId: string
+): { active: boolean; fractured: boolean } {
+  const match = alliances?.find(
+    (alliance) =>
+      alliance.participantIds.includes(actorId) && alliance.participantIds.includes(targetId)
+  )
+  return { active: match?.status === 'active', fractured: match?.status === 'strained' }
+}
+
+/**
+ * Shared relationship truth for Public Mode. This deliberately reconciles the
+ * legacy relationship map with the Reality and Drama alliance records, so a
+ * request can never ask for an action that Social Mode considers impossible.
+ */
+export function getRelationshipFacts(
+  context: DirectionContractContext,
+  actorId: string,
+  targetId: string
+): RelationshipFacts {
+  const outward = context.relationships?.[actorId]?.[targetId]
+  const inward = context.relationships?.[targetId]?.[actorId]
+  const legacyAlliance = context.relationships
+    ? hasAllianceBetween(context.relationships, actorId, targetId)
+    : false
+  const reality = hasRealityAlliance(context.realityAlliances, actorId, targetId)
+  const drama = hasDramaAlliance(context.dramaAlliances, actorId, targetId)
+  const tags = new Set([...(outward?.tags ?? []), ...(inward?.tags ?? [])])
+  const affinity = outward?.affinity ?? 0
+  const mutualAffinity = Math.min(affinity, inward?.affinity ?? 0)
+
+  return {
+    affinity,
+    mutualAffinity,
+    activeAlliance: context.realityAlliances ? reality.active : drama.active || legacyAlliance,
+    fracturedAlliance: context.realityAlliances ? reality.fractured : drama.fractured,
+    rivalry: affinity < 0 || (inward?.affinity ?? 0) < 0 || tags.has('rival'),
+    betrayal: tags.has('betrayal'),
+  }
+}
+
+function isActive(player: Player): boolean {
+  return player.status !== 'evicted' && player.status !== 'jury'
+}
+
+/** Build only requests that have a current, named route to completion. */
+export function getEligibleDirectionCandidates(
+  actor: Player,
+  context: DirectionContractContext
+): DirectionCandidate[] {
+  const others = context.players.filter((player) => isActive(player) && player.id !== actor.id)
+  const candidates: DirectionCandidate[] = [
+    {
+      type: 'win_competition',
+      actionHint: 'Win your next eligible competition.',
+      rationale: 'A visible competition win is always a clear audience moment.',
+      completionLabel: 'Win a competition',
+    },
+    {
+      type: 'win_veto',
+      actionHint: 'Win the next Power of Safety competition.',
+      rationale: 'Safety wins create a visible change in the house.',
+      completionLabel: 'Win Power of Safety',
+    },
+  ]
+
+  for (const relatedPlayer of others) {
+    const facts = getRelationshipFacts(context, actor.id, relatedPlayer.id)
+    const isCupidPair = context.cupidPairIds?.includes(relatedPlayer.id) ?? false
+    // Only live or successfully completed requests define the audience's current
+    // relationship story. A failed/expired request is not a relationship event
+    // and must not suppress the opposite direction forever (failed directions
+    // intentionally do not have a completedWeek in older saves).
+    const recentArcDirections = (context.existingDirections ?? [])
+      .map((direction, index) => ({ direction, index }))
+      .filter(
+        ({ direction }) =>
+          direction.playerId === actor.id &&
+          direction.relatedPlayerId === relatedPlayer.id &&
+          (direction.status === 'active' || direction.status === 'completed')
+      )
+      .filter(({ direction }) => {
+        if (direction.status === 'active' || context.week === undefined) return true
+        const resolvedWeek = direction.completedWeek ?? direction.createdWeek
+        return context.week - resolvedWeek <= 3
+      })
+      .filter(({ direction }) =>
+        [
+          'break_alliance',
+          'show_loyalty',
+          'reinforce_alliance',
+          'protect_player',
+          'repair_relationship',
+        ].includes(direction.type)
+      )
+      .sort((left, right) => {
+        const leftWeek =
+          left.direction.status === 'completed'
+            ? (left.direction.completedWeek ?? left.direction.createdWeek)
+            : left.direction.createdWeek
+        const rightWeek =
+          right.direction.status === 'completed'
+            ? (right.direction.completedWeek ?? right.direction.createdWeek)
+            : right.direction.createdWeek
+        // Direction arrays are append-only, so array position is the canonical
+        // tie-breaker for multiple relationship beats resolved in one week.
+        return rightWeek - leftWeek || right.index - left.index
+      })
+    const latestArcDirection = recentArcDirections[0]?.direction
+    const recentlyBrokeAlliance = latestArcDirection?.type === 'break_alliance'
+    const recentlyReinforcedAlliance =
+      latestArcDirection != null &&
+      ['show_loyalty', 'reinforce_alliance', 'protect_player', 'repair_relationship'].includes(
+        latestArcDirection.type
+      )
+
+    if (facts.activeAlliance && !recentlyBrokeAlliance) {
+      candidates.push({
+        type: 'reinforce_alliance',
+        relatedPlayer,
+        actionHint: `Use Social to show loyalty to ${relatedPlayer.name}.`,
+        rationale: `You and ${relatedPlayer.name} are currently allied.`,
+        completionLabel: `Show loyalty to ${relatedPlayer.name}`,
+      })
+      candidates.push({
+        type: 'protect_player',
+        relatedPlayer,
+        actionHint: `Look for a meaningful chance to protect ${relatedPlayer.name}.`,
+        rationale: `${relatedPlayer.name} is part of your current game structure.`,
+        completionLabel: `Protect ${relatedPlayer.name}`,
+      })
+      candidates.push({
+        type: 'show_loyalty',
+        relatedPlayer,
+        actionHint: `Back ${relatedPlayer.name} when it carries some weight.`,
+        rationale: `The audience is watching whether this alliance holds under pressure.`,
+        completionLabel: `Show real loyalty to ${relatedPlayer.name}`,
+      })
+      if (!isCupidPair && !recentlyReinforcedAlliance) {
+        candidates.push({
+          type: 'break_alliance',
+          relatedPlayer,
+          actionHint: `Use Your Alliances to end every personal pact and shared group connection with ${relatedPlayer.name}.`,
+          rationale: `You and ${relatedPlayer.name} are currently allied.`,
+          completionLabel: `Break your alliance with ${relatedPlayer.name}`,
+        })
+      }
+      continue
+    }
+
+    if (facts.mutualAffinity > 0 && !facts.betrayal && !recentlyBrokeAlliance) {
+      candidates.push({
+        type: 'align_with',
+        relatedPlayer,
+        actionHint: `Use Social → Propose Alliance with ${relatedPlayer.name}.`,
+        rationale: `You and ${relatedPlayer.name} are not currently allied.`,
+        completionLabel: `Form an alliance with ${relatedPlayer.name}`,
+      })
+    }
+
+    if (facts.rivalry || facts.betrayal || facts.mutualAffinity < 0) {
+      candidates.push({
+        type: 'repair_relationship',
+        relatedPlayer,
+        actionHint: `Use Social → Clear the Air or Apologize to ${relatedPlayer.name}.`,
+        rationale: `Your relationship with ${relatedPlayer.name} is strained.`,
+        completionLabel: `Repair things with ${relatedPlayer.name}`,
+      })
+      candidates.push({
+        type: 'confront_player',
+        relatedPlayer,
+        actionHint: `Use a confrontational Social action against ${relatedPlayer.name}.`,
+        rationale: `${relatedPlayer.name} is a current rival.`,
+        completionLabel: `Confront ${relatedPlayer.name}`,
+      })
+      candidates.push({
+        type: 'expose_player',
+        relatedPlayer,
+        actionHint: `Build a credible case around ${relatedPlayer.name}'s game.`,
+        rationale: `${relatedPlayer.name} is already part of an active conflict.`,
+        completionLabel: `Expose ${relatedPlayer.name}'s game`,
+      })
+      candidates.push({
+        type: 'target_player',
+        relatedPlayer,
+        actionHint: `Apply pressure to ${relatedPlayer.name} through Social or a game decision.`,
+        rationale: `${relatedPlayer.name} is a current rival.`,
+        completionLabel: `Put ${relatedPlayer.name} under pressure`,
+      })
+      if (context.dramaMode) {
+        candidates.push({
+          type: 'start_drama',
+          relatedPlayer,
+          actionHint: `Escalate the unresolved tension with ${relatedPlayer.name}.`,
+          rationale: `The tension with ${relatedPlayer.name} is visible enough to become a story.`,
+          completionLabel: `Turn the tension with ${relatedPlayer.name} into a public moment`,
+        })
+      }
+    } else {
+      candidates.push({
+        type: 'get_closer',
+        relatedPlayer,
+        actionHint: `Use a positive Social action with ${relatedPlayer.name}.`,
+        rationale: `${relatedPlayer.name} is available for a new social connection.`,
+        completionLabel: `Build rapport with ${relatedPlayer.name}`,
+      })
+    }
+  }
+
+  // Vox is audience-led: omit role- and house-vote-dependent asks entirely.
+  return context.voxPopuliActive
+    ? candidates.filter((candidate) =>
+        [
+          'win_competition',
+          'win_veto',
+          'get_closer',
+          'align_with',
+          'repair_relationship',
+          'reinforce_alliance',
+          'protect_player',
+          'show_loyalty',
+        ].includes(candidate.type)
+      )
+    : candidates
+}
+
+export function isDirectionStillValid(
+  direction: { type: DirectionType; playerId: string; relatedPlayerId?: string },
+  context: DirectionContractContext
+): boolean {
+  const actor = context.players.find((player) => player.id === direction.playerId)
+  if (!actor || !isActive(actor)) return false
+  const relationshipBoundTypes: DirectionType[] = [
+    'get_closer',
+    'target_player',
+    'protect_player',
+    'align_with',
+    'break_alliance',
+    'reinforce_alliance',
+    'repair_relationship',
+    'apologize',
+    'confront_player',
+    'expose_player',
+    'show_loyalty',
+    'start_drama',
+  ]
+  if (!relationshipBoundTypes.includes(direction.type)) return true
+  if (!direction.relatedPlayerId) return true
+  return getEligibleDirectionCandidates(actor, context).some(
+    (candidate) =>
+      candidate.type === direction.type && candidate.relatedPlayer?.id === direction.relatedPlayerId
+  )
+}

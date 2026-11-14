@@ -1,0 +1,84 @@
+name: Pull Request Mobile Browser Quality
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-browser-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect browser impact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      browser: ${{ steps.impact.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: impact
+        name: Classify changed files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          printf '%s\n' "$changed_files"
+
+          browser=false
+          if grep -Eq '^(src/|public/|e2e/playwright/|index\.html$|package(-lock)?\.json$|playwright\.config\.[^/]+$|vite\.config\.[^/]+$|tsconfig[^/]*\.json$|scripts/(generate-(after-the-eye-config|audio-manifest|skins-manifest)\.mjs|check-production-debug-globals\.mjs)$|\.github/workflows/e2e-playwright\.yml$)' <<< "$changed_files"; then
+            browser=true
+          fi
+
+          echo "browser=$browser" >> "$GITHUB_OUTPUT"
+
+  core-journeys:
+    name: Core journeys (mobile-chromium)
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
+    # Playwright 1.58 supports Ubuntu 24.04; ubuntu-latest can move ahead of it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run blocking mobile smoke journeys
+        run: >-
+          npx playwright test --grep @smoke --grep-invert @minigame
+          --project=mobile-chromium --workers=1 --retries=0
+      - name: Upload actual Nemesis UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-nemesis-real-ui
+          path: visual-evidence/nemesis/*.png
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Run finale progression and recovery journey
+        run: >-
+          npx playwright test e2e/playwright/finale.spec.ts
+          --project=mobile-chromium --workers=1 --retries=0
+      - name: Upload blocking smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-smoke-mobile-chromium
+          path: |
+            playwright-report/
+            test-results/
+            visual-evidence/nemesis/
+            visual-evidence/followups/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,314 @@
+# Alliance management: product-owner notes
+
+This companion document describes the current implementation behind the
+[player guide](alliance-management-player-guide.md). It separates implemented
+rules from behavior the interface or AI does not promise. Thresholds here are
+engineering details; they are not currently shown to players.
+
+## Context, history, and admission UX
+
+The Alliances category starts with general actions. Group chips are a separate
+selection from action cards: selecting a group narrows all management actions
+to that group and replaces the individual relationship summary with an alliance
+read. A second tap clears the group. Switching groups cancels a prepared rename,
+role change, removal, or dissolution so it cannot execute against an unexpected
+group. A prepared consultation or admission follows the newly chosen group.
+Changing categories clears the group context and restores the individual roster.
+
+An individual selected in the normal roster has one **Invite [name] to an
+alliance** card, available in both All moves and Alliances. Choosing that card
+retains the candidate and shows eligible official group chips. Execution requires
+an explicit group selection. Groups with a pending admission or no free place,
+people at their group limit, existing members, and same-day declined/expired
+retries are excluded. If eligibility changes after selection, execution becomes
+unavailable and spends nothing. The current roster votes once per member. A
+strict majority approves; the leader's yes vote breaks a tie. A missing ballot
+counts against approval when the response window closes. Once approved, the
+candidate receives a separate invitation and must accept it. The proposer sees
+named ballots and the tally; the candidate sees the approved invitation and
+roster, not member ballots. AI member votes use directed trust in the candidate;
+the interface shows the ballot and decision but does not invent a separate
+narrative motive beyond that relationship signal.
+
+The alliance read shows founding day, member count, player role, cohesion, and
+fracture risk. Its expander contains known members, commitments, request progress,
+and the recorded timeline. Members selected inside that read become the target
+for that group's role or removal controls. Former groups remain readable and
+offer no management actions.
+
+The proposer of a founding request is saved as the group's creator and becomes
+leader after the founders approve. Existing records recover the creator from the
+formation event where available. A stale leader assignment is corrected to the
+creator unless the alliance history records an approved transfer or the creator
+has already left; those cases preserve the current succession. The leader can
+later offer a transfer, which takes effect only after the nominee accepts.
+
+Today reports one direct sentence per development, in event order (newest first),
+without a generic heading repeating the same sentence. Ballots and intermediate
+acceptance steps live in the full read. Synchronous proposal/vote/invitation
+steps collapse to their outcome in Today. **View alliance** passes the stable
+alliance ID, including for ended groups, instead of opening unrelated live controls.
+
+New events carry alliance IDs and snapshots of names/rosters. Each alliance keeps
+its history independently of the rolling 500-event social feed; requests also
+retain decisions and settlement outcomes. Formation, admission, departure,
+renaming, role changes, consultations, plans, and commitment outcomes are recorded.
+Visibility is checked per event: private AI intentions, unobserved private
+promises, pre-approval ballots for a candidate, and later private events for former
+members stay hidden. Founding dates use creation records rather than last-meeting
+dates. Existing saves adopt surviving events and show earlier request summaries;
+the game never fabricates records already trimmed from an older save.
+
+## How an AI alliance proposal starts
+
+AI alliance autonomy runs when the game advances into a `social_1` or
+`social_2` window. A saved phase receipt makes the evaluation idempotent.
+
+Instead of one request for the whole house, each current, active/probationary
+faction with at least two active AI members reviews observer-specific evidence:
+perceived social influence, direct relationship risks, visible competition
+performance, and the live nomination block. It can retain or revise a target
+and fallback, recording individual dissent through member plan beliefs.
+The AI-led strategy meeting does not automatically bind human members' votes.
+
+During `social_1`, an eligible AI recruiter may seek an additional member.
+Group recruiters must be eligible by role/commitment; pact recruiters can seek
+a third founder for a new group. Candidates are scored from directed trust,
+loyalty, reliability, strategic value, suspicion, and alignment against an
+existing target. Eligibility requires trust of at least 18 or strategic value
+of at least 34, plus a minimum combined score. The chosen candidate is the
+highest-ranked eligible one, with player ID only breaking score ties.
+A group's current target is excluded from recruitment.
+
+A resolved pact may be the base of a new AI-founded group; the existing
+consent and protected-endgame-pact rules still apply. AI players with group
+commitment at or below 0.08 may autonomously leave their group. Human consent,
+capacity, pending-request rules, and phase deadlines remain authoritative.
+
+The AI does not guarantee or prioritize an invitation to the human. It may
+choose an AI candidate or decline to propose anything. The current autonomy
+planner is largely shared between Classic and Vox Populi; season-aware
+strategic motives are a planned follow-up, not an implemented guarantee.
+
+## How each decision is made
+
+| Request                        | Who decides                              | Current AI decision input                                                                                                                                                                                          |
+| ------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Personal pact                  | Both named people                        | Directed trust, reliability, warmth, loyalty, respect, strategic value, suspicion, resentment, known kept/broken promises, network benefit, survival need, competing commitments, and an active Nemesis if present |
+| Found a group                  | Every named founder                      | Average directed trust toward the other founders, evaluated with a seeded roll                                                                                                                                     |
+| Admit a group member           | Current group electorate, then candidate | Member trust toward the candidate; invitee trust toward group members, capacity and possible switch away from a weaker existing group                                                                              |
+| Accept co-leader or leadership | Named nominee                            | Average directed trust toward group members, evaluated with a seeded roll                                                                                                                                          |
+| Suggest removing a member      | Group officers                           | Officer's directed trust toward candidate below −10                                                                                                                                                                |
+| Suggest renaming a group       | Current leader                           | Leader's directed trust toward suggester at least 0                                                                                                                                                                |
+
+Group founding, ordinary admission, and officer-role acceptance use:
+
+```text
+clamp(0.12, 0.92, 0.62 + average_directed_trust / 200)
+```
+
+The current personal-pact decision has its **own** weighted probability,
+clamped to 4–92%, and can decline an overt Nemesis or conditionally accept a
+private strategic truce. An AI candidate who already has two groups can
+switch only if the proposed group's evaluated potential is sufficiently
+better; a low-value invitation is declined. These decisions use stable
+request/actor/stage/season-seed rolls, not new draws on each inbox open.
+
+This is not yet a general mode-aware utility model: group decisions do not
+evaluate full strategic fit or audience reputation. Formal acceptance also
+does not imply unquestioning loyalty, identical ballots, or an automatic
+public-image benefit. A single authorized officer yes finalizes a member
+removal suggestion; that process is not a majority vote.
+
+Human decisions always require explicit input and are never inferred
+from trust or a timeout.
+
+## Admission voting in detail
+
+The electorate is the current group roster captured when the vote starts. The
+proposer is recorded as yes. The vote passes only when both conditions hold:
+
+1. Yes votes are strictly more than half of the full electorate.
+2. At least one leader or co-leader voted yes.
+
+The table in the player guide shows the minimum yes count at each roster size.
+A no vote does not immediately cancel the request; the system settles the vote
+after the remaining eligible voters have answered or the response window has
+passed. If it passes, the candidate receives a separate consent stage and sees
+the approved roster. The candidate is not part of the member-vote electorate.
+Their acceptance adds them as a regular member; it neither appoints them as an
+officer nor creates separate pacts with the other members.
+
+Every founder in a new group must consent to the same founding proposal. The
+initiator is pre-recorded as yes. A personal pact likewise needs both partners'
+consent. One no on either all-founder consent or a two-person pact declines the
+proposal.
+
+## Request timing, invalidation, and history
+
+Requests use the shared game clock. The next response deadline is the next
+social window: before `social_1`, that day's `social_1`; between the two social
+windows, that day's `social_2`; after `social_2`, the next day's `social_1`.
+When group admission moves from vote to candidate consent, the candidate gets a
+fresh complete response window. Expiry is processed as the game clock advances;
+no AI or human answer is inferred from a missed window.
+
+A request becomes invalid if a required participant leaves the active cast, the
+alliance ends, its roster or officer revision changes, or the candidate/group
+no longer has capacity. A group can have only one admission request pending at
+a time. Duplicate submissions do not extend a deadline. After a declined or
+expired request, repeating it on the same game day is blocked.
+
+Requests and decisions are persisted in the Reality social state. Founding,
+admission, departure, expulsion, and dissolution also write alliance events.
+The human-facing inbox shows actionable alliance items under **Alliance
+proposals and votes**. Its game-control badge is the discovery route; Hub is a
+record view, not an invitation mailbox.
+
+## Capacity, offices, and membership consequences
+
+- A current pair can have one personal pact. There is no cap on the number of
+  different personal pacts a player may hold; the former three-pact limit is
+  not part of the current alliance rules.
+- A player may be in two groups, and a group can have six members.
+- Founders and admission candidates are checked against group capacity when a
+  request is created and again when it is finalized.
+- A group stays kind `GROUP` if it drops from three members to two. It dissolves
+  when it drops below two.
+- A new group starts with the initiator as leader and no co-leader in the
+  player's direct founding flow. The founding request uses a generated
+  placeholder name. Only after all founders approve and the group is active,
+  the player leader sees a naming dialog and can choose a name or keep the
+  suggested one. This pending choice is stored on the alliance so it survives
+  closing and reopening Social. Declined and expired founding proposals never
+  trigger the dialog. Only the leader can offer co-leadership, transfer
+  leadership, clear the co-leader role, rename, or dissolve. Older or AI-created
+  groups can retain their generated name until the current leader changes it.
+- A leader can rename immediately without a vote or resource cost. A current
+  non-leader member can submit one pending rename suggestion per group. Only the
+  current leader can accept or decline it; accepting applies the name and writes
+  an `ALLIANCE_RENAMED` event, while declining keeps the current name. If the
+  leader renames the group while a suggestion is pending, that suggestion is
+  invalidated. Roster or officer changes also invalidate it through the regular
+  request revision checks. A suggestion expires at its normal response-window
+  deadline if the leader does not answer.
+- Names are trimmed, repeated spaces are collapsed, and names are limited to
+  2–28 characters. Name entry and suggestions have no resource cost. There may
+  be only one pending name suggestion per group.
+- A leader can remove a co-leader or regular member. A co-leader can remove a
+  regular member only. Any member can leave. A regular member can suggest a
+  removal for officer consideration.
+- Leaving or expulsion changes only that alliance. Other current group
+  memberships and personal pacts are retained. Leaving the leader seat triggers
+  succession: the co-leader takes over, otherwise the longest-serving current
+  member does.
+- Creating a group establishes pairwise social relationship changes as well as
+  membership. Those relationship histories, existing promises, and learned
+  information have their own records and are not erased when membership ends.
+- Pact and group formation add a visible relationship boost scaled by how long
+  the pair has known each other, shared interaction volume and outcomes, positive
+  anchors, and current relationship quality. Negative anchors and unresolved
+  grievances dampen the increase. A group admission applies the boost only to
+  the candidate's links with current members. Later group formation can reinforce
+  a pair that already shares a pact; it does not create duplicate membership.
+- Player-submitted pact proposals cost ⚡1, group founding costs ⚡2 plus ⚡1 per
+  selected founder beyond the minimum, and admission or pact-renewal proposals
+  cost ⚡1. The charge happens on submission, including proposals later declined
+  or expired. Votes, responses, leaving, removal, and dissolution have no fee;
+  there is no recurring upkeep. AI proposals do not spend the player's resources.
+- Successful founding feedback names the founders and generated group name.
+  A newly formed probationary alliance is presented as **New alliance**;
+  **Strained alliance** is reserved for actual strain/fracture.
+
+## Strategy effects and what membership does not guarantee
+
+Reality alliances are mirrored into strategic game state. The AI's protection
+read depends on alliance status, each member's commitment and perceived role,
+cohesion, fracture risk, infiltrator status, and whether the AI knows a shared
+target plan. Strong overlapping groups can add protection, with later groups
+weighted less than the strongest one. Known current and fallback targets add
+their own pressure.
+
+In the Reality alliance voting path, a player with a shared alliance usually
+gets a strong protection bias, but a backstab path remains. Its current
+backstab chance is bounded between 1% and 12% and varies with threat, betrayal
+pressure, and AI identity. Target pressure, other game decisions, and
+personality can still affect the outcome. Older tag-only/compatibility paths use
+their own voting calculations. No path guarantees that members cast identical
+votes, and human votes are never synchronized.
+
+### Offer Protection response
+
+The promise covers only the player's own vote or usable power. If the target is
+currently nominated, shares a current alliance with the player, and has no
+concrete strain or contradiction evidence, the target accepts the reassurance
+instead of facing a generic rejection roll. A current LOH target/backup plan or
+a recorded voluntary nomination by the promisor counts as a contradiction.
+Recent conflict, an active nemesis, betrayal, explicit rivalry, or strong
+distrust/resentment can still make the target wary. A rejected promise awards no
+relationship or quality gain; an accepted promise gets the configured modest
+relationship boost. The player-facing response says whether the target relies
+on the promise and does not claim it controls the rest of the house.
+
+Group cohesion is computed from the mean member commitment, commitment spread,
+and disagreement among stored plans:
+
+```text
+clamp01(mean_commitment − 0.55 × commitment_spread − 0.18 × plan_disagreement)
+```
+
+Fracture risk also considers low commitment, plan disagreement, and known leaks.
+New members begin at 0.5 commitment. A newly created group therefore commonly
+shows about 50% cohesion before its members have built a shared record. Cohesion
+is a model input, not a literal loyalty poll or admission probability. The
+**New group** status remains until the group has a strategy meeting; later
+fractured or dormant groups can recover through their lifecycle rules.
+
+## Current UX gaps and recommended follow-up
+
+The current build has an in-game **Incoming requests** badge for actionable
+alliance decisions, and the revised Social tutorial points players to it. It
+does not send an operating-system push notification. To keep an invitation from
+being easy to miss, a future notification should announce the new request when
+it becomes actionable and link directly to that inbox item; avoid prompting the
+candidate before the group's approval exists.
+
+The alliance inbox currently does not display the exact response deadline.
+Show the game day/phase deadline on every pending item and visually flag the
+last available window. Keep the same deadline across duplicates and show when a
+roster/officer change invalidates a vote.
+
+The invite cards for two different groups currently share the title **Invite
+[name]**; only their descriptions name the target group. Put the group name in
+the title and confirmation, such as **Invite D to The Anchor**, to prevent
+starting the wrong vote.
+
+The **Found an alliance** picker checks the human's group limit but does not
+disable every selected founder who has already reached two groups or prevent a
+selection that would exceed the six-person maximum. The command is rejected
+downstream, which can feel like a failed action. Disable ineligible people in
+the roster and explain the limit before Execute.
+
+The admission inbox clearly distinguishes vote then candidate acceptance, but
+the **new group** inbox card does not disclose proposed leader/co-leader terms.
+Show the complete roster and officer roles before each founder votes. For an
+AI proposal with `basePactId`, explicitly disclose which personal pact will be
+superseded and whether it is one of the protected endgame pacts.
+
+AI autonomy now scores candidate relevance instead of simply taking the
+first matching player ID, but still lacks distinct Classic versus Vox
+strategic incentives, recent-invitation fatigue, and an explicit
+audience-reputation trade-off. Introduce a bounded mode-aware decision layer
+without replacing alliance governance or the existing per-faction agenda
+receipts. Record grounded reasons while preserving private AI knowledge.
+
+## Source of truth
+
+The runtime rules live in `src/social/reality/allianceIdentity.ts`,
+`src/social/reality/allianceAutonomy.ts`,
+`src/social/reality/allianceManagement.ts`, and
+`src/social/reality/relationshipForms.ts`. In-game discovery and response live
+in `src/components/GameControlDock/GameControlDock.tsx`,
+`src/components/IncomingInteractionsInbox/IncomingInteractionsInbox.tsx`, and
+`src/components/SocialPanelV2/SocialPanelV2.tsx`. Strategic voting integration
+is in `src/store/gameSlice.ts`.

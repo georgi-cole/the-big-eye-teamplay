@@ -1,0 +1,1068 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { configureStore } from '@reduxjs/toolkit'
+import { Provider } from 'react-redux'
+import { describe, expect, it } from 'vitest'
+import gameReducer, { createInitialGameState, setPhase } from '../../../store/gameSlice'
+import settingsReducer, { setGameUX } from '../../../store/settingsSlice'
+import socialReducer, {
+  hydrateSocial,
+  openIncomingInbox,
+  pushIncomingInteraction,
+  replaceRealityDomain,
+  updateRelationship,
+  updateSocialMemory,
+} from '../../../social/socialSlice'
+import { socialMiddleware } from '../../../social/socialMiddleware'
+import { hasAllianceBetween } from '../../../social/socialAlliance'
+import {
+  allianceRequestDecisionActors,
+  manageAlliance,
+} from '../../../social/reality/allianceManagement'
+import { createInitialRealityDomainState, ensureRealityActors } from '../../../social/reality/state'
+import { addRealityFact } from '../../../social/reality/knowledge'
+import type { RealityFact } from '../../../social/reality/types'
+import { createRealityAlliance } from '../../../social/reality/relationshipForms'
+import IncomingInteractionsInbox from '../IncomingInteractionsInbox'
+
+function makeStore() {
+  return configureStore({
+    reducer: { game: gameReducer, social: socialReducer, settings: settingsReducer },
+  })
+}
+
+function makeStoreWithSocialMiddleware() {
+  return configureStore({
+    reducer: { game: gameReducer, social: socialReducer, settings: settingsReducer },
+    middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(socialMiddleware),
+  })
+}
+
+function makeInboxStoreForGame(game: ReturnType<typeof createInitialGameState>) {
+  return configureStore({
+    reducer: { game: gameReducer, social: socialReducer, settings: settingsReducer },
+    preloadedState: { game },
+  })
+}
+
+function renderInbox(store: ReturnType<typeof makeStore>) {
+  return render(
+    <Provider store={store}>
+      <IncomingInteractionsInbox />
+    </Provider>
+  )
+}
+
+function getNonUserPlayer(store: ReturnType<typeof makeStore>) {
+  const player = store.getState().game.players.find((candidate) => !candidate.isUser)
+  if (!player) throw new Error('Expected a non-user player for test setup.')
+  return player
+}
+
+describe('IncomingInteractionsInbox', () => {
+  it('shows an AI group invitation in Incoming after member approval and accepts it there', async () => {
+    const store = makeStore()
+    const game = store.getState().game
+    const human = game.players.find((player) => player.isUser)!
+    const activePlayers = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    )
+    const activeActorIds = activePlayers.map((player) => player.id)
+    const founders = activePlayers.filter((player) => !player.isUser).slice(0, 3)
+    expect(founders).toHaveLength(3)
+
+    const at = { day: game.week, phase: game.phase }
+    const reality = createInitialRealityDomainState()
+    ensureRealityActors(reality, activeActorIds)
+    const alliance = createRealityAlliance(reality, {
+      id: 'ai-alliance-incoming-test',
+      kind: 'GROUP',
+      founderIds: founders.map((player) => player.id),
+      memberIds: [],
+      purpose: 'Mutual protection',
+      name: 'Night Owls',
+      at,
+    })
+    alliance.status = 'ACTIVE'
+
+    const context = {
+      at,
+      activeActorIds,
+      // Keep the test's AI votes explicit so it can model both sides of the gate.
+      humanActorIds: activeActorIds,
+      seed: game.seed ?? 1,
+    }
+    const proposed = manageAlliance(
+      reality,
+      {
+        type: 'PROPOSE',
+        kind: 'ADMIT',
+        actorId: alliance.leaderId!,
+        allianceId: alliance.id,
+        candidateId: human.id,
+      },
+      context
+    )
+    expect(proposed.requestId).toBeTruthy()
+    const request = reality.allianceManagement.requests[proposed.requestId!]
+    expect(request.status).toBe('VOTING')
+
+    store.dispatch(replaceRealityDomain(reality))
+    store.dispatch(openIncomingInbox())
+    renderInbox(store)
+    expect(screen.queryByText('Alliance proposals and votes · 1')).not.toBeInTheDocument()
+
+    for (const actorId of allianceRequestDecisionActors(request))
+      manageAlliance(
+        reality,
+        { type: 'RESPOND', requestId: request.id, actorId, accept: true },
+        context
+      )
+    expect(request.status).toBe('CONSENT')
+    expect(request.candidateInvitedAt).toBeDefined()
+
+    store.dispatch(replaceRealityDomain(reality))
+    expect(await screen.findByText('Alliance proposals and votes · 1')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'The group approved your admission. Accept to join as a regular member. Current members: ' +
+          founders.map((player) => player.name).join(' · ') +
+          '.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }))
+
+    await waitFor(() => {
+      expect(store.getState().social.reality.alliances[alliance.id].memberIds).toContain(human.id)
+    })
+    expect(screen.getByRole('status')).toHaveTextContent("You're in! Night Owls now has 4 members.")
+  })
+
+  it('requires an invitee at the group limit to choose which alliance to leave', async () => {
+    const store = makeStore()
+    const game = store.getState().game
+    const human = game.players.find((player) => player.isUser)!
+    const activePlayers = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    )
+    const nonHuman = activePlayers.filter((player) => !player.isUser)
+    const inviteMembers = nonHuman.slice(0, 3)
+    const firstOldMembers = nonHuman.slice(3, 5)
+    const secondOldMembers = nonHuman.slice(5, 7)
+    const at = { day: game.week, phase: game.phase }
+    const reality = createInitialRealityDomainState()
+    ensureRealityActors(
+      reality,
+      activePlayers.map((player) => player.id)
+    )
+    const invitedAlliance = createRealityAlliance(reality, {
+      id: 'incoming-switch-target',
+      kind: 'GROUP',
+      founderIds: inviteMembers.map((player) => player.id),
+      memberIds: [],
+      purpose: 'Mutual protection',
+      name: 'Night Owls',
+      at,
+    })
+    invitedAlliance.status = 'ACTIVE'
+    const currentAlliances = [
+      createRealityAlliance(reality, {
+        id: 'incoming-switch-old-one',
+        kind: 'GROUP',
+        founderIds: [human.id, firstOldMembers[0].id],
+        memberIds: [firstOldMembers[1].id],
+        purpose: 'Mutual protection',
+        name: 'Old Circle',
+        at,
+      }),
+      createRealityAlliance(reality, {
+        id: 'incoming-switch-old-two',
+        kind: 'GROUP',
+        founderIds: [human.id, secondOldMembers[0].id],
+        memberIds: [secondOldMembers[1].id],
+        purpose: 'Mutual protection',
+        name: 'Quiet Group',
+        at,
+      }),
+    ]
+    currentAlliances.forEach((entry) => (entry.status = 'ACTIVE'))
+    const context = {
+      at,
+      activeActorIds: activePlayers.map((player) => player.id),
+      humanActorIds: activePlayers.map((player) => player.id),
+      seed: game.seed ?? 1,
+    }
+    const proposed = manageAlliance(
+      reality,
+      {
+        type: 'PROPOSE',
+        kind: 'ADMIT',
+        actorId: invitedAlliance.leaderId!,
+        allianceId: invitedAlliance.id,
+        candidateId: human.id,
+      },
+      context
+    )
+    const request = reality.allianceManagement.requests[proposed.requestId!]
+    for (const actorId of allianceRequestDecisionActors(request))
+      manageAlliance(
+        reality,
+        { type: 'RESPOND', requestId: request.id, actorId, accept: true },
+        context
+      )
+    expect(request.status).toBe('CONSENT')
+
+    store.dispatch(replaceRealityDomain(reality))
+    store.dispatch(openIncomingInbox())
+    renderInbox(store)
+
+    const departurePicker = await screen.findByRole('combobox', {
+      name: 'Alliance to leave for Night Owls',
+    })
+    const accept = screen.getByRole('button', { name: 'Accept and switch alliances' })
+    expect(accept).toBeDisabled()
+    fireEvent.change(departurePicker, { target: { value: currentAlliances[0].id } })
+    expect(accept).toBeEnabled()
+    fireEvent.click(accept)
+
+    await waitFor(() => {
+      expect(store.getState().social.reality.alliances[invitedAlliance.id].memberIds).toContain(
+        human.id
+      )
+    })
+    expect(
+      store.getState().social.reality.alliances[currentAlliances[0].id].memberIds
+    ).not.toContain(human.id)
+    expect(store.getState().social.reality.alliances[currentAlliances[1].id].memberIds).toContain(
+      human.id
+    )
+  })
+
+  it('lets the alliance leader accept a member rename suggestion in Incoming', async () => {
+    const store = makeStore()
+    const game = store.getState().game
+    const human = game.players.find((player) => player.isUser)!
+    const activePlayers = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    )
+    const otherMembers = activePlayers.filter((player) => !player.isUser).slice(0, 2)
+    const at = { day: game.week, phase: game.phase }
+    const reality = createInitialRealityDomainState()
+    ensureRealityActors(
+      reality,
+      activePlayers.map((player) => player.id)
+    )
+    const alliance = createRealityAlliance(reality, {
+      id: 'rename-suggestion-incoming-test',
+      kind: 'GROUP',
+      founderIds: [human.id, ...otherMembers.map((player) => player.id)],
+      memberIds: [],
+      purpose: 'Mutual protection',
+      name: 'Night Owls',
+      leaderId: human.id,
+      at,
+    })
+    alliance.status = 'ACTIVE'
+
+    const proposer = otherMembers[0]
+    const context = {
+      at,
+      activeActorIds: activePlayers.map((player) => player.id),
+      humanActorIds: [human.id],
+      displayNames: Object.fromEntries(activePlayers.map((player) => [player.id, player.name])),
+      viewerActorId: human.id,
+      seed: game.seed ?? 1,
+    }
+    const suggestion = manageAlliance(
+      reality,
+      {
+        type: 'SUGGEST_RENAME',
+        allianceId: alliance.id,
+        actorId: proposer.id,
+        name: 'The Late Shift',
+      },
+      context
+    )
+    expect(suggestion.status).toBe('APPLIED')
+    store.dispatch(replaceRealityDomain(reality))
+    store.dispatch(openIncomingInbox())
+    renderInbox(store)
+
+    expect(await screen.findByText('Alliance proposals and votes · 1')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Suggested name: The Late Shift. Accept to rename the group; decline to keep its current name.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept new name' }))
+    await waitFor(() => {
+      expect(store.getState().social.reality.alliances[alliance.id].name).toBe('The Late Shift')
+    })
+  })
+
+  it('uses one chronological message stream and collapsed History', async () => {
+    const store = makeStore()
+    store.dispatch(openIncomingInbox())
+    const otherId = getNonUserPlayer(store).id
+
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-low-later',
+        fromId: otherId,
+        type: 'compliment',
+        text: 'Low later.',
+        createdAt: 120,
+        createdWeek: 1,
+        expiresAtWeek: 2,
+        read: false,
+        requiresResponse: false,
+        resolved: false,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-medium-soon',
+        fromId: otherId,
+        type: 'gossip',
+        text: 'Medium soon.',
+        createdAt: 140,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: false,
+        resolved: false,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-high-later',
+        fromId: otherId,
+        type: 'deal_offer',
+        text: 'High later.',
+        createdAt: 160,
+        createdWeek: 1,
+        expiresAtWeek: 2,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-high-soon',
+        fromId: otherId,
+        type: 'nomination_plea',
+        text: 'High soon.',
+        createdAt: 180,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-readonly',
+        fromId: otherId,
+        type: 'compliment',
+        text: 'House update.',
+        payload: { responsePolicy: 'readOnly' },
+        createdAt: 185,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: false,
+        resolved: false,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-resolved',
+        fromId: otherId,
+        type: 'compliment',
+        text: 'Resolved note.',
+        createdAt: 190,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: true,
+        requiresResponse: true,
+        resolved: true,
+        resolvedAt: 190,
+        resolvedWeek: 1,
+        resolvedWith: 'positive',
+      })
+    )
+
+    renderInbox(store)
+
+    expect(screen.getByText('4 open conversations · 1 house update')).toBeInTheDocument()
+
+    const messagesSection = screen.getByLabelText('Messages')
+    const messageItems = within(messagesSection).getAllByRole('listitem')
+    expect(messageItems).toHaveLength(5)
+    expect(messageItems[0].textContent).toContain('Low later.')
+    expect(messageItems[1].textContent).toContain('Medium soon.')
+    expect(messageItems[2].textContent).toContain('High later.')
+    expect(messageItems[3].textContent).toContain('High soon.')
+    expect(messageItems[4].textContent).toContain('House update.')
+
+    const readOnlyItem = screen.getByText('House update.').closest('[role="listitem"]')
+    expect(readOnlyItem).not.toBeNull()
+    expect(within(readOnlyItem as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('History · 1'))
+    expect(screen.getByText('Resolved note.')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(store.getState().social.incomingInteractions.every((entry) => entry.read)).toBe(true)
+    })
+  })
+
+  it('responds without parroting the selected button as a second explanation', () => {
+    const store = makeStore()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-3',
+        fromId: otherPlayer.id,
+        type: 'warning',
+        text: 'Careful this week.',
+        createdAt: 300,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(document.querySelector('[data-response-type="positive"]')!)
+
+    const entry = store
+      .getState()
+      .social.incomingInteractions.find((interaction) => interaction.id === 'interaction-3')
+    expect(entry?.resolved).toBe(true)
+    expect(entry?.resolvedWith).toBe('positive')
+    expect(entry?.outcomeText).toMatch(/unconfirmed|registered|changed how/i)
+    expect(entry?.outcomeText).not.toMatch(/your choice/i)
+  })
+
+  it('prefers the authored reply over a second relationship summary', () => {
+    const store = makeStore()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'authored-reaction-check-in',
+        fromId: otherPlayer.id,
+        type: 'check_in',
+        text: 'Can we talk about where we stand?',
+        payload: { scenarioKey: 'generic_check_in', variantId: 'generic_check_in_direct:1' },
+        createdAt: 301,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(screen.getByRole('button', { name: 'Be honest' }))
+
+    const entry = store
+      .getState()
+      .social.incomingInteractions.find(
+        (interaction) => interaction.id === 'authored-reaction-check-in'
+      )
+    expect(entry?.reactionText).toMatch(new RegExp(`^${otherPlayer.name} replies:`))
+    expect(entry?.reactionText).toContain('"')
+    expect(entry?.outcomeText).toContain('appreciate the direct answer')
+    expect(screen.getByText(entry!.reactionText!)).toBeInTheDocument()
+    expect(screen.queryByText(entry!.outcomeText!)).not.toBeInTheDocument()
+    const responseCard = screen.getByText(entry!.reactionText!).closest('.inbox-item__feedback')
+    expect(responseCard).not.toBeNull()
+    expect(responseCard?.querySelectorAll('p')).toHaveLength(1)
+    expect(
+      screen
+        .getByText(entry!.reactionText!)
+        .closest('[role="listitem"]')
+        ?.querySelectorAll('.inbox-item__feedback')
+    ).toHaveLength(1)
+  })
+
+  it('hides a campaign paraphrase but keeps a concrete pact outcome beside the reply', () => {
+    const store = makeStore()
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    const campaignReply = `${otherPlayer.name} replies: "My case is that I am a number you can work with. If you keep me safe, I will show you that in the next decision."`
+    const campaignSummary = `${otherPlayer.name} says they need one firm vote before they can pressure the fence-sitters.`
+    const pactReply = `${otherPlayer.name} replies: "I will remember that you chose to work with me."`
+    const pactOutcome = `The alliance with ${otherPlayer.name} is now active. Later votes and nominations will show whether it holds.`
+    const resolvedBase = {
+      fromId: otherPlayer.id,
+      createdWeek: 1,
+      expiresAtWeek: 1,
+      read: true,
+      requiresResponse: true,
+      resolved: true,
+      resolvedAt: 200,
+      resolvedWeek: 1,
+      resolvedWith: 'positive' as const,
+    }
+
+    store.dispatch(
+      pushIncomingInteraction({
+        ...resolvedBase,
+        id: 'campaign-response-summary',
+        type: 'check_in',
+        text: 'Keep me over the other nominee and you will not regret it.',
+        payload: { scenarioKey: 'nominee_campaign' },
+        createdAt: 200,
+        reactionText: campaignReply,
+        outcomeText: campaignSummary,
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        ...resolvedBase,
+        id: 'pact-response-state-change',
+        type: 'alliance_proposal',
+        text: 'Want to make a pact?',
+        createdAt: 201,
+        reactionText: pactReply,
+        outcomeText: pactOutcome,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(screen.getByText('History · 2'))
+
+    expect(screen.getByText(campaignReply)).toBeInTheDocument()
+    expect(screen.queryByText(campaignSummary)).not.toBeInTheDocument()
+    expect(screen.getByText(pactReply)).toBeInTheDocument()
+    expect(screen.getByText(pactOutcome)).toBeInTheDocument()
+  })
+
+  it('hides an emotional outcome that only repeats the spoken relationship reaction', () => {
+    const store = makeStoreWithSocialMiddleware()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'relationship-check-in-no-duplicate',
+        fromId: otherPlayer.id,
+        type: 'check_in',
+        text: 'Can we talk about how close we have become?',
+        payload: {
+          scenarioKey: 'relationship_friendship_check_in',
+          variantId: 'relationship_friendship_check_in:1',
+        },
+        createdAt: 302,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(screen.getByRole('button', { name: 'Let them in' }))
+
+    const entry = store
+      .getState()
+      .social.incomingInteractions.find(
+        (interaction) => interaction.id === 'relationship-check-in-no-duplicate'
+      )
+    expect(entry?.reactionText).toMatch(new RegExp(`^${otherPlayer.name} replies:`))
+    expect(entry?.outcomeText).toContain('same closeness and trust')
+    expect(screen.getByText(entry!.reactionText!)).toBeInTheDocument()
+    expect(screen.queryByText(entry!.outcomeText!)).not.toBeInTheDocument()
+    const responseCard = screen.getByText(entry!.reactionText!).closest('.inbox-item__feedback')
+    expect(responseCard?.querySelectorAll('p')).toHaveLength(1)
+  })
+
+  it('shows an action-specific reaction once without repeating its relationship paraphrase', () => {
+    const store = makeStoreWithSocialMiddleware()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'action-specific-apology-reaction',
+        fromId: otherPlayer.id,
+        type: 'check_in',
+        text: 'I owe you an apology. I handled that badly, and I want to own it.',
+        payload: {
+          originActionId: 'apologize',
+          scenarioKey: 'relationship_repair_follow_up',
+          variantId: 'apologize:repair:1',
+        },
+        createdAt: 304,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(screen.getByRole('button', { name: 'Accept their apology' }))
+
+    const entry = store
+      .getState()
+      .social.incomingInteractions.find(
+        (interaction) => interaction.id === 'action-specific-apology-reaction'
+      )
+    expect(entry?.reactionText).toMatch(new RegExp(`^${otherPlayer.name} reacts:`))
+    expect(entry?.reactionText).not.toContain('"')
+    expect(entry?.outcomeText).toMatch(/fixing this will take more than one good conversation/i)
+    expect(screen.getByText(entry!.reactionText!)).toBeInTheDocument()
+    expect(screen.queryByText(entry!.outcomeText!)).not.toBeInTheDocument()
+    const responseCard = screen.getByText(entry!.reactionText!).closest('.inbox-item__feedback')
+    expect(responseCard?.querySelectorAll('p')).toHaveLength(1)
+  })
+
+  it('hides a summary that restates uncertainty already expressed in the reply', () => {
+    const store = makeStoreWithSocialMiddleware()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'social-momentum-no-paraphrase',
+        fromId: otherPlayer.id,
+        type: 'warning',
+        text: 'The Hub is paying attention to how much ground you are covering.',
+        payload: { scenarioKey: 'social_momentum_notice', variantId: 'social-momentum:1' },
+        createdAt: 303,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(screen.getByRole('button', { name: 'Compare what they saw' }))
+
+    const entry = store
+      .getState()
+      .social.incomingInteractions.find(
+        (interaction) => interaction.id === 'social-momentum-no-paraphrase'
+      )
+    expect(entry?.outcomeText).toContain('watching who approaches you')
+    expect(screen.getByText(entry!.reactionText!)).toBeInTheDocument()
+    expect(screen.queryByText(entry!.outcomeText!)).not.toBeInTheDocument()
+  })
+
+  it('keeps an answered check-in visible with a concrete outcome', () => {
+    const store = makeStore()
+    store.dispatch(openIncomingInbox())
+    const other = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'public-save-check-in',
+        fromId: other.id,
+        type: 'check_in',
+        text: 'That public save changed the temperature in the house. We should talk.',
+        createdAt: 310,
+        createdWeek: 1,
+        expiresAtWeek: 2,
+        read: false,
+        requiresResponse: false,
+        resolved: false,
+      })
+    )
+    renderInbox(store)
+    fireEvent.click(screen.getByRole('button', { name: /honest|open up|let them in/i }))
+    expect(
+      screen.getByText(/took your honesty seriously|appreciated the openness/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/public save changed the temperature/i)).toBeInTheDocument()
+  })
+
+  it('forms a reciprocal alliance once without premium currency in Normal Mode', () => {
+    const store = makeStoreWithSocialMiddleware()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const humanId = store.getState().game.players.find((player) => player.isUser)!.id
+    const otherPlayer = getNonUserPlayer(store)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'alliance-proposal',
+        fromId: otherPlayer.id,
+        type: 'alliance_proposal',
+        text: 'Want to lock this in?',
+        createdAt: 320,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+    fireEvent.click(document.querySelector('[data-response-type="accept"]')!)
+
+    const socialState = store.getState().social
+    expect(socialState.relationships[otherPlayer.id]?.[humanId]?.tags).toContain('alliance')
+    expect(socialState.relationships[humanId]?.[otherPlayer.id]?.tags).toContain('alliance')
+    expect(hasAllianceBetween(socialState.relationships, humanId, otherPlayer.id)).toBe(true)
+    expect(socialState.energyBank[humanId] ?? 0).toBe(0)
+    expect(socialState.energyBank[otherPlayer.id] ?? 0).toBe(0)
+    expect(socialState.influenceBank[humanId] ?? 0).toBe(0)
+    expect(socialState.influenceBank[otherPlayer.id] ?? 0).toBe(0)
+  })
+
+  it('lets the player ask about or delay a personal pact without rejecting it', async () => {
+    const store = makeStoreWithSocialMiddleware()
+    store.dispatch(setPhase('week_start'))
+    store.dispatch(openIncomingInbox())
+    const humanId = store.getState().game.players.find((player) => player.isUser)!.id
+    const otherPlayer = getNonUserPlayer(store)
+    const day = store.getState().game.week ?? 1
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'pact-follow-up',
+        fromId: otherPlayer.id,
+        type: 'alliance_proposal',
+        text: 'Would you make this official?',
+        payload: {
+          scenarioKey: 'week_start_alliance_lock',
+          personalPactPlan: 'I want us to share reads before either of us commits to a target.',
+        },
+        createdAt: 321,
+        createdWeek: day,
+        createdDay: day,
+        createdPhase: 'week_start',
+        deadline: { day, phase: 'social_2', policy: 'AUTO_IGNORE' },
+        expiresAtWeek: day,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+
+    expect(screen.getByText('personal pact offer')).toBeInTheDocument()
+    expect(
+      screen.getByText(`Offer closes Day ${day} · end of the final campaign window`)
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ask for their plan' }))
+
+    let offer = store
+      .getState()
+      .social.incomingInteractions.find((interaction) => interaction.id === 'pact-follow-up')!
+    expect(offer.resolved).toBe(false)
+    expect(offer.outcomeText).toContain('I want us to share reads')
+    expect(offer.outcomeText).toContain('No target or vote is agreed yet')
+    expect(offer.payload?.pactPlanRequested).toBe(true)
+    expect(hasAllianceBetween(store.getState().social.relationships, humanId, otherPlayer.id)).toBe(
+      false
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Need time' }))
+    offer = store
+      .getState()
+      .social.incomingInteractions.find((interaction) => interaction.id === 'pact-follow-up')!
+    expect(offer.resolved).toBe(false)
+    expect(offer.deadline).toMatchObject({ day: day + 1, phase: 'social_2' })
+    expect(offer.outcomeText).toContain(`through Day ${day + 1}'s final campaign window`)
+    expect(offer.outcomeText).toContain('No target or vote is agreed yet')
+    expect(screen.queryByRole('button', { name: 'Need time' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask for their plan' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    offer = store
+      .getState()
+      .social.incomingInteractions.find((interaction) => interaction.id === 'pact-follow-up')!
+    expect(offer.resolved).toBe(true)
+    expect(offer.outcomeText).toBe('You declined the personal pact offer. No pact was formed.')
+  })
+
+  it('records the chosen Safety nominee ID and goodwill even when two names match', () => {
+    const game = createInitialGameState()
+    game.phase = 'pos_results'
+    game.doubleEviction = { usedCount: 1, weekActive: true, pendingSecondEviction: null }
+    const human = game.players.find((player) => player.isUser)!
+    const [holder, first, second, third] = game.players.filter((player) => !player.isUser)
+    game.lohId = human.id
+    human.status = 'loh'
+    game.posWinnerId = holder.id
+    holder.status = 'pos'
+    first.name = second.name = 'Alex'
+    game.nomineeIds = [first.id, second.id, third.id]
+    const store = makeInboxStoreForGame(game)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'three-nominee-consultation',
+        fromId: holder.id,
+        type: 'deal_offer',
+        text: 'Who would you prefer I save?',
+        payload: {
+          scenarioKey: 'safety_holder_consults_loh',
+          nomineeIds: game.nomineeIds,
+        },
+        createdWeek: game.week,
+        createdAt: 1,
+        expiresAtWeek: game.week + 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+    store.dispatch(openIncomingInbox())
+    renderInbox(store)
+
+    expect(screen.getByRole('button', { name: 'Save ' + third.name })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Alex (nominee 1)' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save Alex (nominee 2)' }))
+
+    const { game: settledGame, social } = store.getState()
+    expect(settledGame.lohSafetyAdvice).toMatchObject({ advice: 'use', targetId: second.id })
+    expect(social.socialMemory[holder.id][human.id].trustMomentum).toBeGreaterThan(0)
+    expect(social.incomingInteractions[0]).toMatchObject({
+      resolvedChoiceId: 'safety-save:' + second.id,
+      receipt: { kind: 'gameplay' },
+    })
+    expect(screen.getByText(/now knows you prefer Safety used on Alex/i)).toBeInTheDocument()
+  })
+
+  it('shows only the promise label and records it when chosen in Normal mode', () => {
+    const game = createInitialGameState()
+    game.phase = 'loh_results'
+    const human = game.players.find((player) => player.isUser)!
+    const sender = game.players.find((player) => !player.isUser)!
+    game.lohId = human.id
+    human.status = 'loh'
+    const store = makeInboxStoreForGame(game)
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'explicit-nomination-promise',
+        fromId: sender.id,
+        type: 'deal_offer',
+        text: 'Will you keep me off the block?',
+        payload: { scenarioKey: 'hoh_safety_request', modeAtCreation: 'normal' },
+        createdWeek: game.week,
+        createdAt: 1,
+        expiresAtWeek: game.week + 1,
+        read: false,
+        requiresResponse: true,
+        resolved: false,
+      })
+    )
+    store.dispatch(openIncomingInbox())
+    renderInbox(store)
+
+    const promise = screen.getByRole('button', { name: /promise to keep|give my word/i })
+    expect(promise.textContent).toMatch(
+      /^(?:Promise to keep them off the block|Give my word they’ll stay off the block)$/
+    )
+    expect(promise).not.toHaveAccessibleDescription()
+    fireEvent.click(promise)
+    expect(store.getState().social.commitments).toEqual([
+      expect.objectContaining({ kind: 'protect_from_nomination', beneficiaryId: sender.id }),
+    ])
+    expect(screen.getByText('Promise active')).toBeInTheDocument()
+    expect(screen.getByText('Active promises · 1')).toBeInTheDocument()
+  })
+
+  it.each([false, true])(
+    'shows one on-topic reply for a saved Dex tip (answered: %s)',
+    (answered) => {
+      const game = createInitialGameState()
+      game.week = 4
+      game.phase = 'social_2'
+      const human = game.players.find((player) => player.isUser)!
+      const [dex, blue, aria] = game.players.filter((player) => !player.isUser)
+      dex.name = 'Dex'
+      blue.name = 'Blue'
+      aria.name = 'Aria'
+      const store = makeInboxStoreForGame(game)
+      const reality = createInitialRealityDomainState()
+      const fact: RealityFact = {
+        id: 'fact:dex-tip',
+        sourceEventId: 'event:blue-and-aria',
+        propositionType: 'SECRET_MEETING',
+        subjectIds: [blue.id, aria.id],
+        value: true,
+        day: game.week,
+        phase: game.phase,
+        visibility: 'PAIR_ONLY',
+        participantIds: [blue.id, aria.id],
+        witnessIds: [dex.id],
+        viewerVisible: false,
+        publicVisible: false,
+        juryVisible: false,
+      }
+      addRealityFact(reality, fact)
+      store.dispatch(
+        hydrateSocial({
+          ...store.getState().social,
+          reality,
+          incomingInteractions: [
+            {
+              id: 'saved-dex-tip',
+              fromId: dex.id,
+              type: 'warning',
+              text: 'I heard something you may want to know: Blue and Aria have been finding reasons to compare notes in private.',
+              payload: {
+                scenarioKey: 'relationship_frustration_follow_up',
+                relationshipIntent: 'REPAIR',
+                relationshipBeatId: 'unrelated-relationship-beat',
+                modeAtCreation: 'drama',
+                intelFactId: fact.id,
+                subjectId: blue.id,
+                subjectName: 'Blue',
+              },
+              createdWeek: game.week,
+              createdAt: 11,
+              expiresAtWeek: game.week + 1,
+              read: answered,
+              requiresResponse: false,
+              resolved: answered,
+              ...(answered
+                ? {
+                    resolvedWith: 'positive' as const,
+                    resolvedLabel: 'Talk it through',
+                    resolvedWeek: game.week,
+                    reactionText: 'Dex replies: "I did not need a perfect apology."',
+                    outcomeText: 'Dex says they are frustrated by mixed signals.',
+                    receipt: {
+                      kind: 'intel' as const,
+                      text: 'Dex says they are frustrated by mixed signals.',
+                    },
+                  }
+                : {}),
+            },
+          ],
+        })
+      )
+      store.dispatch(openIncomingInbox())
+      renderInbox(store)
+
+      expect(screen.queryByText('Trying to repair things')).not.toBeInTheDocument()
+      if (!answered) {
+        expect(
+          store.getState().social.incomingInteractions[0].payload?.relationshipBeatId
+        ).toBeUndefined()
+        expect(screen.queryByRole('button', { name: 'Talk it through' })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Ask how they heard it' }))
+        expect(
+          store.getState().social.reality.beliefsByOwner[human.id]?.[
+            `belief:${human.id}:${fact.id}`
+          ]
+        ).toBeDefined()
+        expect(store.getState().social.intelligenceDeliveries).toHaveLength(1)
+      } else {
+        expect(store.getState().social.intelligenceDeliveries).toHaveLength(0)
+      }
+      const response = screen.getByLabelText('Response')
+      expect(response.querySelectorAll('p')).toHaveLength(1)
+      expect(response).toHaveTextContent(/Dex replies:.*Blue/)
+      expect(response).not.toHaveTextContent(/apology|mixed signals/)
+    }
+  )
+
+  it('shows a structured gameplay receipt beside an authored reaction', () => {
+    const store = makeStore()
+    const sender = getNonUserPlayer(store)
+    store.dispatch(openIncomingInbox())
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'structured-receipt',
+        fromId: sender.id,
+        type: 'deal_offer',
+        text: 'Should we recommend Kai?',
+        createdWeek: 1,
+        createdAt: 1,
+        expiresAtWeek: 2,
+        read: true,
+        requiresResponse: true,
+        resolved: true,
+        resolvedWeek: 1,
+        reactionText: 'I will treat Kai as our recommendation.',
+        outcomeText: 'You and Lia recorded Kai as an alliance recommendation.',
+        receipt: {
+          kind: 'gameplay',
+          text: 'You and Lia recorded Kai as an alliance recommendation.',
+        },
+      })
+    )
+    renderInbox(store)
+    fireEvent.click(screen.getByText('History · 1'))
+    expect(screen.getByText('I will treat Kai as our recommendation.')).toBeInTheDocument()
+    expect(
+      screen.getByText('You and Lia recorded Kai as an alliance recommendation.')
+    ).toBeInTheDocument()
+  })
+
+  it('keeps contextual choices compact with no permanent descriptions beneath them', () => {
+    const store = makeStore()
+    store.dispatch(setGameUX({ dramaMode: true, dramaModeAdminOverride: true }))
+    store.dispatch(openIncomingInbox())
+    const otherId = getNonUserPlayer(store).id
+    store.dispatch(
+      updateRelationship({
+        source: otherId,
+        target: 'user',
+        delta: -60,
+      })
+    )
+    store.dispatch(
+      updateSocialMemory({
+        actorId: otherId,
+        targetId: 'user',
+        deltas: { resentment: 8 },
+      })
+    )
+    store.dispatch(
+      pushIncomingInteraction({
+        id: 'interaction-tone',
+        fromId: otherId,
+        type: 'snide_remark',
+        text: 'Tone check.',
+        createdAt: 420,
+        createdWeek: 1,
+        expiresAtWeek: 1,
+        read: false,
+        requiresResponse: false,
+        resolved: false,
+      })
+    )
+
+    renderInbox(store)
+
+    const actions = [...document.querySelectorAll('.inbox-action')]
+    expect(actions).toHaveLength(4)
+    expect(new Set(actions.map((element) => element.className))).toHaveLength(4)
+    expect(document.querySelector('.inbox-action small')).toBeNull()
+    expect(screen.queryByText(/Sets a clear boundary and damages trust/i)).not.toBeInTheDocument()
+  })
+
+  it('stays available during eviction results so reactions are not stranded', () => {
+    const store = makeStore()
+    store.dispatch(openIncomingInbox())
+
+    renderInbox(store)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    act(() => {
+      store.dispatch(setPhase('eviction_results'))
+    })
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(store.getState().social.incomingInboxOpen).toBe(true)
+  })
+})

@@ -1,0 +1,133 @@
+name: Deploy private QA site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/generate-after-the-eye-config.mjs'
+      - 'scripts/generate-audio-manifest.mjs'
+      - 'scripts/check-production-debug-globals.mjs'
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/deploy-production.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-pages-deploy
+  # QA migrations and production promotion must not overlap.
+  cancel-in-progress: false
+
+jobs:
+  release-quality:
+    name: Required release-quality checks
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip-public-deploy]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run test:guard
+      - run: npm run lint:ci
+      - run: npm run typecheck
+      - run: npm run build:mobile
+      - run: npm audit --omit=dev --audit-level=high
+
+  deploy-qa:
+    name: Build and deploy protected QA site
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: [release-quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate QA deployment settings
+        shell: bash
+        env:
+          QA_ACCESS_CONFIGURED: ${{ vars.CLOUDFLARE_QA_ACCESS_CONFIGURED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PAGES_DEPLOY_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          VITE_SUPABASE_ENABLED: ${{ vars.VITE_SUPABASE_QA_ENABLED }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_QA_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_QA_PUBLISHABLE_KEY }}
+          VITE_PLAYER_ACCOUNTS_ENABLED: ${{ vars.VITE_PLAYER_ACCOUNTS_QA_ENABLED }}
+          VITE_PRODUCTION_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+        run: |
+          test "$QA_ACCESS_CONFIGURED" = "true" || { echo "::error::Protect the QA Pages and pages.dev hostnames with Cloudflare Access, then set CLOUDFLARE_QA_ACCESS_CONFIGURED=true."; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "::error::CLOUDFLARE_ACCOUNT_ID is required."; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::CLOUDFLARE_API_TOKEN is required."; exit 1; }
+          test -n "$PAGES_DEPLOY_TOKEN" || { echo "::error::PAGES_DEPLOY_TOKEN is required to remove the old public QA copy."; exit 1; }
+          test "$VITE_SUPABASE_ENABLED" = "true" || { echo "::error::VITE_SUPABASE_QA_ENABLED must be true."; exit 1; }
+          test "$VITE_PLAYER_ACCOUNTS_ENABLED" = "true" || { echo "::error::VITE_PLAYER_ACCOUNTS_QA_ENABLED must be true for the full QA feature set."; exit 1; }
+          case "$VITE_SUPABASE_URL" in https://*.supabase.co) ;; *) echo "::error::VITE_SUPABASE_QA_URL must be a Supabase HTTPS project URL."; exit 1;; esac
+          case "$VITE_SUPABASE_PUBLISHABLE_KEY" in sb_publishable_*) ;; *) echo "::error::VITE_SUPABASE_QA_PUBLISHABLE_KEY must be a publishable key."; exit 1;; esac
+          test "$VITE_SUPABASE_URL" != "$VITE_PRODUCTION_SUPABASE_URL" || { echo "::error::QA and production must use different Supabase projects."; exit 1; }
+
+      - name: Build QA site with developer access
+        env:
+          VITE_APP_ENVIRONMENT: qa
+          VITE_BUILD_ID: ${{ github.sha }}-qa
+          VITE_BUILD_TARGET: admin
+          VITE_VIP_DEV_ENTITLEMENT: 'true'
+          VITE_BASE_PATH: '/'
+          VITE_SUPABASE_ENABLED: ${{ vars.VITE_SUPABASE_QA_ENABLED }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_QA_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_QA_PUBLISHABLE_KEY }}
+          VITE_PLAYER_ACCOUNTS_ENABLED: ${{ vars.VITE_PLAYER_ACCOUNTS_QA_ENABLED }}
+          VITE_PLAYER_SIGN_IN_ENABLED: ${{ vars.VITE_PLAYER_SIGN_IN_QA_ENABLED }}
+        run: npm run build
+
+      - name: Deploy QA build to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=bbmobilenew-qa --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove the old public QA copy from GitHub Pages
+        env:
+          PAGES_DEPLOY_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+        run: |
+          git clone --depth=1 "https://x-access-token:${PAGES_DEPLOY_TOKEN}@github.com/${{ github.repository_owner }}/bbmobilenew.git" deployment
+          git -C deployment rm -r --ignore-unmatch qa/
+          git -C deployment config user.name "GitHub Actions"
+          git -C deployment config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git -C deployment diff --cached --quiet; then
+            echo "The public QA copy has already been removed."
+            exit 0
+          fi
+          git -C deployment commit -m "Remove public QA site after protected QA deploy"
+          git -C deployment push origin main

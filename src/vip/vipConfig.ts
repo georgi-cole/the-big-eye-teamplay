@@ -1,0 +1,395 @@
+import { PREMIUM_GAME_LABEL, PREMIUM_GAME_UPGRADES } from './paidGameCatalog'
+
+export type StoreEntitlementKey =
+  | 'survivalMode'
+  | 'publicMode'
+  | 'tribunalHouse'
+  | 'dramaMode'
+  | 'cupidArrow'
+  | 'voxPopuli'
+  | 'premiumChallenges'
+  | 'noAds'
+
+export type StoreProductKey = 'vip' | StoreEntitlementKey
+
+export type StoreProductCategory =
+  | 'bundle'
+  | 'game-mode'
+  | 'house-feature'
+  | 'expansion'
+  | 'utility'
+export type StoreProductTheme =
+  | 'spotlight'
+  | 'survival'
+  | 'public'
+  | 'tribunal'
+  | 'drama'
+  | 'cupid'
+  | 'vox'
+  | 'quiet'
+export type StoreProductIconName = StoreProductKey | 'survivalRuns' | 'fallback'
+
+export interface StoreProductDefinition {
+  key: StoreProductKey
+  productId: string
+  title: string
+  description: string
+  entitlement: StoreEntitlementKey | null
+  shortTagline: string
+  fullDescription: string
+  benefits: readonly string[]
+  icon: StoreProductIconName
+  visualTheme: StoreProductTheme
+  ownershipType: 'one-time'
+  category: StoreProductCategory
+  shelf: 'all-access' | 'game-modes' | 'season-expansions' | 'extras'
+  vipBenefitLabel?: string
+  badge: string
+  accessInstructions: string
+  accessRoute?: string
+  accessLabel?: string
+  legalNote?: string
+  availableInRelease: boolean
+}
+
+export const VIP_PRODUCT_ID =
+  import.meta.env.VITE_VIP_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.vip'
+
+export const SURVIVAL_MODE_PRODUCT_ID =
+  import.meta.env.VITE_SURVIVAL_MODE_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.survival'
+
+export const PUBLIC_MODE_PRODUCT_ID =
+  import.meta.env.VITE_PUBLIC_MODE_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.publicmode'
+
+export const TRIBUNAL_HOUSE_PRODUCT_ID =
+  import.meta.env.VITE_TRIBUNAL_HOUSE_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.tribunalhouse'
+
+export const DRAMA_MODE_PRODUCT_ID =
+  import.meta.env.VITE_DRAMA_MODE_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.dramamode'
+
+export const NO_ADS_PRODUCT_ID =
+  import.meta.env.VITE_NO_ADS_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.noads'
+
+export const CUPID_ARROW_PRODUCT_ID =
+  import.meta.env.VITE_CUPID_ARROW_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.cupidarrow'
+
+export const VOX_POPULI_PRODUCT_ID =
+  import.meta.env.VITE_VOX_POPULI_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.voxpopuli'
+
+export const PREMIUM_CHALLENGES_PRODUCT_ID =
+  import.meta.env.VITE_PREMIUM_CHALLENGES_PRODUCT_ID?.trim() ||
+  'com.georgicole.thebigeye.premiumchallenges'
+
+/** Consumables deliberately stay outside the permanent-entitlement/VIP catalog. */
+export const SURVIVAL_RUN_PRODUCT = {
+  key: 'survivalRuns',
+  productId:
+    import.meta.env.VITE_SURVIVAL_RUN_PRODUCT_ID?.trim() || 'com.georgicole.thebigeye.survivalrun',
+  title: 'Survival runs',
+  description: 'One more chance to continue your eliminated Survival run, without an ad.',
+  shortTagline: 'Your run does not have to end here.',
+  fullDescription:
+    'Each purchase adds one recovery. Use it after elimination, even if you have used all seven ad recoveries, or whenever you prefer to skip the ad. Buy again whenever you need another chance.',
+  benefits: [
+    'One recovery per purchase',
+    'Continue the same run without watching an ad',
+    'Use before or after your seven ad recoveries',
+    'Keep unused recoveries for a later Survival run on this device',
+  ],
+  icon: 'survivalRuns',
+  visualTheme: 'survival',
+  ownershipType: 'consumable',
+  shelf: 'extras',
+  nominalPriceCents: 99,
+  nominalPriceLabel: '€0.99',
+  badge: 'One recovery',
+  accessInstructions: 'Choose Use a Survival run after you are eliminated.',
+  legalNote:
+    'A repeatable consumable purchase, separate from VIP and Survival Mode access. Unused recoveries are stored on this device and are not restored by Restore Purchases after reinstalling or changing devices. The store confirms the localized price before payment.',
+} as const
+
+export const VIP_UPGRADE_CREDIT_NOTE =
+  '75% of this purchase counts toward a future VIP upgrade. The final upgrade price is rounded to the nearest supported store tier.'
+
+const STANDALONE_PRODUCT_CATALOG: readonly StoreProductDefinition[] = [
+  {
+    key: 'premiumChallenges',
+    productId: PREMIUM_CHALLENGES_PRODUCT_ID,
+    title: 'Premium Challenges Pack',
+    description: 'Permanently unlock every premium minigame version.',
+    entitlement: 'premiumChallenges',
+    shortTagline: `${PREMIUM_GAME_LABEL}. Every premium version, one permanent unlock.`,
+    fullDescription:
+      'Unlock every premium minigame version, including remasters, enhanced presentations, and the Quick Tap variants. Premium versions launch automatically in eligible competitions.',
+    benefits: [
+      ...PREMIUM_GAME_UPGRADES.map((game) => game.title),
+      'Automatic replacement in every competition',
+      'Original editions remain available without access',
+    ],
+    icon: 'premiumChallenges',
+    visualTheme: 'spotlight',
+    ownershipType: 'one-time',
+    category: 'game-mode',
+    shelf: 'extras',
+    badge: PREMIUM_GAME_LABEL,
+    accessInstructions: 'Premium versions launch automatically in eligible competitions.',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'survivalMode',
+    productId: SURVIVAL_MODE_PRODUCT_ID,
+    title: 'Surveyeval Mode',
+    description: 'Permanently unlock Surveyeval Mode.',
+    entitlement: 'survivalMode',
+    shortTagline: 'Stay in the game. Outlast every replacement.',
+    fullDescription:
+      'Play the implemented endless Surveyeval format, where eliminated contestants are replaced and your run continues until you are eliminated.',
+    benefits: [
+      'Launch a dedicated Surveyeval season',
+      'Face an evolving replacement cast',
+      'Track your best Surveyeval run',
+      'Resume an unfinished Surveyeval game',
+    ],
+    icon: 'survivalMode',
+    visualTheme: 'survival',
+    ownershipType: 'one-time',
+    category: 'game-mode',
+    shelf: 'game-modes',
+    badge: 'Game mode',
+    accessInstructions: 'Choose Surveyeval from the Home screen.',
+    accessRoute: '/',
+    accessLabel: 'Go to Home',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'publicMode',
+    productId: PUBLIC_MODE_PRODUCT_ID,
+    title: 'Public Mode',
+    description: 'Permanently unlock Public Mode controls.',
+    entitlement: 'publicMode',
+    shortTagline: 'Let the audience influence the game.',
+    fullDescription:
+      'Enable the implemented public-opinion controls that bring audience requests and public danger decisions into eligible seasons.',
+    benefits: [
+      'Enable Public Mode in Settings',
+      'Receive audience-driven requests',
+      'Use public danger decision rules',
+      'See public influence during the season',
+    ],
+    icon: 'publicMode',
+    visualTheme: 'public',
+    ownershipType: 'one-time',
+    category: 'house-feature',
+    shelf: 'season-expansions',
+    badge: 'Game feature',
+    accessInstructions: 'Turn Public Mode on or off in Settings before starting a season.',
+    accessRoute: '/settings',
+    accessLabel: 'Open Settings',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'tribunalHouse',
+    productId: TRIBUNAL_HOUSE_PRODUCT_ID,
+    title: 'Tribunal Mode',
+    description: 'Permanently unlock Tribunal Mode when it is released.',
+    entitlement: 'tribunalHouse',
+    shortTagline: 'A different endgame rule set.',
+    fullDescription:
+      'Reserve permanent access to the Tribunal Mode option exposed in the game settings.',
+    benefits: [
+      'Permanent entitlement',
+      'Dedicated Settings control',
+      'Included automatically with VIP',
+    ],
+    icon: 'tribunalHouse',
+    visualTheme: 'tribunal',
+    ownershipType: 'one-time',
+    category: 'house-feature',
+    shelf: 'season-expansions',
+    badge: 'Game feature',
+    accessInstructions: 'Manage Tribunal Mode from Settings when the feature is available.',
+    accessRoute: '/settings',
+    accessLabel: 'Open Settings',
+    legalNote:
+      'The entitlement is permanent; feature availability may depend on the current release.',
+    availableInRelease: false,
+  },
+  {
+    key: 'dramaMode',
+    productId: DRAMA_MODE_PRODUCT_ID,
+    title: 'Reality Mode',
+    description: 'The room is watching. Make your game unforgettable.',
+    entitlement: 'dramaMode',
+    shortTagline: 'Play the social game they will still be talking about.',
+    fullDescription: 'Whispers travel. Loyalties shift. One conversation can save your game.',
+    benefits: [
+      'Make secret deals, bold moves and unforgettable rivalries',
+      'Get pulled into pleas, warnings and tempting offers',
+      'Watch the room react to what you say and what you do not',
+      'Know who trusts you, who is wary, and what is really shifting',
+      'Turn on romance and ride-or-die storylines when you want extra heat',
+    ],
+    icon: 'dramaMode',
+    visualTheme: 'drama',
+    ownershipType: 'one-time',
+    category: 'house-feature',
+    shelf: 'season-expansions',
+    badge: 'Your social game, amplified',
+    accessInstructions: 'Choose how real you want the season to feel in Settings.',
+    accessRoute: '/settings',
+    accessLabel: 'Open Settings',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'cupidArrow',
+    productId: CUPID_ARROW_PRODUCT_ID,
+    title: "Cupid's Arrow",
+    description: "Permanently unlock the Cupid's Arrow seasonal expansion.",
+    entitlement: 'cupidArrow',
+    shortTagline: 'One Hub. Eight pairs. Every fate is shared.',
+    fullDescription:
+      'A full-season paired format where every victory, nomination, vote, and elimination binds two hubmates together until the spell breaks.',
+    benefits: [
+      'A complete paired-season rule set',
+      'Shared power, danger, votes, and exits',
+      'Dedicated ceremonies, broadcasts, and season archive',
+      'Permanent access whenever the expansion is scheduled',
+    ],
+    icon: 'cupidArrow',
+    visualTheme: 'cupid',
+    ownershipType: 'one-time',
+    category: 'expansion',
+    shelf: 'game-modes',
+    badge: 'Season expansion',
+    accessInstructions:
+      "Cupid's Arrow enters eligible new seasons automatically once the expansion is active.",
+    accessRoute: '/',
+    accessLabel: 'Go to Home',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'voxPopuli',
+    productId: VOX_POPULI_PRODUCT_ID,
+    title: 'Vox Populi',
+    description: 'Permanently unlock the Vox Populi seasonal expansion.',
+    entitlement: 'voxPopuli',
+    shortTagline: 'The Hub nominates. The audience decides.',
+    fullDescription:
+      'A social-first season where hubmates nominate in secret, competition winners earn immunity, and the audience controls every elimination and the final crown.',
+    benefits: [
+      'Secret two-person nomination ballots',
+      'Audience eliminations and finale decision',
+      'Immunity-led competitions and ballot-ranked backups',
+      'Dedicated Confessional, broadcast, social, and archive journeys',
+    ],
+    icon: 'voxPopuli',
+    visualTheme: 'vox',
+    ownershipType: 'one-time',
+    category: 'expansion',
+    shelf: 'game-modes',
+    badge: 'Season expansion',
+    accessInstructions:
+      'Vox Populi enters eligible new seasons automatically once the expansion is active.',
+    accessRoute: '/',
+    accessLabel: 'Go to Home',
+    legalNote: VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+  {
+    key: 'noAds',
+    productId: NO_ADS_PRODUCT_ID,
+    title: 'No Ads',
+    vipBenefitLabel: 'No automatic ads',
+    description: 'Permanently remove automatic ads.',
+    entitlement: 'noAds',
+    shortTagline: 'Keep your season moving without interruptions.',
+    fullDescription:
+      'Remove automatic advertising breaks while keeping optional rewarded opportunities under your control.',
+    benefits: [
+      'Removes automatic ads',
+      'Works across every game mode',
+      'Activates immediately after purchase',
+    ],
+    icon: 'noAds',
+    visualTheme: 'quiet',
+    ownershipType: 'one-time',
+    category: 'utility',
+    shelf: 'extras',
+    badge: 'Permanent unlock',
+    accessInstructions:
+      'No setup is needed. Automatic ads are removed as soon as this unlock is active.',
+    legalNote:
+      'Optional rewarded opportunities remain available by choice. ' + VIP_UPGRADE_CREDIT_NOTE,
+    availableInRelease: true,
+  },
+]
+
+export const VIP_BENEFIT_DETAILS = [
+  ...STANDALONE_PRODUCT_CATALOG.filter((product) => product.availableInRelease).map((product) => ({
+    title: product.vipBenefitLabel ?? product.title,
+    detail: product.shortTagline,
+  })),
+  {
+    title: 'Cinematic ceremonies',
+    detail:
+      'Exclusive ceremony films and themed shock reveals in Classic, Cupid’s Arrow and Vox Populi. On mobile, download the optional cinematic pack once to use it offline, or keep Standard. Switch styles or manage the download in Settings. Survival keeps its fast standard presentation.',
+  },
+]
+
+export const VIP_BENEFITS = VIP_BENEFIT_DETAILS.map((benefit) => benefit.title)
+
+export const STORE_PRODUCT_CATALOG: readonly StoreProductDefinition[] = [
+  {
+    key: 'vip',
+    productId: VIP_PRODUCT_ID,
+    title: 'The Big Eye VIP',
+    description: 'Permanently unlock every VIP feature for one bundle price.',
+    entitlement: null,
+    shortTagline: 'Every premium advantage. One permanent unlock.',
+    fullDescription:
+      'Own the complete premium collection in one purchase, including every permanent Store unlock and cinematic ceremony. Consumable Survival runs are purchased separately.',
+    benefits: VIP_BENEFITS,
+    icon: 'vip',
+    visualTheme: 'spotlight',
+    ownershipType: 'one-time',
+    category: 'bundle',
+    shelf: 'all-access',
+    badge: 'Best value',
+    accessInstructions:
+      'Your included modes and controls are available from the Home screen and Settings.',
+    accessRoute: '/settings',
+    accessLabel: 'Manage VIP features',
+    legalNote:
+      'A permanent, non-consumable purchase. Existing eligible standalone purchases receive 75% credit toward the nearest supported VIP upgrade tier, with a minimum upgrade price.',
+    availableInRelease: true,
+  },
+  ...STANDALONE_PRODUCT_CATALOG,
+]
+
+export const STANDALONE_PRODUCT_KEYS: readonly StoreEntitlementKey[] =
+  STORE_PRODUCT_CATALOG.flatMap((product) =>
+    product.entitlement == null || !product.availableInRelease ? [] : [product.entitlement]
+  )
+
+function getProductKeysOnShelf(shelf: StoreProductDefinition['shelf']): StoreEntitlementKey[] {
+  return STANDALONE_PRODUCT_CATALOG.flatMap((product) =>
+    product.availableInRelease && product.shelf === shelf && product.entitlement
+      ? [product.entitlement]
+      : []
+  )
+}
+
+export const GAME_MODE_PRODUCT_KEYS = getProductKeysOnShelf('game-modes')
+export const EXPANSION_PRODUCT_KEYS = getProductKeysOnShelf('season-expansions')
+export const UTILITY_PRODUCT_KEYS = getProductKeysOnShelf('extras')
+
+export function getStoreProductDefinition(key: StoreProductKey): StoreProductDefinition {
+  const definition = STORE_PRODUCT_CATALOG.find((product) => product.key === key)
+  if (!definition) throw new Error(`Unknown store product: ${key}`)
+  return definition
+}

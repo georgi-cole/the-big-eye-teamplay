@@ -1,0 +1,2037 @@
+/* ─── Blackjack Tournament Component Styles ───────────────────────────────── */
+
+/* ─── Keyframes ──────────────────────────────────────────────────────────── */
+
+@keyframes bjt-bounce {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes bjt-reveal {
+  from {
+    transform: scale(0.9);
+    opacity: 0.5;
+    box-shadow: none;
+  }
+  to {
+    transform: scale(1.1);
+    opacity: 1;
+    box-shadow: 0 0 32px rgba(255, 215, 0, 0.8);
+  }
+}
+
+@keyframes bjt-vs-pulse {
+  0% {
+    transform: scale(1);
+    text-shadow: 0 0 8px rgba(255, 215, 0, 0.4);
+  }
+  50% {
+    transform: scale(1.15);
+    text-shadow: 0 0 24px rgba(255, 215, 0, 0.9);
+  }
+  100% {
+    transform: scale(1);
+    text-shadow: 0 0 8px rgba(255, 215, 0, 0.4);
+  }
+}
+
+@keyframes bjt-card-slide {
+  from {
+    transform: translateX(-20px) scale(0.8);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes bjt-win-pulse {
+  0% {
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+  }
+  50% {
+    box-shadow:
+      0 0 28px rgba(74, 222, 128, 0.9),
+      0 0 4px rgba(74, 222, 128, 0.4) inset;
+  }
+  100% {
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+  }
+}
+
+@keyframes bjt-loser-drop {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0.35;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes bjt-bust-flash {
+  0% {
+    background: rgba(255, 59, 59, 0);
+  }
+  30% {
+    background: rgba(255, 59, 59, 0.35);
+  }
+  100% {
+    background: rgba(255, 59, 59, 0);
+  }
+}
+
+@keyframes bjt-confetti-fall {
+  0% {
+    transform: translateY(-5%) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(108%) rotate(720deg);
+    opacity: 0.1;
+  }
+}
+
+@keyframes bjt-confetti-fall-reverse {
+  0% {
+    transform: translateY(-5%) rotate(0deg) scaleX(-1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(108%) rotate(-720deg) scaleX(-1);
+    opacity: 0.1;
+  }
+}
+
+@keyframes bjt-crown-drop {
+  from {
+    transform: translateY(-60px) scale(0);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes bjt-title-enter {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes bjt-spotlight-pulse {
+  0% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
+/* ─── Base layout ─────────────────────────────────────────────────────────── */
+
+.bjt-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: calc(1.5rem + var(--safe-top)) calc(1rem + var(--safe-right))
+    calc(5rem + var(--safe-bottom)) calc(1rem + var(--safe-left));
+  background:
+    radial-gradient(ellipse at 50% -20%, rgba(133, 76, 230, 0.25), transparent 54%),
+    linear-gradient(145deg, #090711 0%, #171020 52%, #0c0a15 100%);
+  color: #f7f2ff;
+  font-family: inherit;
+  box-sizing: border-box;
+  gap: 1rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ─── Typography ─────────────────────────────────────────────────────────── */
+
+.bjt-title {
+  font-size: clamp(1.25rem, 4vw, 1.8rem);
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.25);
+}
+
+.bjt-spin-title {
+  font-size: clamp(1.4rem, 5vw, 2rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-shadow:
+    0 0 20px rgba(255, 215, 0, 0.6),
+    0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.bjt-title--winner {
+  color: #ffd700;
+  font-size: clamp(1.8rem, 6vw, 2.4rem);
+  text-shadow:
+    0 0 24px rgba(255, 215, 0, 0.8),
+    0 2px 4px rgba(0, 0, 0, 0.6);
+  animation: bjt-title-enter 0.5s 0.3s ease-out both;
+}
+
+.bjt-subtitle {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 0.5rem;
+}
+
+.bjt-loading {
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+}
+
+/* ─── Avatars ─────────────────────────────────────────────────────────────── */
+
+.bjt-avatar {
+  border-radius: 50%;
+  object-fit: cover;
+  background: #1a2540;
+  flex-shrink: 0;
+}
+
+.bjt-avatar--sm {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.bjt-avatar--inline {
+  width: 1.8rem;
+  height: 1.8rem;
+  vertical-align: middle;
+}
+.bjt-avatar--lg {
+  width: 4rem;
+  height: 4rem;
+}
+.bjt-avatar--xl {
+  width: 6rem;
+  height: 6rem;
+  margin: 0.5rem auto;
+}
+.bjt-avatar--xxl {
+  width: 8rem;
+  height: 8rem;
+  margin: 0.5rem auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Status badges ───────────────────────────────────────────────────────── */
+
+.bjt-badge {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 1rem;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.8rem;
+  color: #ffd700;
+}
+
+.bjt-you-badge {
+  font-size: 0.7rem;
+  color: #c7a8ff;
+  font-weight: 600;
+}
+
+.bjt-winner-badge {
+  display: block;
+  color: #4ade80;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-top: 0.25rem;
+}
+
+/* ─── Spinner / Spin phase ────────────────────────────────────────────────── */
+
+.bjt-spin {
+  gap: 1rem;
+}
+
+.bjt-reel-viewport {
+  position: relative;
+  width: min(320px, 90vw);
+  height: calc(3 * 64px + 2 * 0.35rem);
+  overflow: hidden;
+  border: 2px solid #ffd700;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 24px rgba(255, 215, 0, 0.25);
+}
+
+.bjt-reel-track {
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.15s ease-out;
+}
+
+.bjt-spinner-slot {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0 0.8rem;
+  border-radius: 0.5rem;
+  opacity: 0.35;
+  height: 64px;
+  flex-shrink: 0;
+  transition:
+    background 0.1s,
+    transform 0.1s,
+    opacity 0.1s;
+}
+
+.bjt-spinner-slot--active {
+  background: rgba(255, 215, 0, 0.22);
+  opacity: 1;
+  transform: scale(1.06);
+  color: #ffd700;
+  transition:
+    background 0.1s,
+    transform 0.1s,
+    opacity 0.1s;
+}
+
+.bjt-spinner-slot--fast img {
+  filter: blur(1.5px);
+}
+
+.bjt-spinner-slot--fast span {
+  opacity: 0.5;
+}
+
+.bjt-spinner-slot--revealed {
+  animation: bjt-reveal 0.5s ease-out forwards;
+}
+
+.bjt-spinner-pointer {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.2rem;
+  color: #ffd700;
+  pointer-events: none;
+  z-index: 2;
+  filter: drop-shadow(0 0 6px #ffd700);
+}
+
+.bjt-reel-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 30%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.bjt-reel-edge--top {
+  top: 0;
+  background: linear-gradient(to bottom, #0b0f1a 0%, transparent 100%);
+}
+
+.bjt-reel-edge--bottom {
+  bottom: 0;
+  background: linear-gradient(to top, #0b0f1a 0%, transparent 100%);
+}
+
+.bjt-remaining {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+}
+
+/* ─── Pick-opponent phase ─────────────────────────────────────────────────── */
+
+.bjt-players-remaining {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 0.25rem;
+}
+
+.bjt-eliminated-list {
+  font-size: 0.78rem;
+  color: #ff3b3b;
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.bjt-controller-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 215, 0, 0.1);
+  border: 2px solid #ffd700;
+  border-radius: 1rem;
+  padding: 1rem 1.5rem;
+  margin-bottom: 0.5rem;
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+
+.bjt-controller-card .bjt-avatar--lg {
+  border: 2px solid #ffd700;
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.5);
+}
+
+.bjt-controller-label {
+  font-size: 0.75rem;
+  color: #ffd700;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bjt-pick-instruction {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f0e6d3;
+  margin: 0.25rem 0 0.75rem;
+  letter-spacing: 0.03em;
+}
+
+.bjt-pick {
+  justify-content: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding-bottom: calc(8.5rem + var(--minigame-safe-bottom, env(safe-area-inset-bottom, 0px)));
+}
+
+.bjt-opponent-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.bjt-opponent-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(10, 12, 22, 0.7);
+  border: 2px solid rgba(255, 59, 59, 0.4);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  color: #f0e6d3;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.1s,
+    opacity 0.15s;
+  min-width: 5rem;
+}
+
+.bjt-opponent-btn:hover:not(:disabled) {
+  background: rgba(255, 59, 59, 0.15);
+  border-color: #ff3b3b;
+  box-shadow: 0 0 16px rgba(255, 59, 59, 0.4);
+  transform: scale(1.05);
+}
+
+.bjt-opponent-grid:has(.bjt-opponent-btn:hover) .bjt-opponent-btn:not(:hover) {
+  opacity: 0.45;
+}
+
+.bjt-opponent-btn--disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ─── Duel arena ──────────────────────────────────────────────────────────── */
+
+.bjt-duel-arena {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 680px;
+}
+
+.bjt-vs {
+  font-size: 2.5rem;
+  font-weight: 900;
+  color: #ffd700;
+  align-self: center;
+  flex-shrink: 0;
+  flex: 0 0 auto;
+  letter-spacing: 0.04em;
+  animation: bjt-vs-pulse 1.2s ease-in-out infinite;
+  text-shadow: 0 0 12px rgba(255, 215, 0, 0.6);
+}
+
+.bjt-vs--small {
+  font-size: 1.4rem;
+  padding: 0 0.5rem;
+}
+
+.bjt-duelist {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.85rem;
+  padding: 1rem 1.1rem;
+  /* Equal fixed width so both fighter cards are symmetrical */
+  flex: 0 0 clamp(9rem, 42%, 13rem);
+  box-sizing: border-box;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.bjt-duelist--active {
+  border-color: #ffd700;
+  box-shadow:
+    0 0 0 3px #ffd700,
+    0 0 20px rgba(255, 215, 0, 0.5);
+}
+
+.bjt-duelist--bust {
+  border-color: #ff3b3b;
+  opacity: 0.8;
+  animation: bjt-bust-flash 0.5s ease-out;
+}
+
+.bjt-duelist--winner {
+  border-color: #4ade80;
+  animation: bjt-win-pulse 1s ease-in-out infinite;
+}
+
+.bjt-duelist--loser {
+  border-color: #ff3b3b;
+  animation: bjt-loser-drop 0.6s ease-in forwards;
+}
+
+.bjt-duelist-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+/* ─── Cards ───────────────────────────────────────────────────────────────── */
+
+.bjt-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: center;
+  align-items: center;
+}
+
+.bjt-card {
+  background: #fff;
+  color: #1a1a2e;
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  min-width: 1.9rem;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.bjt-card--red {
+  color: #c0392b;
+}
+
+.bjt-card--new {
+  animation: bjt-card-slide 0.35s ease-out;
+}
+
+.bjt-hand-total {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #f0e6d3;
+  margin-left: 0.3rem;
+}
+
+/* ─── Duel controls ───────────────────────────────────────────────────────── */
+
+.bjt-turn-label {
+  font-size: 1rem;
+  color: #ffd700;
+  font-weight: 700;
+  margin: 0.4rem 0;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+}
+
+.bjt-final-score {
+  margin: -0.35rem 0 0.25rem;
+  color: rgba(255, 215, 0, 0.86);
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.bjt-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.bjt-btn {
+  border: none;
+  border-radius: 0.6rem;
+  padding: 0.8rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 0.1s,
+    opacity 0.15s,
+    box-shadow 0.15s;
+  letter-spacing: 0.03em;
+}
+
+.bjt-btn:active {
+  transform: scale(0.96);
+}
+
+.bjt-btn--hit {
+  background: #ff3b3b;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(255, 59, 59, 0.4);
+}
+
+.bjt-btn--hit:hover {
+  background: #e02020;
+  box-shadow: 0 4px 20px rgba(255, 59, 59, 0.6);
+}
+
+.bjt-btn--stand {
+  background: #22c55e;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
+}
+
+.bjt-btn--stand:hover {
+  background: #16a34a;
+  box-shadow: 0 4px 20px rgba(34, 197, 94, 0.6);
+}
+
+.bjt-spectator-note {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
+}
+
+/* ─── Result phase ────────────────────────────────────────────────────────── */
+
+.bjt-result {
+  gap: 1rem;
+}
+
+.bjt-eliminated-msg {
+  color: #ff3b3b;
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin: 0.4rem 0;
+  text-shadow: 0 0 10px rgba(255, 59, 59, 0.5);
+}
+
+.bjt-remaining-msg {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Pseudo-element confetti is purely decorative. The parent element carries
+   aria-hidden="true" in the TSX, so screen readers skip the entire subtree
+   including these ::before/::after nodes. */
+.bjt-result-confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.bjt-result-confetti::before,
+.bjt-result-confetti::after {
+  content: '🎊 🎉 ✨ 💥 🎊 🎉 ✨ 💥';
+  position: absolute;
+  top: -5%;
+  left: -10%;
+  right: -10%;
+  font-size: 1.4rem;
+  letter-spacing: 1.5rem;
+  animation: bjt-confetti-fall 1.8s ease-in forwards;
+  white-space: nowrap;
+  line-height: 2.5;
+}
+
+/* ─── Complete phase ──────────────────────────────────────────────────────── */
+
+.bjt-complete {
+  gap: 1rem;
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  padding-bottom: var(--minigame-safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+.bjt-complete .minigame-complete {
+  position: relative;
+  inset: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.bjt-complete .minigame-placement-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.bjt-complete .minigame-continue-area {
+  position: relative;
+  bottom: auto;
+  flex: 0 0 auto;
+  padding-bottom: max(0.75rem, var(--minigame-safe-bottom, env(safe-area-inset-bottom, 0px)));
+}
+
+.bjt-complete .bjt-roster-wrap {
+  position: static;
+  width: 100%;
+}
+
+.bjt-complete .bjt-roster {
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  border-radius: 0.75rem;
+}
+
+.bjt-confetti,
+.bjt-confetti--reverse {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.bjt-confetti::before,
+.bjt-confetti::after {
+  content: '🏅 ⭐ 🎊 👑 🏅 ⭐ 🎊 👑 🏅 ⭐';
+  position: absolute;
+  top: -5%;
+  left: -5%;
+  right: -5%;
+  font-size: 1.6rem;
+  letter-spacing: 2rem;
+  animation: bjt-confetti-fall 3s linear infinite;
+  white-space: nowrap;
+  line-height: 3;
+}
+
+.bjt-confetti::after {
+  animation-delay: 1s;
+  font-size: 1.2rem;
+  letter-spacing: 3rem;
+}
+
+.bjt-confetti--reverse::before {
+  content: '💛 ❤️ 🩵 💫 💛 ❤️ 🩵 💫 💛 ❤️';
+  position: absolute;
+  top: -5%;
+  left: -5%;
+  right: -5%;
+  font-size: 1.4rem;
+  letter-spacing: 1.8rem;
+  animation: bjt-confetti-fall-reverse 2.5s 0.5s linear infinite;
+  white-space: nowrap;
+  line-height: 3;
+}
+
+.bjt-confetti--reverse::after {
+  animation-delay: 1.5s;
+  animation-duration: 3.5s;
+}
+
+.bjt-winner-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bjt-spotlight {
+  position: absolute;
+  inset: -2.5rem;
+  background: radial-gradient(
+    circle at 50% 55%,
+    rgba(255, 215, 0, 0.45) 0%,
+    rgba(255, 215, 0, 0.15) 45%,
+    transparent 75%
+  );
+  border-radius: 50%;
+  animation: bjt-spotlight-pulse 2s ease-in-out infinite;
+  z-index: 0;
+}
+
+.bjt-crown {
+  font-size: 4.5rem;
+  animation: bjt-crown-drop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  will-change: transform;
+  position: relative;
+  z-index: 1;
+}
+
+.bjt-prize-label {
+  font-size: 1.2rem;
+  color: #ffd700;
+  font-weight: 700;
+  margin: 0.15rem 0;
+  text-shadow: 0 0 12px rgba(255, 215, 0, 0.6);
+  position: relative;
+  z-index: 1;
+}
+
+.bjt-elim-order {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
+  max-width: 32rem;
+  margin: 0.25rem auto 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Roster bar ──────────────────────────────────────────────────────────── */
+
+.bjt-roster-wrap {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+}
+
+.bjt-roster {
+  display: flex;
+  flex-direction: row;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 215, 0, 0.2);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Thin scrollbar: visible enough for scrollability affordance but unobtrusive */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 215, 0, 0.4) transparent;
+}
+
+.bjt-roster::-webkit-scrollbar {
+  height: 3px;
+}
+
+.bjt-roster::-webkit-scrollbar-thumb {
+  background: rgba(255, 215, 0, 0.4);
+  border-radius: 2px;
+}
+
+.bjt-roster-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 3rem;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.bjt-roster-avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  background: #1a2540;
+  transition:
+    border-color 0.2s,
+    filter 0.2s;
+}
+
+.bjt-roster-item--eliminated .bjt-roster-avatar {
+  filter: grayscale(1);
+  opacity: 0.35;
+  border-color: rgba(255, 59, 59, 0.3);
+}
+
+.bjt-roster-item--controller .bjt-roster-avatar {
+  border-color: #ffd700;
+  box-shadow: 0 0 8px rgba(255, 215, 0, 0.6);
+}
+
+.bjt-roster-item--you .bjt-roster-avatar {
+  border-color: #60a5fa;
+}
+
+.bjt-roster-item--controller.bjt-roster-item--you .bjt-roster-avatar {
+  border-color: #ffd700;
+  box-shadow:
+    0 0 8px rgba(255, 215, 0, 0.6),
+    0 0 0 2px #60a5fa;
+}
+
+.bjt-roster-name {
+  font-size: 0.6rem;
+  opacity: 0.8;
+  max-width: 3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f0e6d3;
+}
+
+.bjt-roster-score {
+  font-size: 0.54rem;
+  font-weight: 800;
+  color: #ffd700;
+  line-height: 1;
+}
+
+.bjt-roster-ctrl {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.2rem;
+  font-size: 0.65rem;
+  line-height: 1;
+  filter: drop-shadow(0 0 3px rgba(255, 215, 0, 0.8));
+}
+
+.bjt-roster-x {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.1rem;
+  font-size: 0.6rem;
+  color: #ff3b3b;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* ─── Fast-forward button ─────────────────────────────────────────────────── */
+
+.bjt-btn--ff {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.8rem;
+  font-size: 1.1rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s;
+  letter-spacing: 0.05em;
+  align-self: flex-end;
+  margin-bottom: 0.25rem;
+}
+
+.bjt-btn--ff:hover {
+  background: rgba(255, 215, 0, 0.15);
+  box-shadow: 0 0 8px rgba(255, 215, 0, 0.4);
+}
+
+.bjt-btn--ff-active {
+  background: rgba(255, 215, 0, 0.2);
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.6);
+  border-color: #ffd700;
+}
+
+/* ─── Continue button (winner screen) ────────────────────────────────────── */
+
+.bjt-btn--continue {
+  background: #ffd700;
+  color: #0b0f1a;
+  font-size: 1.1rem;
+  font-weight: 700;
+  padding: 0.85rem 2.5rem;
+  border-radius: 0.7rem;
+  margin-top: 1rem;
+  box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);
+  cursor: pointer;
+  border: none;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.1s;
+  position: relative;
+  z-index: 2;
+}
+
+.bjt-btn--skip-end {
+  align-self: center;
+  margin: 0 auto 0.75rem;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(8, 12, 24, 0.82);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.bjt-btn--continue:hover {
+  background: #ffe840;
+  box-shadow: 0 4px 24px rgba(255, 215, 0, 0.6);
+}
+
+.bjt-btn--continue:active {
+  transform: scale(0.97);
+}
+
+.bjt-btn--secondary {
+  margin-top: 0.7rem;
+  border: 1px solid rgba(255, 215, 0, 0.5);
+  color: #ffd700;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.bjt-btn--secondary:hover {
+  background: rgba(255, 215, 0, 0.14);
+  box-shadow: 0 4px 16px rgba(255, 215, 0, 0.2);
+}
+
+/* ─── Confirm duel button ─────────────────────────────────────────────────── */
+
+.bjt-btn--confirm {
+  background: #ff3b3b;
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 700;
+  padding: 0.75rem 2rem;
+  border-radius: 0.65rem;
+  margin-top: 0.75rem;
+  box-shadow: 0 4px 12px rgba(255, 59, 59, 0.4);
+  cursor: pointer;
+  border: none;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s;
+  position: sticky;
+  bottom: calc(4.5rem + var(--minigame-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  z-index: 11;
+}
+
+.bjt-btn--confirm:hover {
+  background: #e02020;
+  box-shadow: 0 4px 20px rgba(255, 59, 59, 0.6);
+}
+
+/* ─── Fighter slots (pair selection) ─────────────────────────────────────── */
+
+.bjt-fighter-slots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.bjt-fighter-slot {
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 0.65rem;
+  padding: 0.5rem 1.1rem;
+  min-width: 7rem;
+  text-align: center;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+
+.bjt-fighter-slot--filled {
+  border-style: solid;
+  border-color: #ffd700;
+  background: rgba(255, 215, 0, 0.08);
+}
+
+.bjt-slot-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.5);
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.bjt-slot-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #ffd700;
+}
+
+.bjt-slot-empty {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.35);
+  font-style: italic;
+}
+
+/* ─── Opponent buttons: selected states ──────────────────────────────────── */
+
+.bjt-opponent-btn--selected-a {
+  border-color: #ffd700 !important;
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+  background: rgba(255, 215, 0, 0.1) !important;
+}
+
+.bjt-opponent-btn--selected-b {
+  border-color: #54d8c0 !important;
+  box-shadow: 0 0 10px rgba(84, 216, 192, 0.4);
+  background: rgba(84, 216, 192, 0.1) !important;
+}
+
+/* ─── Tie message ─────────────────────────────────────────────────────────── */
+
+.bjt-tie-msg {
+  color: #ffd700;
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0.25rem 0 0.75rem;
+  text-shadow: 0 0 8px rgba(255, 215, 0, 0.5);
+}
+
+/* ─── League standings ───────────────────────────────────────────────────── */
+
+.bjt-league-results {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  justify-content: flex-start;
+  gap: clamp(0.55rem, 1.8dvh, 1rem);
+  overflow: hidden;
+  padding-top: calc(1rem + var(--safe-top));
+  padding-bottom: calc(1rem + var(--safe-bottom));
+}
+
+.bjt-league-results > .bjt-title,
+.bjt-league-results > .bjt-subtitle,
+.bjt-league-results > .bjt-btn--continue {
+  flex: 0 0 auto;
+}
+
+.bjt-league-results > .bjt-subtitle {
+  width: min(100%, 34rem);
+  margin-bottom: 0;
+}
+
+.bjt-placement-list {
+  width: min(100%, 34rem);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.bjt-league-results > .bjt-placement-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 215, 0, 0.42) transparent;
+  padding: 0.15rem 0.2rem 0.35rem;
+}
+
+.bjt-league-results > .bjt-placement-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.bjt-league-results > .bjt-placement-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 215, 0, 0.42);
+}
+
+.bjt-league-results > .bjt-btn--continue {
+  flex: 0 0 auto;
+  margin-top: 0.25rem;
+}
+
+.bjt-placement-item {
+  display: grid;
+  grid-template-columns: 2.5rem 2.25rem minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.bjt-placement-rank,
+.bjt-placement-detail {
+  color: #ffd700;
+  font-weight: 800;
+}
+
+.bjt-placement-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+@media (max-height: 700px) {
+  .bjt-league-results {
+    gap: 0.45rem;
+    padding-top: calc(0.7rem + var(--safe-top));
+    padding-bottom: calc(0.7rem + var(--safe-bottom));
+  }
+
+  .bjt-league-results > .bjt-subtitle {
+    font-size: 0.86rem;
+    line-height: 1.3;
+  }
+
+  .bjt-league-results .bjt-placement-item {
+    padding-block: 0.48rem;
+  }
+
+  .bjt-league-results > .bjt-btn--continue {
+    min-height: 48px;
+    padding-block: 0.65rem;
+  }
+}
+
+/* ─── no-animations overrides ─────────────────────────────────────────────── */
+
+body.no-animations .bjt-crown,
+body.no-animations .bjt-title--winner,
+body.no-animations .bjt-spinner-slot,
+body.no-animations .bjt-spinner-slot--active,
+body.no-animations .bjt-spinner-slot--revealed,
+body.no-animations .bjt-opponent-btn,
+body.no-animations .bjt-vs,
+body.no-animations .bjt-duelist,
+body.no-animations .bjt-duelist--winner,
+body.no-animations .bjt-duelist--loser,
+body.no-animations .bjt-duelist--bust,
+body.no-animations .bjt-card--new,
+body.no-animations .bjt-result-confetti::before,
+body.no-animations .bjt-result-confetti::after,
+body.no-animations .bjt-confetti::before,
+body.no-animations .bjt-confetti::after,
+body.no-animations .bjt-confetti--reverse::before,
+body.no-animations .bjt-confetti--reverse::after {
+  animation: none;
+  transition: none;
+}
+
+body.no-animations .bjt-reel-track {
+  transition: none;
+}
+
+/* ─── Mobile duel viewport hardening ───────────────────────────────────────
+ * Keep the live blackjack decision controls and score rail in one viewport.
+ * The roster participates in the duel layout instead of floating over Hit /
+ * Stand, and the two duelists stay side by side on phone widths.
+ * ─────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) and (orientation: portrait) {
+  .bjt-container.bjt-duel {
+    height: 100dvh;
+    min-height: 0;
+    justify-content: flex-start;
+    gap: 0.55rem;
+    padding: calc(0.7rem + var(--safe-top)) calc(0.7rem + var(--safe-right))
+      calc(0.45rem + var(--safe-bottom)) calc(0.7rem + var(--safe-left));
+    overflow: hidden;
+  }
+
+  .bjt-duel .bjt-title {
+    max-width: calc(100% - 4.8rem);
+    align-self: flex-start;
+    justify-content: flex-start;
+    margin: 0;
+    font-size: clamp(1rem, 4.1vw, 1.2rem);
+    line-height: 1.2;
+    text-align: left;
+  }
+
+  .bjt-duel .bjt-final-score {
+    align-self: flex-start;
+    margin: -0.15rem 0 0.05rem;
+    font-size: 0.8rem;
+  }
+
+  .bjt-duel .bjt-btn--ff {
+    position: absolute;
+    top: calc(0.65rem + var(--safe-top));
+    right: calc(0.7rem + var(--safe-right));
+    z-index: 12;
+    align-self: auto;
+    margin: 0;
+    padding: 0.28rem 0.65rem;
+    font-size: 0.95rem;
+  }
+
+  .bjt-duel .bjt-duel-arena {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.45rem;
+    max-width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  .bjt-duel .bjt-duelist {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    gap: 0.3rem;
+    padding: 0.65rem 0.45rem;
+    border-radius: 0.75rem;
+  }
+
+  .bjt-duel .bjt-avatar--lg {
+    width: 3.35rem;
+    height: 3.35rem;
+  }
+
+  .bjt-duel .bjt-vs {
+    font-size: 1.6rem;
+  }
+
+  .bjt-duel .bjt-card {
+    min-width: 1.7rem;
+    padding: 0.16rem 0.28rem;
+    font-size: 0.8rem;
+  }
+
+  .bjt-duel .bjt-hand-total {
+    margin-left: 0.15rem;
+    font-size: 0.78rem;
+  }
+
+  .bjt-duel .bjt-turn-label {
+    margin: 0.1rem 0;
+    font-size: 0.92rem;
+  }
+
+  .bjt-duel .bjt-actions {
+    width: min(100%, 20rem);
+    gap: 0.55rem;
+    margin-top: 0.1rem;
+  }
+
+  .bjt-duel .bjt-actions .bjt-btn {
+    min-width: 0;
+    flex: 1 1 0;
+    padding: 0.68rem 0.6rem;
+    font-size: 1rem;
+  }
+
+  .bjt-duel .bjt-roster-wrap {
+    position: static;
+    inset: auto;
+    z-index: 2;
+    width: 100%;
+    flex: 0 0 auto;
+    margin-top: auto;
+  }
+
+  .bjt-duel .bjt-roster {
+    gap: 0.5rem;
+    padding: 0.38rem 0.5rem;
+    border: 1px solid rgba(255, 215, 0, 0.2);
+    border-radius: 0.75rem;
+  }
+
+  .bjt-duel .bjt-roster-avatar {
+    width: 2.2rem;
+    height: 2.2rem;
+  }
+}
+
+/* ─── Premium live table ────────────────────────────────────────────────────
+ * Keep the duel, decision controls, and standings inside one viewport-sized
+ * stage. The table gets the available space while the standings stay beside it.
+ * ─────────────────────────────────────────────────────────────────────────── */
+.bjt-container.bjt-duel {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  max-height: 100dvh;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: clamp(0.55rem, 1.5dvh, 1rem);
+  overflow: hidden;
+  padding: calc(0.8rem + var(--safe-top)) calc(1rem + var(--safe-right))
+    calc(0.8rem + var(--safe-bottom)) calc(1rem + var(--safe-left));
+}
+
+.bjt-duel-header,
+.bjt-duel-layout {
+  width: min(100%, 1440px);
+  margin-inline: auto;
+}
+
+.bjt-duel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: 0 0 auto;
+  min-height: 4.2rem;
+  text-align: left;
+}
+
+.bjt-duel-heading {
+  min-width: 0;
+}
+
+.bjt-duel-kicker {
+  display: block;
+  color: #c5a4ff;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.bjt-duel .bjt-title {
+  justify-content: flex-start;
+  margin: 0.15rem 0 0;
+  color: #fffaff;
+  font-size: clamp(1.15rem, 2.8vw, 1.8rem);
+  letter-spacing: -0.025em;
+  line-height: 1.08;
+  text-shadow: 0 2px 18px rgba(189, 143, 255, 0.22);
+}
+
+.bjt-duel .bjt-final-score {
+  margin: 0.25rem 0 0;
+  color: #e5d4ff;
+  font-size: clamp(0.72rem, 1.6vw, 0.88rem);
+}
+
+.bjt-duel-utilities {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex: 0 0 auto;
+}
+
+.bjt-duel .bjt-btn--skip-end {
+  align-self: auto;
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid rgba(224, 204, 255, 0.2);
+  border-radius: 0.75rem;
+  background: rgba(20, 13, 31, 0.74);
+  color: #e9dcff;
+  font-size: 0.78rem;
+}
+
+.bjt-duel .bjt-btn--ff {
+  align-self: auto;
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(195, 154, 255, 0.34);
+  border-radius: 0.75rem;
+  background: rgba(115, 73, 172, 0.18);
+  color: #e3ceff;
+  font-size: 0.82rem;
+}
+
+.bjt-duel .bjt-btn--ff-active {
+  background: rgba(161, 109, 237, 0.34);
+  border-color: #c59aff;
+  color: #fff;
+}
+
+.bjt-duel-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(12rem, 22vw, 17rem);
+  gap: clamp(0.65rem, 1.4vw, 1.2rem);
+  flex: 1 1 0;
+  min-height: 0;
+  text-align: left;
+}
+
+.bjt-table-surface,
+.bjt-standings-card {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(204, 171, 255, 0.24);
+  border-radius: clamp(1rem, 2vw, 1.6rem);
+  box-shadow:
+    0 24px 65px rgba(0, 0, 0, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.035) inset;
+}
+
+.bjt-table-surface {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: clamp(0.8rem, 2vw, 1.5rem);
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 43%, rgba(109, 61, 156, 0.42), transparent 64%),
+    linear-gradient(145deg, rgba(41, 25, 59, 0.98), rgba(18, 13, 28, 0.98));
+}
+
+.bjt-table-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.15rem 0.75rem;
+  color: rgba(235, 218, 255, 0.64);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.bjt-duel .bjt-duel-arena {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  justify-content: stretch;
+  gap: clamp(0.5rem, 2vw, 1.6rem);
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  flex-wrap: nowrap;
+}
+
+.bjt-duel .bjt-duelist {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: min(48dvh, 25rem);
+  flex: none;
+  justify-content: center;
+  gap: clamp(0.45rem, 1.5dvh, 0.9rem);
+  padding: clamp(0.75rem, 2.2vw, 1.6rem);
+  overflow: hidden;
+  border: 1px solid rgba(217, 195, 255, 0.2);
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(180, 135, 255, 0.15), transparent 56%),
+    linear-gradient(150deg, rgba(54, 38, 74, 0.8), rgba(24, 18, 35, 0.9));
+  box-shadow: 0 14px 35px rgba(7, 4, 12, 0.22);
+}
+
+.bjt-duel .bjt-duelist--active {
+  border-color: rgba(209, 169, 255, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(182, 132, 249, 0.6),
+    0 0 32px rgba(165, 102, 242, 0.25),
+    0 14px 35px rgba(7, 4, 12, 0.25);
+}
+
+.bjt-duel .bjt-avatar--lg {
+  width: clamp(3rem, 8vw, 5.75rem);
+  height: clamp(3rem, 8vw, 5.75rem);
+  margin: 0;
+  border: 2px solid rgba(224, 204, 255, 0.38);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.bjt-duel .bjt-duelist-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: #fffaff;
+  font-size: clamp(0.84rem, 2vw, 1.2rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bjt-duel .bjt-vs {
+  font-size: clamp(1.15rem, 2.8vw, 2rem);
+  color: #d2adff;
+  text-shadow: 0 0 22px rgba(185, 132, 255, 0.42);
+}
+
+.bjt-duel .bjt-cards {
+  min-height: 5.4rem;
+  align-content: center;
+  gap: 0.35rem;
+}
+
+.bjt-duel .bjt-card {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(2rem, 4.6vw, 3.15rem);
+  min-width: 0;
+  height: clamp(2.8rem, 6.8vw, 4.35rem);
+  padding: 0.2rem;
+  border-radius: 0.45rem;
+  background: linear-gradient(155deg, #fff 0%, #eee7f5 100%);
+  color: #22182d;
+  font-size: clamp(0.95rem, 2.4vw, 1.4rem);
+  box-shadow:
+    0 5px 12px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.7) inset;
+}
+
+.bjt-duel .bjt-card--red {
+  color: #a92e57;
+}
+
+.bjt-duel .bjt-hand-total {
+  flex: 0 0 100%;
+  margin: 0.2rem 0 0;
+  color: #f4e8ff;
+  font-size: clamp(0.9rem, 2vw, 1.2rem);
+  text-align: center;
+}
+
+.bjt-duel-footer {
+  display: grid;
+  grid-template-rows: auto 3.5rem;
+  align-content: end;
+  min-height: 5.6rem;
+  padding-top: 0.45rem;
+}
+
+.bjt-duel .bjt-turn-label {
+  min-height: 1.4rem;
+  margin: 0 0 0.45rem;
+  color: #e1caff;
+  font-size: clamp(0.85rem, 1.7vw, 1rem);
+  text-align: center;
+  text-shadow: 0 0 16px rgba(185, 132, 255, 0.28);
+}
+
+.bjt-duel-action-slot,
+.bjt-actions-placeholder {
+  width: 100%;
+  min-height: 3.5rem;
+}
+
+.bjt-actions-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(232, 217, 255, 0.55);
+  font-size: 0.8rem;
+}
+
+.bjt-duel .bjt-actions {
+  width: min(100%, 28rem);
+  height: 100%;
+  margin: 0 auto;
+  gap: 0.75rem;
+}
+
+.bjt-duel .bjt-actions .bjt-btn {
+  min-width: 0;
+  flex: 1 1 0;
+  padding: 0.7rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.9rem;
+  font-size: clamp(0.95rem, 2vw, 1.1rem);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+.bjt-duel .bjt-btn--hit {
+  background: linear-gradient(135deg, #a970ee, #7743c2);
+  color: #fff;
+  box-shadow: 0 7px 22px rgba(125, 67, 195, 0.34);
+}
+
+.bjt-duel .bjt-btn--hit:hover {
+  background: linear-gradient(135deg, #bd8dff, #8b59d5);
+}
+
+.bjt-duel .bjt-btn--stand {
+  background: linear-gradient(135deg, #35bca9, #218879);
+  color: #fff;
+  box-shadow: 0 7px 22px rgba(33, 136, 121, 0.3);
+}
+
+.bjt-duel .bjt-btn--stand:hover {
+  background: linear-gradient(135deg, #50d3bf, #2a9b8a);
+}
+
+.bjt-standings-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: clamp(0.7rem, 1.5vw, 1rem);
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(146, 99, 209, 0.14), transparent 56%),
+    linear-gradient(155deg, rgba(31, 23, 43, 0.96), rgba(15, 12, 22, 0.97));
+}
+
+.bjt-standings-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.2rem 0.7rem;
+}
+
+.bjt-standings-heading h3 {
+  margin: 0.15rem 0 0;
+  color: #fffaff;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.bjt-standings-count {
+  flex: 0 0 auto;
+  color: #d8c1f4;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.bjt-duel .bjt-standings-roster {
+  position: relative;
+  inset: auto;
+  z-index: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.32rem;
+  padding: 0.1rem 0.15rem 0.1rem 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 0;
+  background: transparent;
+  scrollbar-color: rgba(194, 151, 247, 0.45) transparent;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster::-webkit-scrollbar {
+  width: 4px;
+  height: 0;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster::-webkit-scrollbar-thumb {
+  background: rgba(194, 151, 247, 0.45);
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-item {
+  display: grid;
+  grid-template-columns: 2.35rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  min-height: 2.8rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid rgba(224, 204, 255, 0.09);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.035);
+  text-align: left;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-avatar {
+  grid-row: 1;
+  grid-column: 1;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-color: rgba(224, 204, 255, 0.24);
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-name {
+  grid-row: 1;
+  grid-column: 2;
+  max-width: 100%;
+  color: #f4edff;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-score {
+  grid-row: 1;
+  grid-column: 3;
+  color: #d2adff;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-item--controller {
+  border-color: rgba(195, 154, 255, 0.48);
+  background: rgba(146, 95, 208, 0.13);
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-item--controller .bjt-roster-avatar {
+  border-color: #c39aff;
+  box-shadow: 0 0 14px rgba(176, 119, 243, 0.42);
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-item--you .bjt-roster-avatar {
+  border-color: #69d6c3;
+}
+
+.bjt-duel .bjt-standings-roster .bjt-roster-ctrl,
+.bjt-duel .bjt-standings-roster .bjt-roster-x {
+  top: 0.05rem;
+  right: 0.2rem;
+}
+
+@media (max-height: 560px) and (min-width: 761px) {
+  .bjt-container.bjt-duel {
+    gap: 0.4rem;
+    padding-top: calc(0.4rem + var(--safe-top));
+    padding-bottom: calc(0.4rem + var(--safe-bottom));
+  }
+
+  .bjt-duel-header {
+    min-height: 2.9rem;
+  }
+
+  .bjt-duel .bjt-title {
+    font-size: clamp(1rem, 2.8vw, 1.35rem);
+  }
+
+  .bjt-table-surface {
+    padding: 0.7rem 0.9rem;
+  }
+
+  .bjt-table-heading {
+    padding-bottom: 0.35rem;
+    font-size: 0.58rem;
+  }
+
+  .bjt-duel .bjt-duelist {
+    min-height: 0;
+    padding: 0.5rem 0.7rem;
+    gap: 0.35rem;
+  }
+
+  .bjt-duel .bjt-avatar--lg {
+    width: 2.8rem;
+    height: 2.8rem;
+  }
+
+  .bjt-duel .bjt-cards {
+    min-height: 3.9rem;
+  }
+
+  .bjt-duel .bjt-card {
+    width: 2rem;
+    height: 2.7rem;
+  }
+
+  .bjt-duel-footer {
+    grid-template-rows: auto 2.9rem;
+    min-height: 4.45rem;
+  }
+
+  .bjt-duel .bjt-actions,
+  .bjt-duel-action-slot,
+  .bjt-actions-placeholder {
+    min-height: 2.9rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .bjt-container.bjt-duel {
+    gap: 0.5rem;
+    padding: calc(0.6rem + var(--safe-top)) calc(0.65rem + var(--safe-right))
+      calc(0.6rem + var(--safe-bottom)) calc(0.65rem + var(--safe-left));
+  }
+
+  .bjt-duel-header {
+    min-height: 3.4rem;
+    gap: 0.5rem;
+  }
+
+  .bjt-duel-kicker {
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+  }
+
+  .bjt-duel .bjt-title {
+    font-size: clamp(1rem, 4.2vw, 1.35rem);
+  }
+
+  .bjt-duel-utilities {
+    gap: 0.35rem;
+  }
+
+  .bjt-duel .bjt-btn--skip-end {
+    max-width: 7.5rem;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.65rem;
+  }
+
+  .bjt-duel .bjt-btn--ff {
+    position: relative;
+    inset: auto;
+    z-index: 1;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  .bjt-duel-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 0.5rem;
+  }
+
+  .bjt-table-surface {
+    padding: 0.7rem;
+  }
+
+  .bjt-duel .bjt-duel-arena {
+    gap: 0.35rem;
+  }
+
+  .bjt-duel .bjt-duelist {
+    min-height: min(38dvh, 20rem);
+    gap: 0.45rem;
+    padding: 0.65rem 0.35rem;
+  }
+
+  .bjt-duel .bjt-avatar--lg {
+    width: clamp(2.6rem, 12vw, 4rem);
+    height: clamp(2.6rem, 12vw, 4rem);
+  }
+
+  .bjt-duel .bjt-duelist-name {
+    font-size: clamp(0.76rem, 3.4vw, 1rem);
+  }
+
+  .bjt-duel .bjt-card {
+    width: clamp(1.65rem, 8vw, 2.5rem);
+    height: clamp(2.4rem, 11vw, 3.4rem);
+    font-size: clamp(0.82rem, 3.6vw, 1.1rem);
+  }
+
+  .bjt-duel .bjt-cards {
+    min-height: 4.4rem;
+    gap: 0.22rem;
+  }
+
+  .bjt-duel .bjt-hand-total {
+    font-size: 0.86rem;
+  }
+
+  .bjt-duel-footer {
+    grid-template-rows: auto 3.1rem;
+    min-height: 4.85rem;
+  }
+
+  .bjt-duel .bjt-actions,
+  .bjt-duel-action-slot,
+  .bjt-actions-placeholder {
+    min-height: 3.1rem;
+  }
+
+  .bjt-duel .bjt-actions {
+    gap: 0.45rem;
+  }
+
+  .bjt-duel .bjt-actions .bjt-btn {
+    padding: 0.55rem 0.4rem;
+    border-radius: 0.7rem;
+    font-size: 0.9rem;
+  }
+
+  .bjt-standings-card {
+    grid-template-rows: auto minmax(0, 1fr);
+    max-height: min(21dvh, 11rem);
+    padding: 0.5rem 0.6rem;
+  }
+
+  .bjt-standings-heading {
+    align-items: center;
+    padding: 0 0.1rem 0.35rem;
+  }
+
+  .bjt-standings-heading h3 {
+    font-size: 0.9rem;
+  }
+
+  .bjt-standings-heading .bjt-duel-kicker {
+    display: none;
+  }
+
+  .bjt-duel .bjt-standings-roster .bjt-roster {
+    height: auto;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.12rem 0.05rem 0.35rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .bjt-duel .bjt-standings-roster .bjt-roster-item {
+    display: flex;
+    min-width: 3.2rem;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.18rem;
+    padding: 0.18rem 0.25rem;
+    text-align: center;
+  }
+
+  .bjt-duel .bjt-standings-roster .bjt-roster-avatar {
+    width: 1.85rem;
+    height: 1.85rem;
+  }
+
+  .bjt-duel .bjt-standings-roster .bjt-roster-name {
+    max-width: 3rem;
+    font-size: 0.58rem;
+  }
+
+  .bjt-duel .bjt-standings-roster .bjt-roster-score {
+    font-size: 0.55rem;
+  }
+}

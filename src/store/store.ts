@@ -1,0 +1,580 @@
+import { replacementPresentationMiddleware } from '../cinematic/ceremonies/replacementPresentationMiddleware'
+import { missionPowerMiddleware } from './missionPowerMiddleware'
+import { configureStore } from '@reduxjs/toolkit'
+import gameReducer, {
+  getNominationTargetScore,
+  replaceBroadcastConfig,
+  requestPublicModeChange,
+} from './gameSlice'
+import { withLohNominationPlanning } from './lohNominationPlanning'
+import { withImmediateVoxPublicMode } from './voxPublicModeReducer'
+import { voxPublicModeSyncMiddleware } from './voxPublicModeSyncMiddleware'
+import { weekendSettingsMiddleware } from './weekendSettingsMiddleware'
+import finaleReducer from './finaleSlice'
+import challengeReducer from './challengeSlice'
+import settingsReducer, {
+  STORAGE_KEY as SETTINGS_STORAGE_KEY,
+  importSettings,
+  loadSettings,
+  saveSettings,
+} from './settingsSlice'
+import userProfileReducer, { loadUserProfile, saveUserProfile } from './userProfileSlice'
+import profilesReducer, {
+  loadProfilesState,
+  saveProfilesState,
+  archiveKeyForProfile,
+  recordBellaCompatibleClassicCompleted,
+  recordBellaEncountered,
+  recordBellaTwinShockConsumed,
+} from './profilesSlice'
+import socialReducer from '../social/socialSlice'
+import { socialMiddleware } from '../social/socialMiddleware'
+import { nemesisStoryMiddleware } from '../social/nemesisStoryMiddleware'
+import { allianceManagementMiddleware } from '../social/allianceManagementMiddleware'
+import { relationshipResourcePolicyMiddleware } from '../social/relationshipResourcePolicyMiddleware'
+import { intelligenceMiddleware } from '../social/intelligenceMiddleware'
+import { socialStrategyMiddleware } from '../social/socialStrategyMiddleware'
+import { realityIntegrityMiddleware } from '../social/realityIntegrityMiddleware'
+import { evictedAiStateRetentionMiddleware } from '../social/evictedAiStateRetentionMiddleware'
+import { survivorMiddleware } from '../modes/survivorMiddleware'
+import { depressionShockMiddleware } from '../features/twists/depressionShockMiddleware'
+import { bellaProgressMiddleware } from '../features/twists/bellaProgressMiddleware'
+import { tribunalEligibilityMiddleware } from './tribunalEligibilityMiddleware'
+import { eliminatedSeasonResolutionMiddleware } from './eliminatedSeasonResolutionMiddleware'
+import { presentationConsistencyMiddleware } from './presentationConsistencyMiddleware'
+import { soundMiddleware } from './soundMiddleware'
+import uiReducer from './uiSlice'
+import weekendDebugPreviewReducer from './weekendDebugPreviewSlice'
+import { saveSeasonArchives, DEFAULT_ARCHIVE_KEY } from './archivePersistence'
+import {
+  savedStateKeyForProfile,
+  clearSeasonSnapshot,
+  clearSavedRun,
+  getSavedRunSlot,
+  createSavedSeasonSnapshot,
+  flushSavePersistence,
+  isSavePersistenceBlocked,
+  saveRunSnapshot,
+} from './saveStatePersistence'
+import { createRunSnapshotAutosaveController } from './runSnapshotAutosave'
+import { prepareSnapshotJson } from './snapshotSerialization'
+import { batchNestedDispatchSubscriptions } from './nestedDispatchBatching'
+import { isRunAutosaveSuspended } from './runAutosaveGate'
+import cwgoReducer from '../features/cwgo/cwgoCompetitionSlice'
+import holdTheWallReducer from '../features/holdTheWall/holdTheWallSlice'
+import biographyBlitzReducer from '../features/biographyBlitz/biography_blitz_logic'
+import famousFiguresReducer from '../features/famousFigures/famousFiguresSlice'
+import silentSaboteurReducer from '../features/silentSaboteur/silentSaboteurSlice'
+import majorityRulesReducer from '../features/majorityRules/majorityRulesSlice'
+import glassBridgeReducer from '../features/glassBridge/glassBridgeSlice'
+import blackjackTournamentReducer from '../features/blackjackTournament/blackjackTournamentSlice'
+import riskWheelReducer from '../features/riskWheel/riskWheelSlice'
+import wildcardWesternReducer from '../features/wildcardWestern/wildcardWesternSlice'
+import tetrisReducer from '../features/tetris/tetrisSlice'
+import tiltLabyrinthReducer from '../features/tiltLabyrinth/tiltLabyrinthSlice'
+import houseOfCardsReducer from '../features/houseOfCards/houseOfCardsSlice'
+import memoryColorsReducer from '../features/memoryColors/memoryColorsSlice'
+import { syncRuntimeAudioSettings } from '../services/sound/audioSettingsSync'
+import publicOpinionReducer from '../publicOpinion/publicOpinionSlice'
+import { publicOpinionMiddleware } from '../publicOpinion/publicOpinionMiddleware'
+import { dramaPublicSaveMiddleware } from '../publicOpinion/dramaPublicSaveMiddleware'
+import adsReducer, { loadAdsState, saveAdsState } from './adsSlice'
+import { adsMiddleware } from './adsMiddleware'
+import remoteConfigReducer from '../remoteConfig/remoteConfigSlice'
+import { secretMissionMiddleware } from './secretMissionMiddleware'
+import { gameDiagnosticsMiddleware } from '../services/diagnostics/gameDiagnostics'
+import {
+  gamePerformanceMiddleware,
+  startGamePerformanceDiagnostics,
+} from '../services/diagnostics/gamePerformanceDiagnostics'
+import { minigameSessionMiddleware } from './minigameSessionMiddleware'
+import { eyeoleanPowerMiddleware } from './eyeoleanPowerMiddleware'
+import vipReducer, { loadVipState } from './vipSlice'
+import { saveCachedVipEntitlement } from '../vip/vipStorage'
+import {
+  BROADCAST_CONFIG_STORAGE_KEY,
+  loadBroadcastConfig,
+  saveBroadcastConfig,
+} from '../broadcasting/broadcastConfigPersistence'
+import { backdoorPresentationMiddleware } from '../broadcasting/backdoorPresentationMiddleware'
+import { setRuntimeSocialActionOverrides } from '../social/socialActionManager'
+import { gameplayAnalyticsMiddleware } from '../services/backend/gameplayAnalyticsMiddleware'
+import { initializeCloudBackend } from '../services/backend/backendService'
+import { profileAppearanceMiddleware } from './profileAppearanceMiddleware'
+
+const strategicGameReducer = withImmediateVoxPublicMode(
+  withLohNominationPlanning(gameReducer, getNominationTargetScore)
+)
+
+// These collections are intentionally bounded/compacted by their owning
+// subsystems. Re-walking every nested historical record after every dispatch in
+// development adds substantial cost to long gameplay sessions without improving
+// mutation/serializability coverage for the live decision state.
+const DEV_INVARIANT_IGNORED_PATHS = [
+  'game.tvFeed',
+  'game.history',
+  'social.reality',
+  'social.realitySimulation.trace',
+  'social.actionHistory',
+  'social.sessionLogs',
+  'social.incomingInteractionLogs',
+]
+
+export const store = configureStore({
+  reducer: {
+    game: strategicGameReducer,
+    finale: finaleReducer,
+    challenge: challengeReducer,
+    settings: settingsReducer,
+    userProfile: userProfileReducer,
+    profiles: profilesReducer,
+    social: socialReducer,
+    ui: uiReducer,
+    cwgo: cwgoReducer,
+    holdTheWall: holdTheWallReducer,
+    biographyBlitz: biographyBlitzReducer,
+    famousFigures: famousFiguresReducer,
+    silentSaboteur: silentSaboteurReducer,
+    majorityRules: majorityRulesReducer,
+    glassBridge: glassBridgeReducer,
+    blackjackTournament: blackjackTournamentReducer,
+    riskWheel: riskWheelReducer,
+    wildcardWestern: wildcardWesternReducer,
+    tetris: tetrisReducer,
+    tiltLabyrinth: tiltLabyrinthReducer,
+    houseOfCards: houseOfCardsReducer,
+    memoryColors: memoryColorsReducer,
+    publicOpinion: publicOpinionReducer,
+    ads: adsReducer,
+    remoteConfig: remoteConfigReducer,
+    vip: vipReducer,
+    weekendDebugPreview: weekendDebugPreviewReducer,
+  },
+  preloadedState: {
+    settings: loadSettings(),
+    userProfile: loadUserProfile(),
+    profiles: loadProfilesState(),
+    ads: loadAdsState(),
+    vip: loadVipState(),
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      immutableCheck: {
+        ignoredPaths: DEV_INVARIANT_IGNORED_PATHS,
+      },
+      serializableCheck: {
+        ignoredPaths: DEV_INVARIANT_IGNORED_PATHS,
+      },
+    })
+      .prepend(gamePerformanceMiddleware)
+      .concat(
+        replacementPresentationMiddleware,
+        profileAppearanceMiddleware,
+        weekendSettingsMiddleware,
+        missionPowerMiddleware,
+        survivorMiddleware,
+        bellaProgressMiddleware,
+        eliminatedSeasonResolutionMiddleware,
+        tribunalEligibilityMiddleware,
+        evictedAiStateRetentionMiddleware,
+        realityIntegrityMiddleware,
+        depressionShockMiddleware,
+        backdoorPresentationMiddleware,
+        presentationConsistencyMiddleware,
+        voxPublicModeSyncMiddleware,
+        intelligenceMiddleware,
+        socialStrategyMiddleware,
+        relationshipResourcePolicyMiddleware,
+        socialMiddleware,
+        nemesisStoryMiddleware,
+        allianceManagementMiddleware,
+        soundMiddleware,
+        publicOpinionMiddleware,
+        dramaPublicSaveMiddleware,
+        adsMiddleware,
+        secretMissionMiddleware,
+        eyeoleanPowerMiddleware,
+        minigameSessionMiddleware,
+        gameDiagnosticsMiddleware,
+        gameplayAnalyticsMiddleware
+      ),
+  enhancers: (getDefaultEnhancers) =>
+    getDefaultEnhancers().prepend(batchNestedDispatchSubscriptions),
+  // A long season can dispatch thousands of actions with a large state tree.
+  // Bound Redux DevTools retention in development so gameplay QA does not turn
+  // the extension itself into a progressive memory/performance tax.
+  devTools: import.meta.env.DEV ? { maxAge: 50, trace: false } : false,
+})
+
+// Performance sampling is inert unless a browser is opened with
+// `?debugPerformance=1`. The opt-in probe stays bounded and pauses when hidden.
+startGamePerformanceDiagnostics()
+
+// Repair saves created by the old Vox behavior where Settings could persist
+// Public Mode = on while the active game ignored the request and stayed off.
+// In Vox this is visibility-only, so reconciliation is safe during the cycle.
+const startupState = store.getState()
+if (!startupState.profiles.isGuest && startupState.profiles.activeProfileId) {
+  const profilesBeforeBellaMigration = store.getState().profiles
+  const startupArchives = startupState.game.seasonArchives ?? []
+  const archivedBellaSeasons = startupArchives
+    .filter(
+      (archive) =>
+        archive.bellaCast === true &&
+        archive.cupidArrowActivated !== true &&
+        archive.voxPopuliActivated !== true
+    )
+    .map((archive) => archive.seasonIndex)
+    .sort((left, right) => left - right)
+  const firstArchivedBellaSeason = archivedBellaSeasons[0] ?? null
+  const archivedBellaSkipConsumed =
+    firstArchivedBellaSeason != null &&
+    startupArchives.some(
+      (archive) =>
+        archive.seasonIndex > firstArchivedBellaSeason &&
+        archive.cupidArrowActivated !== true &&
+        archive.voxPopuliActivated !== true
+    )
+
+  if (
+    startupState.game.twinShockConsumed ||
+    startupArchives.some((archive) => archive.twinShockConsumed === true)
+  ) {
+    store.dispatch(recordBellaTwinShockConsumed())
+  }
+  if (
+    (startupState.game.players.some((player) => player.id === 'bella') &&
+      startupState.game.bellaWill?.debugCastForced !== true) ||
+    firstArchivedBellaSeason != null
+  ) {
+    store.dispatch(recordBellaEncountered())
+  }
+  if (archivedBellaSkipConsumed) {
+    store.dispatch(recordBellaCompatibleClassicCompleted({ bellaCast: false }))
+  }
+  if (store.getState().profiles !== profilesBeforeBellaMigration) {
+    saveProfilesState(store.getState().profiles)
+  }
+}
+if (
+  startupState.game.voxPopuli?.status === 'active' &&
+  startupState.game.publicModeEnabled !== (startupState.settings.sim.publicMode === true)
+) {
+  store.dispatch(requestPublicModeChange(startupState.settings.sim.publicMode === true))
+}
+
+const initialRemoteSocialManager = store.getState().remoteConfig.config?.socialManager
+setRuntimeSocialActionOverrides({
+  ...store.getState().settings.social.actionOverrides,
+  ...(initialRemoteSocialManager?.enabled ? initialRemoteSocialManager.actionOverrides : {}),
+})
+
+// A cached remote configuration is available before the first network refresh.
+// Apply its central Broadcast Manager data immediately so a newly opened game
+// behaves the same way as a game that receives a later refresh.
+const initialRemoteBroadcastManager = store.getState().remoteConfig.config?.broadcastManager
+if (initialRemoteBroadcastManager?.enabled) {
+  store.dispatch(
+    replaceBroadcastConfig({
+      overrides: initialRemoteBroadcastManager.overrides ?? {},
+      customMessages: initialRemoteBroadcastManager.customMessages ?? [],
+    })
+  )
+}
+
+// The Broadcast Manager is commonly kept open beside the game. localStorage
+// persists its authoring data; this listener makes a save in that manager tab
+// immediately update the live game tab and its ordered presentation queue.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== BROADCAST_CONFIG_STORAGE_KEY) return
+    const config = loadBroadcastConfig()
+    store.dispatch(replaceBroadcastConfig(config))
+  })
+}
+
+// Keep Social Manager edits synchronized with a game running in another tab.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== SETTINGS_STORAGE_KEY) return
+    store.dispatch(importSettings(loadSettings()))
+  })
+}
+
+function hasMeaningfulGameProgress(game: ReturnType<typeof store.getState>['game']): boolean {
+  return (
+    game.mode === 'survival' ||
+    game.week > 1 ||
+    (game.phase !== 'season_start' && game.phase !== 'week_start') ||
+    Boolean(game.runId) ||
+    Boolean(game.pendingEviction) ||
+    Boolean(game.seasonFinale)
+  )
+}
+
+// Autosaves are coalesced so a single Play transition can update several Redux
+// slices without repeatedly projecting/serializing/writing the campaign on the
+// same input turn. Snapshot construction itself is deferred until the trailing
+// save window flushes. Lifecycle boundaries still flush immediately.
+const runSnapshotAutosave = createRunSnapshotAutosaveController(
+  saveRunSnapshot,
+  undefined,
+  typeof Worker === 'undefined' ? undefined : prepareSnapshotJson
+)
+
+/** Flush pending campaign snapshots before leaving a profile adoption flow. */
+export function flushPendingRunSnapshots(): void {
+  runSnapshotAutosave.flush()
+}
+
+/** Persist an attempt boundary before gameplay or a result can be left behind. */
+export async function persistCompetitionCheckpoint(): Promise<boolean> {
+  const current = store.getState()
+  if (current.profiles.isGuest) return true
+  const profileId = current.profiles.activeProfileId
+  if (!profileId || isRunAutosaveSuspended() || isSavePersistenceBlocked()) return false
+
+  runSnapshotAutosave.discard(profileId, getSavedRunSlot(current.game))
+  try {
+    const saved = saveRunSnapshot(profileId, createSavedSeasonSnapshot(profileId, current))
+    return saved && (await flushSavePersistence())
+  } catch {
+    return false
+  }
+}
+
+/** Explicitly capture a completed launch or attach an intact guest run to its owner. */
+export function persistCurrentRunSnapshot(): void {
+  const current = store.getState()
+  if (
+    !current.profiles.isGuest &&
+    current.profiles.activeProfileId &&
+    hasMeaningfulGameProgress(current.game)
+  ) {
+    scheduleCurrentRunSnapshot(current.profiles.activeProfileId, current)
+  }
+  runSnapshotAutosave.flush()
+}
+
+function scheduleCurrentRunSnapshot(
+  profileId: string,
+  current: ReturnType<typeof store.getState>
+): void {
+  runSnapshotAutosave.scheduleLazy(
+    profileId,
+    getSavedRunSlot(current.game),
+    current.game.runId ?? current.game.gameId ?? null,
+    () => createSavedSeasonSnapshot(profileId, current)
+  )
+}
+
+// Persist settings to localStorage whenever they change
+let prevSettings = store.getState().settings
+let prevPublicModeSetting = prevSettings.sim.publicMode
+// Persist userProfile to localStorage whenever it changes
+let prevUserProfile = store.getState().userProfile
+// Persist profiles state whenever they change
+let prevProfiles = store.getState().profiles
+// Persist ads state whenever they change
+let prevAds = store.getState().ads
+// Persist permanent purchase entitlements whenever they change.
+let prevVip = store.getState().vip
+// Persist active mode runs whenever the game slice changes.
+let prevGame = store.getState().game
+let prevBroadcastOverrides = store.getState().game.broadcastOverrides
+let prevCustomBroadcasts = store.getState().game.customBroadcasts
+let prevRemoteBroadcastManager = store.getState().remoteConfig.config?.broadcastManager
+let prevRemoteSocialManager = store.getState().remoteConfig.config?.socialManager
+let prevFinale = store.getState().finale
+let prevFinalePhase = prevGame.seasonFinale?.phase
+let prevSocial = store.getState().social
+let prevPublicOpinion = store.getState().publicOpinion
+let prevChallenge = store.getState().challenge
+// Persist season archives to the durable backend whenever they change
+let prevSeasonArchives = store.getState().game.seasonArchives
+// Track archive length together with the profile that owns those archives.
+// Using a profile-scoped baseline prevents profile switches and game hydration
+// from falsely triggering snapshot auto-clears when the newly loaded archive
+// array happens to be longer than the previous profile's.
+let prevSeasonArchivesLength = prevSeasonArchives?.length ?? 0
+let prevArchiveProfileId: string | null = store.getState().profiles?.activeProfileId ?? null
+store.subscribeImmediate(() => {
+  const current = store.getState()
+  const remoteBroadcastManager = current.remoteConfig.config?.broadcastManager
+  if (
+    remoteBroadcastManager !== prevRemoteBroadcastManager &&
+    remoteBroadcastManager?.enabled === true
+  ) {
+    prevRemoteBroadcastManager = remoteBroadcastManager
+    store.dispatch(
+      replaceBroadcastConfig({
+        overrides: remoteBroadcastManager.overrides ?? {},
+        customMessages: remoteBroadcastManager.customMessages ?? [],
+      })
+    )
+  } else if (remoteBroadcastManager !== prevRemoteBroadcastManager) {
+    prevRemoteBroadcastManager = remoteBroadcastManager
+  }
+  if (current.remoteConfig.config?.socialManager !== prevRemoteSocialManager) {
+    prevRemoteSocialManager = current.remoteConfig.config?.socialManager
+    setRuntimeSocialActionOverrides({
+      ...current.settings.social.actionOverrides,
+      ...(prevRemoteSocialManager?.enabled ? prevRemoteSocialManager.actionOverrides : {}),
+    })
+  }
+  if (
+    current.game.broadcastOverrides !== prevBroadcastOverrides ||
+    current.game.customBroadcasts !== prevCustomBroadcasts
+  ) {
+    prevBroadcastOverrides = current.game.broadcastOverrides
+    prevCustomBroadcasts = current.game.customBroadcasts
+    saveBroadcastConfig(current.game.broadcastOverrides ?? {}, current.game.customBroadcasts ?? [])
+  }
+  if (current.settings !== prevSettings) {
+    prevSettings = current.settings
+    saveSettings(current.settings)
+    if (current.settings.sim.publicMode !== prevPublicModeSetting) {
+      prevPublicModeSetting = current.settings.sim.publicMode
+      store.dispatch(requestPublicModeChange(current.settings.sim.publicMode))
+    }
+    // Keep SoundManager category enabled/volume state in sync with Redux audio
+    // settings so that mute controls and Settings screen are the canonical source
+    // of truth and stale localStorage flags cannot silently disable audio.
+    syncRuntimeAudioSettings(current.settings.audio)
+    setRuntimeSocialActionOverrides({
+      ...current.settings.social.actionOverrides,
+      ...(current.remoteConfig.config?.socialManager?.enabled
+        ? current.remoteConfig.config.socialManager.actionOverrides
+        : {}),
+    })
+  }
+  if (current.userProfile !== prevUserProfile) {
+    prevUserProfile = current.userProfile
+    saveUserProfile(current.userProfile)
+  }
+  if (current.profiles !== prevProfiles) {
+    prevProfiles = current.profiles
+    saveProfilesState(current.profiles)
+  }
+  if (current.ads !== prevAds) {
+    prevAds = current.ads
+    saveAdsState(current.ads)
+  }
+  if (current.vip !== prevVip) {
+    prevVip = current.vip
+    saveCachedVipEntitlement({
+      isActive: current.vip.isActive,
+      entitlements: current.vip.entitlements,
+      lastVerifiedAt: current.vip.lastVerifiedAt,
+    })
+  }
+  const resumableStateChanged =
+    current.game !== prevGame ||
+    current.finale !== prevFinale ||
+    current.social !== prevSocial ||
+    current.publicOpinion !== prevPublicOpinion ||
+    current.challenge !== prevChallenge
+  if (resumableStateChanged) {
+    const weekendPreviewWasActive = prevGame.weekendInterlude?.debug === true
+    const finalePhaseChanged = current.game.seasonFinale?.phase !== prevFinalePhase
+    const broadcastCheckpointChanged =
+      current.game.activeBroadcastEventId !== prevGame.activeBroadcastEventId ||
+      current.game.presentationEventClaims !== prevGame.presentationEventClaims
+    prevGame = current.game
+    prevFinale = current.finale
+    prevFinalePhase = current.game.seasonFinale?.phase
+    prevSocial = current.social
+    prevPublicOpinion = current.publicOpinion
+    prevChallenge = current.challenge
+    const activeProfileId = current.profiles.activeProfileId
+    const weekendPreviewOwnsState =
+      weekendPreviewWasActive || current.game.weekendInterlude?.debug === true
+    if (weekendPreviewOwnsState) {
+      if (activeProfileId)
+        runSnapshotAutosave.discard(activeProfileId, getSavedRunSlot(current.game))
+    } else if (
+      !isRunAutosaveSuspended() &&
+      !isSavePersistenceBlocked() &&
+      !current.profiles.isGuest &&
+      activeProfileId &&
+      hasMeaningfulGameProgress(current.game)
+    ) {
+      scheduleCurrentRunSnapshot(activeProfileId, current)
+      // Persist visible checkpoints immediately so navigation or reload cannot
+      // restore an earlier finale phase or replay a broadcast that already started.
+      if (finalePhaseChanged || broadcastCheckpointChanged) {
+        runSnapshotAutosave.flush()
+        void flushSavePersistence()
+      }
+    }
+  }
+  if (current.game.seasonArchives !== prevSeasonArchives) {
+    prevSeasonArchives = current.game.seasonArchives
+    const newLength = current.game.seasonArchives?.length ?? 0
+    const archivesProfileId = current.profiles.activeProfileId
+    // Only auto-clear when archives grew on the *same* profile — a genuine season
+    // completion. Skip when the profile changed (switch/hydration) to avoid
+    // deleting a valid in-progress save simply because a different profile had
+    // more archived seasons.
+    const sameProfile = archivesProfileId === prevArchiveProfileId
+    // Guest mode: skip archive persistence entirely.
+    if (!current.profiles.isGuest) {
+      const archiveKey = archivesProfileId
+        ? archiveKeyForProfile(archivesProfileId)
+        : DEFAULT_ARCHIVE_KEY
+      saveSeasonArchives(archiveKey, current.game.seasonArchives ?? [])
+
+      // When a new season is archived (archive count increases on the same profile),
+      // the previous in-progress save snapshot is now stale — clear it automatically.
+      if (sameProfile && newLength > prevSeasonArchivesLength && archivesProfileId) {
+        const completedSlot = getSavedRunSlot(current.game)
+        runSnapshotAutosave.discard(archivesProfileId, completedSlot)
+        clearSeasonSnapshot(savedStateKeyForProfile(archivesProfileId))
+        clearSavedRun(archivesProfileId, completedSlot)
+      }
+    }
+    prevSeasonArchivesLength = newLength
+    prevArchiveProfileId = archivesProfileId
+  }
+})
+
+// Android/iOS may reclaim a background WebView without another Redux action.
+// Queue the latest current state and synchronously flush every pending run as
+// soon as the document hides. This preserves the previous durability guarantee.
+const skipUnloadAutosaveForE2E =
+  typeof window !== 'undefined' &&
+  window.__E2E__ === true &&
+  window.__bbE2ESkipUnloadAutosave === true
+
+if (typeof document !== 'undefined' && !skipUnloadAutosaveForE2E) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' || isRunAutosaveSuspended()) return
+    const current = store.getState()
+    if (current.game.weekendInterlude?.debug === true) return
+    const activeProfileId = current.profiles.activeProfileId
+    if (
+      !isSavePersistenceBlocked() &&
+      !current.profiles.isGuest &&
+      activeProfileId &&
+      hasMeaningfulGameProgress(current.game)
+    ) {
+      scheduleCurrentRunSnapshot(activeProfileId, current)
+    }
+    runSnapshotAutosave.flush()
+    void flushSavePersistence()
+  })
+}
+
+if (typeof window !== 'undefined' && !skipUnloadAutosaveForE2E) {
+  window.addEventListener('pagehide', () => {
+    if (store.getState().game.weekendInterlude?.debug === true) return
+    runSnapshotAutosave.flush()
+    void flushSavePersistence()
+  })
+}
+
+// Cloud sync starts automatically when Supabase is configured for this build.
+initializeCloudBackend({ ...store, subscribe: store.subscribeImmediate })
+
+export type RootState = ReturnType<typeof store.getState>
+export type AppDispatch = typeof store.dispatch

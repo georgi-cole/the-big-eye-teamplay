@@ -1,0 +1,172 @@
+/**
+ * TriviaVariant — "timed trivia" spectator visualization.
+ *
+ * Shows each competitor's point tally growing as scores increase.
+ * During simulation a live "current question" panel cycles through
+ * Big Eye–themed questions. When the authoritative winner is revealed,
+ * their score surges to 100.
+ */
+
+import type { CompetitorProgress } from './progressEngine'
+
+interface TriviaVariantProps {
+  competitors: CompetitorProgress[]
+  phase: 'simulating' | 'reconciling' | 'revealed'
+  simPct?: number
+  resolveAvatar: (id: string) => string
+  getPlayerName: (id: string | undefined) => string
+  compact?: boolean
+}
+
+// ── Big Eye rules and mechanics shown during simulation ────────────────────
+
+const BIG_EYE_QUESTIONS = [
+  {
+    q: 'What does the Part 1 winner earn?',
+    answers: ['A direct place in Part 3', 'An extra vote', 'A reserve spot', 'A weekend advantage'],
+    ai: 0,
+  },
+  {
+    q: 'Where do players record private thoughts?',
+    answers: ['The Confessional', 'The Hub', 'The Tribunal', 'The Nomination Wall'],
+    ai: 0,
+  },
+  {
+    q: 'How many finalists compete in the Final Power Battle?',
+    answers: ['One', 'Two', 'Three', 'Four'],
+    ai: 1,
+  },
+  {
+    q: 'How many players start a standard full-size season?',
+    answers: ['12', '14', '16', '18'],
+    ai: 2,
+  },
+  {
+    q: 'In a Tribunal finale, who votes for the winner?',
+    answers: ['The Tribunal', 'All active Hubmates', 'The finalists', 'The audience'],
+    ai: 0,
+  },
+]
+
+export default function TriviaVariant({
+  competitors,
+  phase,
+  simPct = 0,
+  resolveAvatar,
+  getPlayerName,
+  compact = false,
+}: TriviaVariantProps) {
+  const isSimulating = phase === 'simulating'
+
+  // Determine leader
+  const leaderId = isSimulating ? [...competitors].sort((a, b) => b.score - a.score)[0]?.id : null
+
+  // Cycle questions based on simPct; each question spans ~20% of sim time
+  const qIdx = Math.min(
+    BIG_EYE_QUESTIONS.length - 1,
+    Math.floor(simPct / (100 / BIG_EYE_QUESTIONS.length))
+  )
+  const currentQ = BIG_EYE_QUESTIONS[qIdx]
+  // Progress within this question slot (0–100)
+  const slotSize = 100 / BIG_EYE_QUESTIONS.length
+  const slotPct = ((simPct % slotSize) / slotSize) * 100
+
+  return (
+    <div
+      className={`sv-variant sv-trivia${compact ? ' sv-trivia--monitor' : ''}`}
+      aria-label="Trivia competition"
+    >
+      {/* Live question panel — only during simulation */}
+      {isSimulating && (
+        <div className="sv-trivia__question-panel">
+          <div className="sv-trivia__qmeta">
+            <span className="sv-trivia__qnum">
+              Question {qIdx + 1}/{BIG_EYE_QUESTIONS.length}
+            </span>
+            {/* Per-question countdown bar */}
+            <div className="sv-trivia__qtimer-bg">
+              <div className="sv-trivia__qtimer-fill" style={{ width: `${100 - slotPct}%` }} />
+            </div>
+          </div>
+          <p className="sv-trivia__question-text">{currentQ.q}</p>
+          <div className="sv-trivia__answers">
+            {currentQ.answers.map((a, i) => (
+              <span
+                key={i}
+                className={`sv-trivia__answer${i === currentQ.ai ? ' sv-trivia__answer--correct' : ''}`}
+              >
+                {a}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Leaderboard */}
+      <div className="sv-trivia__board">
+        {[...competitors]
+          .sort((a, b) => b.score - a.score)
+          .map((c, rank) => {
+            const isLeader = c.id === leaderId && !c.isWinner
+            return (
+              <div
+                key={c.id}
+                className={[
+                  'sv-trivia__row',
+                  c.isWinner ? 'sv-trivia__row--winner' : '',
+                  isLeader ? 'sv-trivia__row--leading' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                <span className="sv-trivia__rank" aria-hidden="true">
+                  {rank + 1}
+                </span>
+
+                <img
+                  src={resolveAvatar(c.id)}
+                  alt=""
+                  className="sv-trivia__avatar"
+                  onError={(e) => {
+                    const img = e.currentTarget as HTMLImageElement
+                    const fb = `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(c.id)}`
+                    if (img.src !== fb) {
+                      img.src = fb
+                    } else {
+                      img.style.display = 'none'
+                    }
+                  }}
+                />
+
+                <span className="sv-trivia__name">{getPlayerName(c.id)}</span>
+
+                {/* Inline progress bar */}
+                <div className="sv-trivia__bar-bg" aria-hidden="true">
+                  <div className="sv-trivia__bar-fill" style={{ width: `${c.score}%` }} />
+                </div>
+
+                <span
+                  className="sv-trivia__pts"
+                  aria-label={`${getPlayerName(c.id)} ${Math.round(c.score)} points`}
+                >
+                  {Math.round(c.score)} pts
+                </span>
+
+                {c.isWinner && (
+                  <span className="sv-trivia__badge" aria-label="winner">
+                    🏆
+                  </span>
+                )}
+              </div>
+            )
+          })}
+      </div>
+
+      {phase === 'revealed' && (
+        <p className="sv-result-caption" aria-live="assertive">
+          🎉 {getPlayerName(competitors.find((c) => c.isWinner)?.id ?? '')} wins the trivia!
+        </p>
+      )}
+    </div>
+  )
+}

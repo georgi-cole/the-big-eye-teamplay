@@ -1,0 +1,902 @@
+// src/store/saveStatePersistence.ts
+//
+// Per-profile manual save snapshots for in-progress seasons.
+// Separate from season archives (which store completed seasons).
+//
+// Key behaviours:
+//  - Each profile can keep Classic, Survival and expansion runs side by side.
+//  - Each run slot is stored independently so adding game types does not create
+//    one increasingly large durable payload.
+//  - Guest mode never writes or reads snapshots.
+//  - Stale/invalid snapshots are silently discarded on load.
+//  - Legacy single-slot and embedded multi-run saves are migrated safely.
+
+import type { GameState } from '../types'
+import { takePreparedSnapshotJson } from './snapshotSerialization'
+import type { GameMode, SeasonExpansionMode } from '../modes/modeTypes'
+import { normalizeGameMode } from '../modes/gameModes'
+import { removeObsoleteGameData, removeObsoleteChallengeData } from './removedMinigameCleanup'
+import { isSurvivorRunTerminal } from '../modes/survivorRun'
+import {
+  applySurvivorAchievementProgress,
+  getSurvivorProgressDay,
+  normalizeSurvivorAchievementUnlockMap,
+} from '../modes/survivorAchievements'
+import type { FinaleState } from './finaleSlice'
+import type { SocialState } from '../social/types'
+import type { PublicOpinionState } from '../publicOpinion/types'
+import type { ChallengeState } from './challengeSlice'
+import type { SurvivorAchievementUnlockMap } from '../modes/survivorAchievements'
+import {
+  compactGameStateForPersistence,
+  compactSocialStateForPersistence,
+} from './saveStateCompaction'
+import {
+  flushDurablePersistence,
+  getDurableItem,
+  inspectDurableStorageUsageBytes,
+  removeDurableItem,
+  setDurableItem,
+  setDurablePersistenceFailureListener,
+  setDurablePersistenceFlushListener,
+} from './durablePersistence'
+
+export const SAVED_STATE_KEY_PREFIX = 'bbmobilenew:savedSeason:'
+export const SAVED_RUNS_KEY_PREFIX = 'bbmobilenew:savedRuns:'
+export const SAVED_RUN_SLOT_KEY_PREFIX = 'bbmobilenew:savedRunSlot:'
+export const SAVE_PERSISTENCE_ISSUE_EVENT = 'bb:save-persistence-issue'
+export const CORRUPT_SAVE_RECOVERY_KEY = 'bbmobilenew:recovery:lastCorruptSave'
+export const ALLIANCE_MIGRATION_RECOVERY_PREFIX = 'bbmobilenew:allianceRecovery:'
+export const SAVE_SNAPSHOT_WARNING_BYTES = 1_500_000
+
+export type SaveFailureReason =
+  | 'quota_exceeded'
+  | 'storage_unavailable'
+  | 'serialization_failed'
+  | 'unknown_write_failure'
+
+export type SavePersistenceIssue = {
+  kind: 'write_failed' | 'corrupt_recovered'
+  occurredAt: string
+  reason?: SaveFailureReason
+}
+
+export interface SavePersistenceDiagnostics {
+  blockedReason: SaveFailureReason | null
+  lastKey: string | null
+  lastSnapshotBytes: number
+  lastSerializeMs: number
+  lastWriteMs: number
+  warningThresholdBytes: number
+}
+
+let lastSavePersistenceIssue: SavePersistenceIssue | null = null
+let persistenceWriteBlockedReason: SaveFailureReason | null = null
+let lastSavePersistenceDiagnostics: SavePersistenceDiagnostics = {
+  blockedReason: null,
+  lastKey: null,
+  lastSnapshotBytes: 0,
+  lastSerializeMs: 0,
+  lastWriteMs: 0,
+  warningThresholdBytes: SAVE_SNAPSHOT_WARNING_BYTES,
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
+
+function byteLength(value: string): number {
+  // localStorage stores DOMStrings. Using UTF-16 code units is a cheap,
+  // allocation-free size estimate for diagnostics and avoids creating another
+  // multi-megabyte Uint8Array on the autosave hot path.
+  return value.length * 2
+}
+
+function classifyWriteFailure(error: unknown): SaveFailureReason {
+  if (error instanceof DOMException) {
+    if (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+      return 'quota_exceeded'
+    }
+    if (error.name === 'SecurityError' || error.name === 'InvalidStateError') {
+      return 'storage_unavailable'
+    }
+  }
+  return 'unknown_write_failure'
+}
+
+function reportSavePersistenceIssue(
+  kind: SavePersistenceIssue['kind'],
+  reason?: SaveFailureReason
+): void {
+  if (
+    kind === 'write_failed' &&
+    (reason === 'quota_exceeded' || reason === 'storage_unavailable')
+  ) {
+    persistenceWriteBlockedReason = reason
+    lastSavePersistenceDiagnostics = {
+      ...lastSavePersistenceDiagnostics,
+      blockedReason: reason,
+    }
+  }
+  if (lastSavePersistenceIssue?.kind === kind && lastSavePersistenceIssue.reason === reason) return
+  lastSavePersistenceIssue = { kind, reason, occurredAt: new Date().toISOString() }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent<SavePersistenceIssue>(SAVE_PERSISTENCE_ISSUE_EVENT, {
+        detail: lastSavePersistenceIssue,
+      })
+    )
+  }
+}
+
+setDurablePersistenceFailureListener((reason) => {
+  reportSavePersistenceIssue('write_failed', reason)
+})
+
+setDurablePersistenceFlushListener((durationMs, success) => {
+  lastSavePersistenceDiagnostics = {
+    ...lastSavePersistenceDiagnostics,
+    lastWriteMs: durationMs,
+    blockedReason: success ? null : lastSavePersistenceDiagnostics.blockedReason,
+  }
+})
+
+export function getLastSavePersistenceIssue(): SavePersistenceIssue | null {
+  return lastSavePersistenceIssue
+}
+
+export function clearLastSavePersistenceIssue(): void {
+  lastSavePersistenceIssue = null
+}
+
+export function isSavePersistenceBlocked(): boolean {
+  return persistenceWriteBlockedReason !== null
+}
+
+/**
+ * Explicitly re-arm persistence after the player asks to retry a save or after
+ * cleanup has freed space. Autosave never clears the breaker on its own.
+ */
+export function retrySavePersistenceWrites(): void {
+  persistenceWriteBlockedReason = null
+  lastSavePersistenceDiagnostics = {
+    ...lastSavePersistenceDiagnostics,
+    blockedReason: null,
+  }
+}
+
+export function getSavePersistenceDiagnostics(): SavePersistenceDiagnostics {
+  return { ...lastSavePersistenceDiagnostics }
+}
+
+/** Expensive by design: call only from diagnostics/tests, never on every autosave. */
+export function inspectLocalStorageUsageBytes(): number {
+  let total = 0
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key) continue
+      const value = localStorage.getItem(key) ?? ''
+      total += byteLength(key) + byteLength(value)
+    }
+  } catch {
+    return 0
+  }
+  return total
+}
+
+export function inspectDurableSaveStorageBytes(): number {
+  return inspectDurableStorageUsageBytes()
+}
+
+export async function flushSavePersistence(): Promise<boolean> {
+  return flushDurablePersistence()
+}
+
+export interface SavedSeasonSnapshot {
+  version: 1
+  profileId: string
+  savedAt: string
+  game: GameState
+  finale: FinaleState
+  social: SocialState
+  publicOpinion?: PublicOpinionState
+  challenge?: ChallengeState
+}
+
+export interface SavedSeasonState {
+  game: GameState
+  finale: FinaleState
+  social: SocialState
+  publicOpinion?: PublicOpinionState
+  challenge?: ChallengeState
+}
+
+/**
+ * Build the durable campaign payload shared by automatic and manual saves.
+ *
+ * Completed-season history and Broadcast Manager authoring data have their own
+ * persistence records. Keeping them out of every run snapshot avoids duplicating
+ * large, unrelated values and prevents a runtime-only authoring value from
+ * blocking an otherwise valid campaign save.
+ */
+export function createSavedSeasonSnapshot(
+  profileId: string,
+  state: SavedSeasonState,
+  savedAt = new Date().toISOString()
+): SavedSeasonSnapshot {
+  const campaignGame = { ...state.game }
+  delete campaignGame.seasonArchives
+  delete campaignGame.broadcastOverrides
+  delete campaignGame.customBroadcasts
+  const savedAtMs = Date.parse(savedAt)
+
+  return {
+    version: 1,
+    profileId,
+    savedAt,
+    game: compactGameStateForPersistence({
+      ...campaignGame,
+      mode: state.game.mode ?? 'classic',
+      lastPlayedAt: Number.isFinite(savedAtMs) ? savedAtMs : Date.now(),
+      saveVersion: state.game.saveVersion ?? 2,
+    }),
+    finale: state.finale,
+    social: compactSocialStateForPersistence(state.social),
+    publicOpinion: state.publicOpinion,
+    challenge: state.challenge ? removeObsoleteChallengeData(state.challenge) : undefined,
+  }
+}
+
+export interface SavedRunProfileStats {
+  maxSurvivorDaysSurvived: number
+  survivorAchievementsUnlocked: SurvivorAchievementUnlockMap
+}
+
+export type SavedRunSlot = GameMode | SeasonExpansionMode
+
+export interface SavedRunProfile {
+  version: 2
+  profileId: string
+  savedAt: string
+  activeRunId: string | null
+  lastPlayedRunId: string | null
+  runs: Partial<Record<SavedRunSlot, SavedSeasonSnapshot>>
+  stats: SavedRunProfileStats
+}
+
+type SavedRunProfileMetadata = Omit<SavedRunProfile, 'runs'> & { runs?: never }
+
+const ALL_RUN_SLOTS: SavedRunSlot[] = ['classic', 'survival', 'cupidArrow', 'voxPopuli']
+
+export function savedStateKeyForProfile(profileId: string): string {
+  return `${SAVED_STATE_KEY_PREFIX}${encodeURIComponent(profileId)}`
+}
+
+export function savedRunsKeyForProfile(profileId: string): string {
+  return `${SAVED_RUNS_KEY_PREFIX}${encodeURIComponent(profileId)}`
+}
+
+export function savedRunSlotKeyForProfile(profileId: string, slot: SavedRunSlot): string {
+  return `${SAVED_RUN_SLOT_KEY_PREFIX}${encodeURIComponent(profileId)}:${slot}`
+}
+
+function emptySavedRunProfile(profileId: string): SavedRunProfile {
+  return {
+    version: 2,
+    profileId,
+    savedAt: new Date(0).toISOString(),
+    activeRunId: null,
+    lastPlayedRunId: null,
+    runs: {},
+    stats: { maxSurvivorDaysSurvived: 0, survivorAchievementsUnlocked: {} },
+  }
+}
+
+function getRunId(snapshot: SavedSeasonSnapshot | undefined): string | null {
+  return snapshot?.game.runId ?? snapshot?.game.gameId ?? null
+}
+
+function paidSurvivalRecoveryCount(snapshot: SavedSeasonSnapshot): number {
+  const count =
+    snapshot.game.modeSpecific?.kind === 'survival'
+      ? snapshot.game.modeSpecific.paidContinueCount
+      : undefined
+  return typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0
+}
+
+function predatesPaidSurvivalRecovery(
+  snapshot: SavedSeasonSnapshot,
+  previous: SavedSeasonSnapshot | null | undefined
+): boolean {
+  const runId = getRunId(snapshot)
+  return Boolean(
+    previous &&
+    runId &&
+    previous.profileId === snapshot.profileId &&
+    normalizeGameMode(previous.game.mode) === 'survival' &&
+    getRunId(previous) === runId &&
+    paidSurvivalRecoveryCount(previous) > paidSurvivalRecoveryCount(snapshot)
+  )
+}
+
+function isRunSnapshotResumable(
+  snapshot: SavedSeasonSnapshot | undefined
+): snapshot is SavedSeasonSnapshot {
+  if (!snapshot) return false
+  if (isSurvivorRunTerminal(snapshot.game)) return false
+  return snapshot.game.status !== 'completed' && snapshot.game.status !== 'failed'
+}
+
+export function getSavedRunSlot(game: GameState): SavedRunSlot {
+  if (normalizeGameMode(game.mode) === 'survival') return 'survival'
+  if (game.expansionMode === 'cupidArrow' || game.expansionMode === 'voxPopuli') {
+    return game.expansionMode
+  }
+  return 'classic'
+}
+
+function coerceSnapshot(raw: unknown, profileId: string): SavedSeasonSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null
+  const parsed = raw as Partial<SavedSeasonSnapshot>
+  if (parsed.version !== 1) return null
+  if (
+    parsed.profileId !== profileId ||
+    !parsed.savedAt ||
+    !parsed.game ||
+    !parsed.finale ||
+    !parsed.social
+  ) {
+    return null
+  }
+  const snapshot = parsed as SavedSeasonSnapshot
+  const realityVersion = (snapshot.social as SocialState | undefined)?.reality?.version
+  if (typeof realityVersion === 'number' && realityVersion !== 2) {
+    const mode = snapshot.game.mode ?? 'classic'
+    const recoveryKey = `${ALLIANCE_MIGRATION_RECOVERY_PREFIX}${profileId}:${mode}`
+    try {
+      if (!getDurableItem(recoveryKey)) setDurableItem(recoveryKey, JSON.stringify(snapshot))
+    } catch {
+      // Keep loading the save if its optional migration backup cannot be written.
+    }
+  }
+  const legacyGame = snapshot.game as unknown as {
+    mode?: GameMode | 'survivor'
+    modeSpecific?: {
+      kind?: GameMode | 'survivor'
+      replacementTransition?: { mode?: GameMode | 'survivor' } | null
+    } | null
+  }
+  const mode = normalizeGameMode(legacyGame.mode)
+  legacyGame.mode = mode
+  if (legacyGame.modeSpecific?.kind === 'survivor') legacyGame.modeSpecific.kind = 'survival'
+  if (legacyGame.modeSpecific?.replacementTransition?.mode === 'survivor') {
+    legacyGame.modeSpecific.replacementTransition.mode = 'survival'
+  }
+  return {
+    ...snapshot,
+    game: removeObsoleteGameData(snapshot.game),
+    ...(snapshot.challenge ? { challenge: removeObsoleteChallengeData(snapshot.challenge) } : {}),
+  }
+}
+
+function normalizeRunProfile(
+  profileId: string,
+  parsed: Partial<SavedRunProfile>
+): SavedRunProfile | null {
+  if (parsed.version !== 2 || parsed.profileId !== profileId) return null
+  const runs = parsed.runs as
+    | Partial<Record<SavedRunSlot | 'survivor', SavedSeasonSnapshot>>
+    | undefined
+  const classic = coerceSnapshot(runs?.classic, profileId) ?? undefined
+  const survivor = coerceSnapshot(runs?.survival ?? runs?.survivor, profileId) ?? undefined
+  const cupidArrow = coerceSnapshot(runs?.cupidArrow, profileId) ?? undefined
+  const voxPopuli = coerceSnapshot(runs?.voxPopuli, profileId) ?? undefined
+  const resumableClassic = isRunSnapshotResumable(classic) ? classic : undefined
+  const resumableSurvivor = isRunSnapshotResumable(survivor) ? survivor : undefined
+  const resumableCupidArrow = isRunSnapshotResumable(cupidArrow) ? cupidArrow : undefined
+  const resumableVoxPopuli = isRunSnapshotResumable(voxPopuli) ? voxPopuli : undefined
+  const maxSurvivorDaysSurvived = Math.max(
+    typeof parsed.stats?.maxSurvivorDaysSurvived === 'number'
+      ? parsed.stats.maxSurvivorDaysSurvived
+      : 0,
+    getSurvivorProgressDay(survivor?.game)
+  )
+  return {
+    version: 2,
+    profileId,
+    savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : new Date().toISOString(),
+    activeRunId: typeof parsed.activeRunId === 'string' ? parsed.activeRunId : null,
+    lastPlayedRunId: typeof parsed.lastPlayedRunId === 'string' ? parsed.lastPlayedRunId : null,
+    runs: {
+      ...(resumableClassic ? { classic: resumableClassic } : {}),
+      ...(resumableSurvivor ? { survival: resumableSurvivor } : {}),
+      ...(resumableCupidArrow ? { cupidArrow: resumableCupidArrow } : {}),
+      ...(resumableVoxPopuli ? { voxPopuli: resumableVoxPopuli } : {}),
+    },
+    stats: {
+      maxSurvivorDaysSurvived,
+      survivorAchievementsUnlocked: normalizeSurvivorAchievementUnlockMap(
+        parsed.stats?.survivorAchievementsUnlocked
+      ),
+    },
+  }
+}
+
+function createPersistenceReplacer(): (this: unknown, key: string, value: unknown) => unknown {
+  const ancestors: object[] = []
+
+  return function persistenceReplacer(this: unknown, _key: string, value: unknown): unknown {
+    // Redux state should not contain bigint values, but browser/native bridges
+    // can introduce one. Preserve the value instead of failing the entire save.
+    if (typeof value === 'bigint') return value.toString()
+    if (value === null || typeof value !== 'object') return value
+
+    // Keep only the active ancestor chain. Repeated sibling references are safe
+    // and should still be serialized; only an actual back-edge is omitted.
+    while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+      ancestors.pop()
+    }
+    if (ancestors.includes(value)) return undefined
+    ancestors.push(value)
+    return value
+  }
+}
+
+function serialize(value: unknown): string | null {
+  const startedAt = nowMs()
+  try {
+    let serialized: string | undefined
+    try {
+      // The normal saved state is JSON-safe. Let the browser's native
+      // serializer handle that hot path without invoking a replacer for every
+      // property. Keep the defensive path for runtime BigInts and cycles.
+      serialized = takePreparedSnapshotJson(value) ?? JSON.stringify(value)
+    } catch {
+      serialized = JSON.stringify(value, createPersistenceReplacer())
+    }
+    if (serialized === undefined) throw new TypeError('Snapshot did not produce JSON output.')
+    lastSavePersistenceDiagnostics = {
+      ...lastSavePersistenceDiagnostics,
+      lastSnapshotBytes: byteLength(serialized),
+      lastSerializeMs: Math.max(0, nowMs() - startedAt),
+    }
+    return serialized
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[save] snapshot serialization failed', error)
+    reportSavePersistenceIssue('write_failed', 'serialization_failed')
+    return null
+  }
+}
+
+function writeStorage(key: string, serialized: string): boolean {
+  if (persistenceWriteBlockedReason !== null) return false
+  const serializedBytes = byteLength(serialized)
+  const queued = setDurableItem(key, serialized)
+  if (!queued) return false
+
+  const isSnapshotPayload =
+    key.startsWith(SAVED_RUN_SLOT_KEY_PREFIX) || key.startsWith(SAVED_STATE_KEY_PREFIX)
+  lastSavePersistenceDiagnostics = {
+    ...lastSavePersistenceDiagnostics,
+    blockedReason: null,
+    lastKey: isSnapshotPayload ? key : lastSavePersistenceDiagnostics.lastKey,
+    lastSnapshotBytes: isSnapshotPayload
+      ? serializedBytes
+      : lastSavePersistenceDiagnostics.lastSnapshotBytes,
+  }
+
+  if (import.meta.env.DEV) {
+    console.debug(`[save] queued ${key} (${serializedBytes} bytes)`)
+    if (isSnapshotPayload && serializedBytes >= SAVE_SNAPSHOT_WARNING_BYTES) {
+      console.warn(
+        `[save] snapshot is ${serializedBytes} bytes; persistence budget warning is ${SAVE_SNAPSHOT_WARNING_BYTES} bytes`
+      )
+    }
+  }
+  return true
+}
+
+export function saveSeasonSnapshot(key: string, snapshot: SavedSeasonSnapshot): boolean {
+  if (persistenceWriteBlockedReason !== null) return false
+  const serialized = serialize(snapshot)
+  return serialized !== null && writeStorage(key, serialized)
+}
+
+export function loadSeasonSnapshot(key: string): SavedSeasonSnapshot | null {
+  try {
+    const raw = getDurableItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<SavedSeasonSnapshot>
+    if (parsed.version !== 1) return null
+    if (!parsed.profileId || !parsed.savedAt || !parsed.game || !parsed.finale || !parsed.social)
+      return null
+    return coerceSnapshot(parsed, parsed.profileId) ?? null
+  } catch {
+    return null
+  }
+}
+
+function loadSlotRuns(profileId: string): SavedRunProfile['runs'] {
+  const runs: SavedRunProfile['runs'] = {}
+  for (const slot of ALL_RUN_SLOTS) {
+    const snapshot = loadSeasonSnapshot(savedRunSlotKeyForProfile(profileId, slot))
+    if (snapshot && isRunSnapshotResumable(snapshot)) runs[slot] = snapshot
+  }
+  return runs
+}
+
+function metadataFromProfile(profile: SavedRunProfile): SavedRunProfileMetadata {
+  return {
+    version: profile.version,
+    profileId: profile.profileId,
+    savedAt: profile.savedAt,
+    activeRunId: profile.activeRunId,
+    lastPlayedRunId: profile.lastPlayedRunId,
+    stats: profile.stats,
+  }
+}
+
+/**
+ * Read only the small split-profile metadata record. This intentionally avoids
+ * parsing every campaign slot during routine autosaves. Embedded/legacy profiles
+ * return null so their first subsequent write still goes through the full
+ * migration-safe path.
+ */
+function loadSplitMetadata(profileId: string): SavedRunProfileMetadata | null {
+  try {
+    const raw = getDurableItem(savedRunsKeyForProfile(profileId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<SavedRunProfile> & SavedRunProfileMetadata
+    if ('runs' in parsed) return null
+    const normalized = normalizeRunProfile(profileId, { ...parsed, runs: {} })
+    return normalized ? metadataFromProfile(normalized) : null
+  } catch {
+    return null
+  }
+}
+
+function persistSplitProfile(profile: SavedRunProfile): boolean {
+  const metadataRaw = serialize(metadataFromProfile(profile))
+  if (metadataRaw === null) return false
+
+  const previousMetadata = getDurableItem(savedRunsKeyForProfile(profile.profileId))
+  const previousSlots = new Map<SavedRunSlot, string | null>()
+  for (const slot of ALL_RUN_SLOTS) {
+    previousSlots.set(slot, getDurableItem(savedRunSlotKeyForProfile(profile.profileId, slot)))
+  }
+
+  // Shrink an old embedded multi-run value first. This frees the duplicated space
+  // needed to migrate its snapshots into independent keys.
+  if (!writeStorage(savedRunsKeyForProfile(profile.profileId), metadataRaw)) return false
+
+  for (const slot of ALL_RUN_SLOTS) {
+    const key = savedRunSlotKeyForProfile(profile.profileId, slot)
+    const snapshot = profile.runs[slot]
+    if (!snapshot) {
+      removeDurableItem(key)
+      continue
+    }
+    const raw = serialize(snapshot)
+    if (raw === null || !writeStorage(key, raw)) {
+      try {
+        for (const rollbackSlot of ALL_RUN_SLOTS) {
+          const oldValue = previousSlots.get(rollbackSlot)
+          const rollbackKey = savedRunSlotKeyForProfile(profile.profileId, rollbackSlot)
+          if (oldValue === null || oldValue === undefined) removeDurableItem(rollbackKey)
+          else setDurableItem(rollbackKey, oldValue)
+        }
+        if (previousMetadata === null) removeDurableItem(savedRunsKeyForProfile(profile.profileId))
+        else setDurableItem(savedRunsKeyForProfile(profile.profileId), previousMetadata)
+      } catch {
+        // Keep the original failure classification; the active Redux run remains open.
+      }
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Fast path for an already-migrated profile: write only the active run slot and
+ * the tiny metadata record. The old implementation re-serialized and rewrote all
+ * four potentially-large campaign slots on every Redux change, turning one Play
+ * press into repeated large persistence work.
+ */
+function persistSingleRunSnapshot(
+  profileId: string,
+  slot: SavedRunSlot,
+  snapshot: SavedSeasonSnapshot | null,
+  metadata: SavedRunProfileMetadata
+): boolean {
+  const metadataKey = savedRunsKeyForProfile(profileId)
+  const slotKey = savedRunSlotKeyForProfile(profileId, slot)
+  const metadataRaw = serialize(metadata)
+  const snapshotRaw = snapshot ? serialize(snapshot) : null
+  if (metadataRaw === null || (snapshot && snapshotRaw === null)) return false
+
+  const previousMetadata = getDurableItem(metadataKey)
+  const previousSlot = getDurableItem(slotKey)
+
+  const rollback = () => {
+    try {
+      if (previousMetadata === null) removeDurableItem(metadataKey)
+      else setDurableItem(metadataKey, previousMetadata)
+      if (previousSlot === null) removeDurableItem(slotKey)
+      else setDurableItem(slotKey, previousSlot)
+    } catch {
+      // Preserve the original write failure; Redux still contains the live run.
+    }
+  }
+
+  try {
+    if (snapshotRaw !== null) {
+      if (!writeStorage(slotKey, snapshotRaw)) return false
+    } else {
+      removeDurableItem(slotKey)
+    }
+    if (!writeStorage(metadataKey, metadataRaw)) {
+      rollback()
+      return false
+    }
+    // Once split metadata is committed the legacy single-slot payload is obsolete.
+    removeDurableItem(savedStateKeyForProfile(profileId))
+    return true
+  } catch (error) {
+    rollback()
+    reportSavePersistenceIssue('write_failed', classifyWriteFailure(error))
+    return false
+  }
+}
+
+export function loadSavedRunProfile(profileId: string): SavedRunProfile {
+  const key = savedRunsKeyForProfile(profileId)
+  let malformedRaw: string | null = null
+  try {
+    const raw = getDurableItem(key)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SavedRunProfile> & SavedRunProfileMetadata
+      const splitRuns = loadSlotRuns(profileId)
+      if (parsed.version === 2 && parsed.profileId === profileId && !('runs' in parsed)) {
+        return (
+          normalizeRunProfile(profileId, { ...parsed, runs: splitRuns }) ??
+          emptySavedRunProfile(profileId)
+        )
+      }
+      const normalized = normalizeRunProfile(profileId, parsed)
+      if (normalized) return { ...normalized, runs: { ...normalized.runs, ...splitRuns } }
+      malformedRaw = raw
+    }
+  } catch {
+    try {
+      malformedRaw = getDurableItem(key)
+    } catch {
+      malformedRaw = null
+    }
+  }
+
+  if (malformedRaw) {
+    try {
+      sessionStorage.setItem(CORRUPT_SAVE_RECOVERY_KEY, malformedRaw)
+      removeDurableItem(key)
+    } catch {
+      // Recovery can continue even if the damaged payload cannot be quarantined.
+    }
+    reportSavePersistenceIssue('corrupt_recovered')
+  }
+
+  const splitRuns = loadSlotRuns(profileId)
+  if (Object.keys(splitRuns).length > 0) {
+    return { ...emptySavedRunProfile(profileId), runs: splitRuns }
+  }
+
+  const legacy = loadSeasonSnapshot(savedStateKeyForProfile(profileId))
+  if (legacy && legacy.profileId === profileId) {
+    return {
+      ...emptySavedRunProfile(profileId),
+      savedAt: legacy.savedAt,
+      activeRunId: getRunId(legacy),
+      lastPlayedRunId: getRunId(legacy),
+      runs: { classic: { ...legacy, game: { ...legacy.game, mode: 'classic' } } },
+    }
+  }
+
+  return emptySavedRunProfile(profileId)
+}
+
+export function saveRunProfile(profile: SavedRunProfile): boolean {
+  if (persistenceWriteBlockedReason !== null) return false
+  const saved = persistSplitProfile(profile)
+  if (saved) {
+    try {
+      removeDurableItem(savedStateKeyForProfile(profile.profileId))
+    } catch {
+      // Legacy cleanup is best-effort only.
+    }
+  }
+  return saved
+}
+
+export function saveRunSnapshot(profileId: string, snapshot: SavedSeasonSnapshot): boolean {
+  if (persistenceWriteBlockedReason !== null) return false
+  const mode = normalizeGameMode(snapshot.game.mode)
+  const slot = getSavedRunSlot(snapshot.game)
+  const runId = getRunId(snapshot)
+  const resumable = isRunSnapshotResumable(snapshot)
+
+  // Once a profile is using the split format, routine autosaves never need to
+  // load or rewrite its other run slots. Legacy/embedded data deliberately falls
+  // back to the existing migration-safe full-profile path exactly once.
+  const metadata = loadSplitMetadata(profileId)
+  if (metadata) {
+    // Paid recovery stages its resumed save before Redux changes. A delayed
+    // autosave of the earlier elimination must not delete or roll back that
+    // delivery while its durable transaction is being committed.
+    if (
+      mode === 'survival' &&
+      predatesPaidSurvivalRecovery(
+        snapshot,
+        loadSeasonSnapshot(savedRunSlotKeyForProfile(profileId, slot))
+      )
+    ) {
+      return true
+    }
+    const survivorBest =
+      mode === 'survival'
+        ? Math.max(metadata.stats.maxSurvivorDaysSurvived, getSurvivorProgressDay(snapshot.game))
+        : metadata.stats.maxSurvivorDaysSurvived
+    const survivorAchievementsUnlocked =
+      mode === 'survival'
+        ? applySurvivorAchievementProgress(
+            metadata.stats.survivorAchievementsUnlocked,
+            getSurvivorProgressDay(snapshot.game),
+            runId,
+            snapshot.savedAt
+          ).unlocks
+        : metadata.stats.survivorAchievementsUnlocked
+
+    return persistSingleRunSnapshot(profileId, slot, resumable ? snapshot : null, {
+      ...metadata,
+      savedAt: snapshot.savedAt,
+      activeRunId: resumable ? runId : null,
+      lastPlayedRunId: resumable ? runId : metadata.lastPlayedRunId,
+      stats: {
+        ...metadata.stats,
+        maxSurvivorDaysSurvived: survivorBest,
+        survivorAchievementsUnlocked,
+      },
+    })
+  }
+
+  const current = loadSavedRunProfile(profileId)
+  if (mode === 'survival' && predatesPaidSurvivalRecovery(snapshot, current.runs.survival)) {
+    return true
+  }
+  const survivorBest =
+    mode === 'survival'
+      ? Math.max(current.stats.maxSurvivorDaysSurvived, getSurvivorProgressDay(snapshot.game))
+      : current.stats.maxSurvivorDaysSurvived
+  const survivorAchievementsUnlocked =
+    mode === 'survival'
+      ? applySurvivorAchievementProgress(
+          current.stats.survivorAchievementsUnlocked,
+          getSurvivorProgressDay(snapshot.game),
+          runId,
+          snapshot.savedAt
+        ).unlocks
+      : current.stats.survivorAchievementsUnlocked
+  const nextRuns = { ...current.runs }
+  if (resumable) nextRuns[slot] = snapshot
+  else delete nextRuns[slot]
+
+  return saveRunProfile({
+    ...current,
+    savedAt: snapshot.savedAt,
+    activeRunId: resumable ? runId : null,
+    lastPlayedRunId: resumable ? runId : current.lastPlayedRunId,
+    runs: nextRuns,
+    stats: {
+      ...current.stats,
+      maxSurvivorDaysSurvived: survivorBest,
+      survivorAchievementsUnlocked,
+    },
+  })
+}
+
+export function markSurvivorAchievementCelebrationSeen(
+  profileId: string,
+  achievementId: string
+): boolean {
+  const current = loadSavedRunProfile(profileId)
+  const unlock = current.stats.survivorAchievementsUnlocked[achievementId]
+  if (!unlock || unlock.celebrationSeen) return false
+  return saveRunProfile({
+    ...current,
+    stats: {
+      ...current.stats,
+      survivorAchievementsUnlocked: {
+        ...current.stats.survivorAchievementsUnlocked,
+        [achievementId]: { ...unlock, celebrationSeen: true },
+      },
+    },
+  })
+}
+
+export function getSavedRun(profileId: string, slot: SavedRunSlot): SavedSeasonSnapshot | null {
+  return loadSavedRunProfile(profileId).runs[slot] ?? null
+}
+
+export function getLastPlayedRun(profileId: string): SavedSeasonSnapshot | null {
+  const profile = loadSavedRunProfile(profileId)
+  const runs = Object.values(profile.runs).filter(Boolean) as SavedSeasonSnapshot[]
+  if (profile.lastPlayedRunId) {
+    const match = runs.find((snapshot) => getRunId(snapshot) === profile.lastPlayedRunId)
+    if (match) return match
+  }
+  return runs.sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))[0] ?? null
+}
+
+export function clearSavedRun(profileId: string, mode: SavedRunSlot): void {
+  // Deleting a run can free the quota that tripped the circuit breaker.
+  retrySavePersistenceWrites()
+
+  const metadata = loadSplitMetadata(profileId)
+  if (metadata) {
+    const slotKey = savedRunSlotKeyForProfile(profileId, mode)
+    const removedRunId = getRunId(loadSeasonSnapshot(slotKey) ?? undefined)
+    try {
+      // Free the large payload first. This makes abandon/delete resilient even
+      // when the browser was already at its quota limit.
+      removeDurableItem(slotKey)
+      removeDurableItem(savedStateKeyForProfile(profileId))
+      const nextMetadata: SavedRunProfileMetadata = {
+        ...metadata,
+        activeRunId: metadata.activeRunId === removedRunId ? null : metadata.activeRunId,
+        lastPlayedRunId:
+          metadata.lastPlayedRunId === removedRunId ? null : metadata.lastPlayedRunId,
+        savedAt: new Date().toISOString(),
+      }
+      const raw = serialize(nextMetadata)
+      if (raw !== null) writeStorage(savedRunsKeyForProfile(profileId), raw)
+    } catch (error) {
+      reportSavePersistenceIssue('write_failed', classifyWriteFailure(error))
+    }
+    return
+  }
+
+  const current = loadSavedRunProfile(profileId)
+  const nextRuns = { ...current.runs }
+  delete nextRuns[mode]
+  const removedRunId = getRunId(current.runs[mode])
+  saveRunProfile({
+    ...current,
+    runs: nextRuns,
+    activeRunId: current.activeRunId === removedRunId ? null : current.activeRunId,
+    lastPlayedRunId: current.lastPlayedRunId === removedRunId ? null : current.lastPlayedRunId,
+    savedAt: new Date().toISOString(),
+  })
+}
+
+export function clearSeasonSnapshot(key: string): void {
+  try {
+    removeDurableItem(key)
+  } catch {
+    // Ignore.
+  }
+}
+
+/** Remove every persistence record owned by a profile. Safe to call during deletion. */
+export function clearProfileSaveStorage(profileId: string): void {
+  try {
+    removeDurableItem(savedStateKeyForProfile(profileId))
+    removeDurableItem(savedRunsKeyForProfile(profileId))
+    for (const slot of ALL_RUN_SLOTS) {
+      removeDurableItem(savedRunSlotKeyForProfile(profileId, slot))
+    }
+    retrySavePersistenceWrites()
+  } catch {
+    // Deletion remains best-effort when durable storage is unavailable.
+  }
+}

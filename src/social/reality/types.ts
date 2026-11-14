@@ -1,0 +1,826 @@
+export type RealityActorId = string
+export type RealityPhase = string
+export type RealityGameMode = 'CLASSIC' | 'SURVIVAL'
+export type RealityIntensity = 'NORMAL' | 'REALITY'
+export type RealityAudienceMode = 'OFF' | 'PUBLIC'
+export type RealityDirection = 'AI_TO_AI' | 'AI_TO_HUMAN' | 'HUMAN_TO_AI' | 'GROUP' | 'SELF'
+
+export type RealityVisibility =
+  | 'PRIVATE'
+  | 'PAIR_ONLY'
+  | 'GROUP_VISIBLE'
+  | 'HOUSE_PUBLIC'
+  | 'CEREMONY_PUBLIC'
+  | 'VIEWER_ONLY'
+  | 'JURY_ONLY'
+
+export interface RealityClock {
+  day: number
+  phase: RealityPhase
+}
+
+export interface RealityContext extends RealityClock {
+  gameMode: RealityGameMode
+  socialIntensity: RealityIntensity
+  audienceMode: RealityAudienceMode
+  feedPerspective: 'PLAYER_LIMITED' | 'BROADCAST'
+  activeActorIds: RealityActorId[]
+  rolesByActor: Record<RealityActorId, string[]>
+  atRiskActorIds: RealityActorId[]
+  powerHolderIds: RealityActorId[]
+  /** The current holder of an open initial-nomination decision, when applicable. */
+  nominationLeaderId?: RealityActorId
+  /** Defaults to true for migrated saves and callers that predate this setting. */
+  romanceEnabled?: boolean
+  blockingUiState?: string
+}
+
+export type RelationshipDimension =
+  | 'warmth'
+  | 'trust'
+  | 'loyalty'
+  | 'respect'
+  | 'attraction'
+  | 'intimacy'
+  | 'gratitude'
+  | 'resentment'
+  | 'fear'
+  | 'envy'
+  | 'suspicion'
+  | 'strategicValue'
+  | 'perceivedThreat'
+  | 'reliability'
+  | 'familiarity'
+  | 'publicCloseness'
+  | 'secretCloseness'
+
+export type RealityRelationshipLabel =
+  | 'UNKNOWN'
+  | 'ACQUAINTANCE'
+  | 'FRIENDLY'
+  | 'FRIEND'
+  | 'CLOSE_FRIEND'
+  | 'TRANSACTIONAL'
+  | 'ALLY'
+  | 'CORE_ALLY'
+  | 'FAKE_ALLY'
+  | 'ROMANCE'
+  | 'POWER_PAIR'
+  | 'ONE_SIDED_CRUSH'
+  | 'EX_ROMANCE'
+  | 'RIVAL'
+  | 'ENEMY'
+  | 'UNEASY_TRUCE'
+  | 'ESTRANGED'
+
+export interface DirectedRelationship {
+  fromId: RealityActorId
+  toId: RealityActorId
+  warmth: number
+  trust: number
+  loyalty: number
+  respect: number
+  attraction: number
+  intimacy: number
+  gratitude: number
+  resentment: number
+  fear: number
+  envy: number
+  suspicion: number
+  strategicValue: number
+  perceivedThreat: number
+  reliability: number
+  familiarity: number
+  publicCloseness: number
+  secretCloseness: number
+  /** Recent emotional pressure; it fades with game progression while grievances remain. */
+  acuteTension?: number
+  acuteTensionDay?: number
+  trend: number
+  positiveAnchorEventIds: string[]
+  negativeAnchorEventIds: string[]
+  unresolvedGrievanceIds: string[]
+  activePromiseIds: string[]
+  activeDebtIds: string[]
+  perceivedLabel: RealityRelationshipLabel
+  publicLabel: RealityRelationshipLabel
+  labelConfidence: number
+  lastMeaningfulInteraction?: RealityClock & { eventId: string }
+  /** Last day passive shared game exposure added familiarity to this directed read. */
+  lastAmbientFamiliarityDay?: number
+}
+
+/**
+ * Canonical, directed, multidimensional relationship state in Reality Mode. The compact
+ * SocialState.relationships map is a lossy compatibility projection; keep writes synchronized
+ * through the social reducers/adapters rather than updating either representation in isolation.
+ */
+export type RealityRelationshipMap = Record<
+  RealityActorId,
+  Record<RealityActorId, DirectedRelationship>
+>
+
+export type RealityMemorySource = 'DIRECT' | 'WITNESSED' | 'HEARSAY' | 'INFERRED' | 'OFFICIAL'
+
+export interface RealityMemory {
+  id: string
+  ownerId: RealityActorId
+  eventId: string
+  day: number
+  phase: RealityPhase
+  participantIds: RealityActorId[]
+  sourceType: RealityMemorySource
+  sourceChain: RealityActorId[]
+  confidence: number
+  importance: number
+  surprise: number
+  emotionalValence: number
+  emotionalIntensity: number
+  secrecy: number
+  strategicRelevance: number
+  visibility: RealityVisibility
+  tags: string[]
+  relatedPromiseIds: string[]
+  relatedSecretIds: string[]
+  recallStrength: number
+}
+
+export type RealityBeliefStatus = 'ACTIVE' | 'DOUBTED' | 'DISPROVEN' | 'STALE'
+
+export interface RealityBelief {
+  id: string
+  ownerId: RealityActorId
+  propositionType: string
+  subjectIds: RealityActorId[]
+  objectId?: string
+  value: string | number | boolean
+  confidence: number
+  supportingMemoryIds: string[]
+  contradictingBeliefIds: string[]
+  sourceChain: RealityActorId[]
+  lastUpdatedDay: number
+  status: RealityBeliefStatus
+}
+
+export interface RealityFact {
+  id: string
+  propositionType: string
+  subjectIds: RealityActorId[]
+  objectId?: string
+  value: string | number | boolean
+  day: number
+  phase: RealityPhase
+  visibility: RealityVisibility
+  participantIds: RealityActorId[]
+  witnessIds: RealityActorId[]
+  viewerVisible: boolean
+  publicVisible: boolean
+  juryVisible: boolean
+  sourceEventId: string
+  /** True when this evidence disclosed the complete alliance roster at the time. */
+  fullMembershipKnown?: boolean
+  /** The roster disclosed by this evidence, not a promise of future disclosure. */
+  rosterRevision?: number
+  disclosedMemberIds?: RealityActorId[]
+}
+
+export type RealityPromiseStatus = 'PROPOSED' | 'ACTIVE' | 'KEPT' | 'BROKEN' | 'VOID'
+
+export interface RealityPromise {
+  id: string
+  kind: string
+  promisorId: RealityActorId
+  beneficiaryIds: RealityActorId[]
+  witnessIds: RealityActorId[]
+  createdAt: RealityClock
+  deadline?: RealityClock
+  stakes: number
+  scope: Record<string, string | number | boolean>
+  status: RealityPromiseStatus
+  resolvedAt?: RealityClock
+  resolutionEventId?: string
+  originatingAllianceId?: string
+  visibility?: RealityVisibility
+}
+
+export interface RealityDebt {
+  id: string
+  debtorId: RealityActorId
+  creditorId: RealityActorId
+  reasonEventId: string
+  magnitude: number
+  createdAt: RealityClock
+  status: 'OPEN' | 'PARTIALLY_REPAID' | 'REPAID' | 'FORGIVEN' | 'DEFAULTED'
+  repaymentEventIds: string[]
+}
+
+export interface RealitySecret {
+  id: string
+  kind: string
+  truthFactId: string
+  ownerIds: RealityActorId[]
+  knowerIds: RealityActorId[]
+  suspectedByIds: RealityActorId[]
+  exposure: number
+  createdAt: RealityClock
+  status: 'SECRET' | 'LEAKED' | 'EXPOSED' | 'OBSOLETE'
+}
+
+export interface RealityGrievance {
+  id: string
+  holderId: RealityActorId
+  againstId: RealityActorId
+  causeEventId: string
+  severity: number
+  repairDebt: number
+  createdAt: RealityClock
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'REPAIRING' | 'RESOLVED'
+  apologyEventIds: string[]
+}
+
+export interface RealityThread {
+  id: string
+  type: string
+  participantIds: RealityActorId[]
+  observerIds: RealityActorId[]
+  triggerEventId: string
+  stage: string
+  importance: number
+  urgency: number
+  earliest?: RealityClock
+  deadline?: RealityClock
+  continuationActionIds: string[]
+  relatedPromiseIds: string[]
+  relatedSecretIds: string[]
+  status: 'OPEN' | 'DORMANT' | 'RESOLVED' | 'EXPIRED'
+  /** Explicit actors and pair for evidence-based jealousy reads. */
+  jealousObserverId?: RealityActorId
+  romanticPartnerId?: RealityActorId
+  romanticRivalId?: RealityActorId
+}
+
+/**
+ * A directed social goal. Intents express what one houseguest is trying to do;
+ * they are deliberately separate from relationship labels, which describe what
+ * has actually developed between two people.
+ */
+export type RealityRelationshipIntentKind =
+  | 'CONNECT'
+  | 'DEEPEN_BOND'
+  | 'RECRUIT'
+  | 'MAINTAIN_COMMITMENT'
+  | 'CONFIDE'
+  | 'EXPLORE_ROMANCE'
+  | 'MAINTAIN_ROMANCE'
+  | 'SEEK_REASSURANCE'
+  | 'REPAIR'
+  | 'DISTANCE'
+  | 'CONFRONT'
+  | 'UNDERMINE'
+
+export type RealityRelationshipIntentStatus = 'ACTIVE' | 'COOLING' | 'RESOLVED' | 'CLOSED'
+
+export type RealityBoundaryCategory =
+  | 'NO_ROMANTIC_PURSUIT'
+  | 'NO_ALLIANCE_PITCHES'
+  | 'NO_GOSSIP'
+  | 'NO_PERSONAL_CONFIDING'
+  | 'NO_CONFLICT_DISCUSSION'
+  | 'MINIMIZE_CONTACT'
+
+export interface RealityRelationshipIntent {
+  id: string
+  ownerId: RealityActorId
+  targetId: RealityActorId
+  kind: RealityRelationshipIntentKind
+  status: RealityRelationshipIntentStatus
+  threadId?: string
+  importance: number
+  continuationPressure: number
+  stage: 'SPARK' | 'DEVELOPING' | 'ESTABLISHED' | 'STRAINED' | 'COOLING'
+  createdAt: RealityClock
+  lastAdvancedAt: RealityClock
+  nextEligibleAt?: RealityClock
+  supportingEventIds: string[]
+  lastBeatId?: string
+}
+
+export interface RealityRelationshipBoundary {
+  id: string
+  ownerId: RealityActorId
+  targetId: RealityActorId
+  category: RealityBoundaryCategory
+  createdAt: RealityClock
+  sourceEventId: string
+  /** Boundaries stay active until the player explicitly reopens the topic. */
+  status: 'ACTIVE' | 'REOPENED'
+}
+
+export interface RealityRelationshipEvidence {
+  id: string
+  ownerId: RealityActorId
+  targetId: RealityActorId
+  family: 'BOND' | 'TRUST' | 'STRATEGY' | 'PROTECTION' | 'ROMANCE' | 'CONFLICT' | 'REPAIR'
+  eventId: string
+  day: number
+  reciprocal: boolean
+  significance: number
+}
+
+/** A deliberately narrow anti-player objective. Contact boundaries can silence
+ * optional approaches, but only a voluntary Safety rescue can reconcile it. */
+export interface RealityNemesisObjective {
+  id: string
+  ownerId: RealityActorId
+  targetId: RealityActorId
+  sourceEventId: string
+  reason: 'COMPETITION_THREAT' | 'SOCIAL_REACH' | 'PERSONAL_FRICTION' | 'JEALOUSY' | 'VOLATILE_READ'
+  createdAt: RealityClock
+  status: 'ACTIVE' | 'RECONCILED' | 'ENDED'
+  reconciledAt?: RealityClock
+  reconciliationEventId?: string
+  /** A private objective becomes public knowledge only after an observable event. */
+  clueAt?: RealityClock
+  clueEventId?: string
+  revealedAt?: RealityClock
+  revealEventId?: string
+  /** The evidence linked to the hostility when it became an objective. */
+  triggerEventId?: string
+  /** Durable private explanation; source events may later leave the rolling feed. */
+  motiveText?: string
+  /** The player may ask once per day until the rival actually answers. */
+  reasonLastAskedDay?: number
+  reasonDisclosedAt?: RealityClock
+  /** Alliances whose false-pretense state was introduced by this objective. */
+  compromisedAllianceIds?: string[]
+}
+
+export interface RealityRelationshipAutonomyState {
+  intents: Record<string, RealityRelationshipIntent>
+  boundaries: Record<string, RealityRelationshipBoundary>
+  evidence: Record<string, RealityRelationshipEvidence>
+  nemeses: Record<string, RealityNemesisObjective>
+  /** At most two persistent season roles that focus on the human player's game. */
+  provocateurSeason?: RealityProvocateurSeason | null
+  /** Prevents two producers from scheduling the same story beat. */
+  reservedBeatIds: string[]
+}
+
+export type RealityProvocateurStyle =
+  | 'ACCOUNTABILITY'
+  | 'DOMINANCE'
+  | 'SCHEMER'
+  | 'INTIMIDATOR'
+  | 'SORE_WINNER'
+  | 'SPOTLIGHT_SEEKER'
+
+export type RealityProvocateurCause =
+  | 'PERSONALITY_CLASH'
+  | 'NOMINATION'
+  | 'BETRAYAL'
+  | 'PLAN_DEFIED'
+  | 'RETURNED'
+  | 'COMPETITION_THREAT'
+  | 'SOCIAL_REACH'
+  | 'SUCCESSOR'
+
+export interface RealityProvocateurRole {
+  actorId: RealityActorId
+  style: RealityProvocateurStyle
+  introducedDay: number
+  /** Last delivered scene, so retries in another phase cannot duplicate it. */
+  lastSceneDay?: number
+  /** The player's replies change the role's next escalation step. */
+  escalation: 0 | 1 | 2
+  cause: RealityProvocateurCause
+  predecessorId?: RealityActorId
+}
+
+export interface RealityProvocateurSeason {
+  targetId: RealityActorId
+  roles: RealityProvocateurRole[]
+  lastSceneDay?: number
+  /** High-water mark into the bounded Reality event feed. */
+  observedThroughSequence: number
+}
+
+export type RealityAllianceStatus =
+  | 'PROBATIONARY'
+  | 'ACTIVE'
+  | 'DORMANT'
+  | 'FRACTURED'
+  | 'DISSOLVED'
+
+export interface RealityAlliance {
+  id: string
+  /** The player who created a group; distinct from its founding roster. */
+  createdById?: RealityActorId
+  createdAt?: RealityClock
+  /** Durable identity facts retained after old detailed events are compacted. */
+  creatorPreviouslyLeft?: boolean
+  leadershipTransferApproved?: boolean
+  /** Alliance records survive the rolling social event feed. Visibility still applies per event. */
+  history?: RealitySocialEvent[]
+  /** Missing only in a pre-management save; normalization supplies it. */
+  kind?: 'PACT' | 'GROUP'
+  leaderId?: RealityActorId
+  coLeaderId?: RealityActorId
+  memberJoinSequence?: Record<RealityActorId, number>
+  rosterRevision?: number
+  governanceRevision?: number
+  provenance?: 'NATIVE' | 'LEGACY' | 'UNRESOLVED' | 'SOURCE'
+  sourceOriginalStatus?: RealityAllianceStatus
+  sourceEpisodeIds?: string[]
+  predecessorIds?: string[]
+  endedAt?: RealityClock
+  endReason?: string
+  supersededById?: string
+  rosterKnowledgeByActor?: Record<
+    RealityActorId,
+    {
+      memberIds: RealityActorId[]
+      rosterRevision: number
+      name?: string
+      leaderId?: RealityActorId
+      coLeaderId?: RealityActorId
+    }
+  >
+  name?: string
+  /** A human founder must name or keep the suggested name after all founders agree. */
+  initialNamePending?: boolean
+  memberIds: RealityActorId[]
+  founderIds: RealityActorId[]
+  leaderIds: RealityActorId[]
+  secrecy: number
+  cohesion: number
+  fractureRisk: number
+  purpose: string
+  currentTargetIds: RealityActorId[]
+  fallbackTargetIds: RealityActorId[]
+  sharedPromiseIds: string[]
+  memberCommitment: Record<RealityActorId, number>
+  memberPerceivedStatus: Record<RealityActorId, 'CORE' | 'REGULAR' | 'PERIPHERAL'>
+  memberPlanBeliefs: Record<RealityActorId, string[]>
+  operationalRoles: Record<RealityActorId, string[]>
+  suspectedByIds: RealityActorId[]
+  knownLeakEventIds: string[]
+  overlapAllianceIds: string[]
+  lastMeeting?: RealityClock
+  nextCheckpoint?: RealityClock
+  status: RealityAllianceStatus
+  genuine: boolean
+  infiltratorIds: RealityActorId[]
+}
+
+export type RealityAllianceRequestKind =
+  | 'PACT'
+  | 'FOUND'
+  | 'ADMIT'
+  | 'APPOINT'
+  | 'TRANSFER'
+  | 'REMOVE_SUGGESTION'
+  | 'RENAME_SUGGESTION'
+export type RealityAllianceRequestStatus =
+  | 'VOTING'
+  | 'CONSENT'
+  | 'ACCEPTED'
+  | 'DECLINED'
+  | 'EXPIRED'
+  | 'WITHDRAWN'
+  | 'INVALIDATED'
+
+export type RealityAllianceResponseStyle = 'ENTHUSIASTIC' | 'HESITANT' | 'LIMITED' | 'DECLINED'
+
+export interface RealityAllianceResponse {
+  style: RealityAllianceResponseStyle
+  reason: string
+  /** Private acceptance motive: cooperation to survive, not genuine allegiance. */
+  strategic?: boolean
+}
+
+export interface RealityAllianceRequest {
+  id: string
+  /** Missing on legacy pending requests: retain their original decision weights. */
+  strategicPolicyVersion?: 1
+  history?: RealitySocialEvent[]
+  kind: RealityAllianceRequestKind
+  status: RealityAllianceRequestStatus
+  proposerId: RealityActorId
+  allianceId?: string
+  candidateId?: RealityActorId
+  memberIds: RealityActorId[]
+  electorateIds: RealityActorId[]
+  officerIds: RealityActorId[]
+  votes: Record<RealityActorId, boolean>
+  /** Member admission ballot outcome with names and any leader tie-break. */
+  voteSummary?: string
+  consents: Record<RealityActorId, boolean>
+  /** AI members explain the terms they accept or decline, including conditional buy-in. */
+  responsesByActorId?: Record<RealityActorId, RealityAllianceResponse>
+  rosterRevision?: number
+  governanceRevision?: number
+  leaderId?: RealityActorId
+  coLeaderId?: RealityActorId
+  basePactId?: string
+  name?: string
+  proposedName?: string
+  purpose: string
+  createdAt: RealityClock
+  deadline: RealityClock
+  candidateInvitedAt?: RealityClock
+  /** Private acceptance choice when an invitee switches from another group. */
+  candidateDepartureAllianceId?: string
+  settledAt?: RealityClock
+  reason?: string
+  resultAllianceId?: string
+}
+
+export interface RealityAllianceManagementState {
+  version: 1
+  nextRequestSequence: number
+  requests: Record<string, RealityAllianceRequest>
+  /** Durable receipts are independent of trimmed conversation/event history. */
+  processedCommands: Record<
+    string,
+    {
+      status: 'APPLIED' | 'NO_OP' | 'REJECTED'
+      reason: string
+      allianceId?: string
+      requestId?: string
+    }
+  >
+  importedLegacyIds: string[]
+  aliases: Record<string, string>
+}
+
+/**
+ * A durable record of the formal commitments a contestant had when they left
+ * the house. It deliberately preserves history without treating an eviction
+ * as a promise that every old deal will be reinstated on a Battle Back return.
+ */
+export interface RealityReentryAllianceSnapshot {
+  allianceId: string
+  memberIds: RealityActorId[]
+  founderIds: RealityActorId[]
+  leaderIds: RealityActorId[]
+  secrecy: number
+  cohesion: number
+  fractureRisk: number
+  purpose: string
+  currentTargetIds: RealityActorId[]
+  fallbackTargetIds: RealityActorId[]
+  sharedPromiseIds: string[]
+  memberCommitment: Record<RealityActorId, number>
+  memberPerceivedStatus: Record<RealityActorId, 'CORE' | 'REGULAR' | 'PERIPHERAL'>
+  memberPlanBeliefs: Record<RealityActorId, string[]>
+  operationalRoles: Record<RealityActorId, string[]>
+  genuine: boolean
+  infiltratorIds: RealityActorId[]
+  status: RealityAllianceStatus
+}
+
+export interface RealityReentryProfile {
+  evictedAt: RealityClock
+  alliances: RealityReentryAllianceSnapshot[]
+  /** Public nomination sources the evicted player can remember if they return. */
+  conflictTargetIds?: RealityActorId[]
+}
+
+export interface RealityRomance {
+  id: string
+  participantIds: [RealityActorId, RealityActorId]
+  initiatedById: RealityActorId
+  signalledInterest: Record<RealityActorId, boolean>
+  acceptedEscalation: Record<RealityActorId, boolean>
+  genuineIntent: Record<RealityActorId, number>
+  strategicIntent: Record<RealityActorId, number>
+  exclusivity: Record<RealityActorId, boolean>
+  public: boolean
+  startedAt: RealityClock
+  lastUpdatedAt: RealityClock
+  anchorEventIds: string[]
+  strainEventIds: string[]
+  status: 'SIGNALLED' | 'MUTUAL' | 'ACTIVE' | 'STRAINED' | 'ENDED'
+}
+
+export interface RealityContestantState {
+  actorId: RealityActorId
+  mood: {
+    valence: number
+    arousal: number
+    control: number
+  }
+  emotions: {
+    joy: number
+    anger: number
+    fear: number
+    sadness: number
+    guilt: number
+    shame: number
+    gratitude: number
+    attraction: number
+    jealousy: number
+    humiliation: number
+  }
+  stress: number
+  fatigue: number
+  boredom: number
+  loneliness: number
+  confidence: number
+  socialEnergy: number
+  primaryGoalId?: string
+  secondaryGoalIds: string[]
+  desiredInteraction?: string
+  openness: number
+  recentActionFamilies: string[]
+  actionExperience: Record<string, { attempts: number; successes: number; lastDay: number }>
+}
+
+export interface RealityDeadline extends RealityClock {
+  policy: 'AUTO_DECLINE' | 'AUTO_IGNORE' | 'AUTO_DEFER' | 'CUSTOM'
+}
+
+export type RealityInteractionStatus =
+  | 'PENDING'
+  | 'AWAITING_HUMAN'
+  | 'RESOLVED'
+  | 'EXPIRED'
+  | 'INVALIDATED'
+
+export type RealityResponseKind =
+  | 'ACCEPT'
+  | 'REJECT'
+  | 'QUESTION'
+  | 'LIE'
+  | 'COUNTER'
+  | 'DE_ESCALATE'
+  | 'ESCALATE'
+  | 'WALK_AWAY'
+
+export interface RealityResponseResolution {
+  kind: RealityResponseKind
+  utility: number
+  reason: string
+  accepted: boolean
+}
+
+export interface RealityInteraction {
+  id: string
+  actionId: string
+  actorId: RealityActorId
+  targetIds: RealityActorId[]
+  direction: RealityDirection
+  contextSnapshot: RealityContext
+  intentTags: string[]
+  visibility: RealityVisibility
+  witnessIds: RealityActorId[]
+  status: RealityInteractionStatus
+  deadline?: RealityDeadline
+  responseOptions: string[]
+  /**
+   * In a mixed AI/human group scene, non-human members resolve independently
+   * when the scene is scheduled. Their deterministic responses are persisted
+   * until the human answers so the eventual group outcome does not flatten
+   * everyone to the human's choice.
+   */
+  targetResponses?: Record<RealityActorId, RealityResponseResolution>
+  selectedResponseId?: string
+  outcomeEventIds: string[]
+  createdSequence: number
+}
+
+export interface RealitySocialEvent extends RealityClock {
+  id: string
+  sequence: number
+  type: string
+  actionId?: string
+  interactionId?: string
+  actorId?: RealityActorId
+  targetIds: RealityActorId[]
+  participantIds: RealityActorId[]
+  witnessIds: RealityActorId[]
+  visibility: RealityVisibility
+  outcome: 'SUCCESS' | 'FAILURE' | 'PARTIAL' | 'COUNTERED' | 'IGNORED' | 'SYSTEM'
+  reason: string
+  tags: string[]
+  relationshipDeltas?: Record<
+    RealityActorId,
+    Record<RealityActorId, Partial<Record<RelationshipDimension, number>>>
+  >
+  relatedFactIds: string[]
+  relatedPromiseIds: string[]
+  relatedThreadIds: string[]
+  allianceId?: string
+  allianceRequestId?: string
+  /** Player-facing result of an alliance strategy huddle, saved with its history. */
+  allianceConsultationSummary?: string
+  allianceCommitmentSnapshot?: { kind: string; status: RealityPromiseStatus }
+  allianceRequestSnapshot?: {
+    kind: RealityAllianceRequestKind
+    status: RealityAllianceRequestStatus
+    candidateId?: RealityActorId
+    proposedName?: string
+    accepted?: boolean
+    responseStyle?: RealityAllianceResponseStyle
+    responseReason?: string
+  }
+  /** A durable snapshot for alliance-history events, even after the live roster is cleared. */
+  allianceSnapshot?: {
+    id: string
+    kind?: 'PACT' | 'GROUP'
+    name?: string
+    previousName?: string
+    nameAction?: 'NAMED' | 'RENAMED'
+    leaderId?: RealityActorId
+    coLeaderId?: RealityActorId
+    memberIds: RealityActorId[]
+    endReason?: string
+    exitKind?: 'VOLUNTARY' | 'EXPELLED' | 'DEFECTION' | 'ELIMINATED'
+    supersededById?: string
+    supersededByName?: string
+  }
+  publicEligible: boolean
+  juryEligible: boolean
+}
+
+export interface RealityVoteIntent {
+  actorId: RealityActorId
+  statedTargetId?: RealityActorId
+  intendedTargetId?: RealityActorId
+  actualTargetId?: RealityActorId
+  confidence: number
+  reasonEventIds: string[]
+  day: number
+}
+
+/** A consensual strategic nominee agreement, scoped to one ceremony only. */
+export interface RealityFacadeAgreement {
+  id: string
+  day: number
+  lohId: RealityActorId
+  facadeId: RealityActorId
+  intendedEvicteeId?: RealityActorId
+  stage: 'INITIAL_NOMINATION' | 'REPLACEMENT'
+  status: 'PROPOSED' | 'ACCEPTED' | 'DECLINED' | 'FULFILLED' | 'FAILED' | 'BROKEN' | 'EXPIRED'
+  voluntary: boolean
+  sourceInteractionId?: string
+  allianceId?: string
+}
+
+export interface RealityPerception {
+  authenticity: number
+  entertainment: number
+  likability: number
+  underdog: number
+  strategicRespect: number
+  competitionRespect: number
+  loyalty: number
+  controversy: number
+  fatigue: number
+  sourceEventIds: string[]
+}
+
+export interface RealityJuryEvaluation {
+  jurorId: RealityActorId
+  finalistId: RealityActorId
+  personalAffinity: number
+  strategicRespect: number
+  competitionRespect: number
+  betrayalResentment: number
+  fairness: number
+  ownership: number
+  /** Automatic sendoff impression derived from exit-window relationship history. */
+  goodbyeQuality: number
+  /** Reserved for a future interactive Tribunal question/plea system. */
+  finalAnswerQuality: number
+  sourceEventIds: string[]
+}
+
+export interface RealityDomainState {
+  version: 1 | 2
+  nextSequence: number
+  /** Canonical relationship graph; SocialState.relationships is its compact compatibility view. */
+  relationships: RealityRelationshipMap
+  memoriesByOwner: Record<RealityActorId, RealityMemory[]>
+  beliefsByOwner: Record<RealityActorId, Record<string, RealityBelief>>
+  facts: Record<string, RealityFact>
+  promises: Record<string, RealityPromise>
+  debts: Record<string, RealityDebt>
+  secrets: Record<string, RealitySecret>
+  grievances: Record<string, RealityGrievance>
+  threads: Record<string, RealityThread>
+  alliances: Record<string, RealityAlliance>
+  allianceManagement: RealityAllianceManagementState
+  romances: Record<string, RealityRomance>
+  contestants: Record<RealityActorId, RealityContestantState>
+  interactions: Record<string, RealityInteraction>
+  events: RealitySocialEvent[]
+  cooldowns: Record<RealityActorId, Record<string, RealityClock>>
+  voteIntents: Record<RealityActorId, RealityVoteIntent>
+  facadeAgreements: Record<string, RealityFacadeAgreement>
+  publicPerception: Record<RealityActorId, RealityPerception>
+  juryEvaluations: RealityJuryEvaluation[]
+  /** Captured at eviction and consumed when a Battle Back winner returns. */
+  reentryProfiles: Record<RealityActorId, RealityReentryProfile>
+  relationshipAutonomy: RealityRelationshipAutonomyState
+}

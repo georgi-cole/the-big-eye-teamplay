@@ -1,0 +1,55 @@
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { createInitialGameState } from '../../../store/gameSlice'
+import FinalThreeBlockReveal from '../FinalThreeBlockReveal'
+
+const finalists = createInitialGameState({ seed: 731 }).players.slice(0, 3)
+
+describe('FinalThreeBlockReveal', () => {
+  it('stages two full-body competitors and the nominated finalist on a matching backdrop', () => {
+    const { container } = render(
+      <FinalThreeBlockReveal
+        blockPlayer={finalists[0]}
+        competitors={finalists.slice(1)}
+        mode="classic"
+      />
+    )
+
+    expect(screen.getByRole('dialog', { name: 'Final Power Battle setup' })).toBeTruthy()
+    expect(
+      screen.getByRole('group', { name: 'The two Final Power Battle competitors' })
+    ).toBeTruthy()
+    expect(container.querySelector('[data-finale-set="garden"][data-scene="block"]')).toBeTruthy()
+    expect(container.querySelector('.f3-venue__background')?.getAttribute('style')).toContain(
+      'final-power-battle-backyard'
+    )
+    expect(container.querySelectorAll('.fpb-block__podium')).toHaveLength(2)
+    expect(container.querySelectorAll('.fpb-block__competitor-cutout')).toHaveLength(2)
+    expect(container.querySelector('.fpb-block__nominee-monitor')).toBeTruthy()
+    expect(container.querySelector('.fpb-block__nominee-avatar')).toBeTruthy()
+    expect(
+      container
+        .querySelector('.f3-venue__screen')
+        ?.contains(container.querySelector('.fpb-block__nominee-monitor'))
+    ).toBe(true)
+    expect(screen.queryByText('NOMINATION WALL')).toBeNull()
+    expect(screen.queryByText('ON THE BLOCK')).toBeNull()
+    expect(screen.queryByText('On block')).toBeNull()
+    expect(screen.getByText('Next')).toBeTruthy()
+    expect(screen.queryByText('Awaiting')).toBeNull()
+    expect(screen.queryByText('Press Play to begin.')).toBeNull()
+    expect(container.querySelector('.fpb-block__wildcard-avatar')).toBeTruthy()
+    expect(screen.getByText(finalists[0].name)).toBeTruthy()
+  })
+
+  it('keeps setup presentational: the shared dock owns the actual Play callback', () => {
+    render(
+      <FinalThreeBlockReveal
+        blockPlayer={finalists[0]}
+        competitors={finalists.slice(1)}
+        mode="classic"
+      />
+    )
+    expect(screen.getByRole('dialog', { name: 'Final Power Battle setup' })).toBeTruthy()
+  })
+})

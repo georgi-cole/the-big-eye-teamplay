@@ -1,0 +1,15974 @@
+import {
+  captureSeasonAiRuntime,
+  runtimeCompetitionProfile,
+} from '../ai/competition/seasonAiDifficulty'
+import { formatVotePercentage, getVotePercentagePrecision } from '../utils/votePercentages.mjs'
+import {
+  answerMissionPowerDecision,
+  selectMissionBackup,
+  expireNewMissionReward,
+} from './missionPowerActions'
+import { withMissionPowers } from './missionPowerReducer'
+import {
+  getMissionOutgoingIds,
+  isMissionOpeningProtected,
+  isMissionBackupProtected,
+  getMissionLeaderIds,
+  isMissionPower,
+} from '../bb/missionPowers'
+import { createSlice, createSelector, type PayloadAction } from '@reduxjs/toolkit'
+import {
+  applySurvivalRecovery,
+  getSurvivalAdRecoveriesRemaining,
+  getSurvivalRecoveryKey,
+} from '../modes/survivalRecovery'
+import {
+  contestantFromPlayer,
+  contestantFromProfile,
+  getLaunchContestant,
+  type SeasonContestant,
+} from '../appearance/seasonContestant'
+import { withInitialSeasonAppearance } from '../appearance/initialSeasonAppearance'
+import type { RootState, AppDispatch } from './store'
+import {
+  getAlliancePowerHolderPriority,
+  getStrategicAllianceDecisionRead as getStrategicAllianceDecisionReadFromAlliances,
+  type StrategicAllianceDecisionRead,
+} from '../ai/competition/allianceMinigameStrategy'
+import type {
+  DemocraciaResultDisplay,
+  DayStartShockState,
+  DepressionShockState,
+  GameState,
+  Player,
+  WeekendInterludeState,
+  WeekendTribunalSpeech,
+  WeekendPartyBeat,
+  Phase,
+  TvEvent,
+  MinigameResult,
+  MinigameSession,
+  CompleteMinigamePayload,
+  BattleBackState,
+  SpectatorActiveState,
+  SeasonFinaleState,
+  SpecialVetoType,
+  ForcedShockType,
+  BroadcastOverride,
+  BroadcastCampaign,
+  BroadcastLevel,
+  CustomBroadcastMessage,
+  PresentationEventClaim,
+} from '../types'
+import {
+  addPresentationEventClaim,
+  hasPresentationEventClaim,
+  pinBroadcastQueueHead,
+} from '../broadcasting/fauxTvPresentation'
+import { restoreWeekendDebugSnapshot } from '../features/weekend/weekendDebugActions'
+import { normalizeGuestSaveReminderEvent } from './guestSaveReminder'
+import type { IncomingInteraction, SocialActionLogEntry } from '../social/types'
+import { chooseFinalThreeEvictee } from '../social/finalThreeDecision'
+import { isRemovedMinigameKey, removeObsoleteGameData } from './removedMinigameCleanup'
+import type { LohNominationPlan } from './lohNominationPlanning'
+import { mulberry32, seededPick, seededPickN } from './rng'
+import {
+  getCompetitionPerceptionRead,
+  getCompetitionSeasonState,
+  getDefaultCompetitionProfile,
+  getDefaultCompetitionSeasonState,
+  getMinigameAiModel,
+  simulateMinigameAiScore,
+  updateCompetitionSeasonStateByPlayerId,
+  type CompetitionSeasonUpdateInput,
+} from '../ai/competition'
+import { isHybridScoredGame, resolveHybridAiScores } from '../ai/competition/hybridScoreResolver'
+import { simulateSnakeAiScore } from '../ai/competition/snakeAiSimulator'
+import { rankPressurePlankResults } from '../components/PressurePlank/pressurePlankLogic'
+import HOUSEGUESTS, { getById } from '../data/houseguests'
+import { loadActiveProfile, archiveKeyForActiveProfile, loadProfilesState } from './profilesSlice'
+import { loadSettings } from './settingsSlice'
+import { getConfiguredCastSize, DEFAULT_ROSTER_SIZE } from './settingsHelpers'
+import { hasCachedStoreAccess } from '../vip/vipStorage'
+import { hasEffectiveStoreEntitlement } from '../vip/effectiveEntitlements'
+import { scoreQuickTapVipAiOnly } from '../minigames/quickTapRace/vip/quickTapVipLogic'
+import { canAccessSpecialSettings } from '../utils/debugMode'
+import { pickPhrase, NOMINEE_PLEA_TEMPLATES } from '../utils/juryUtils'
+import {
+  getTribunalMembers,
+  preTribunalExitCount,
+  resolveTribunalSize,
+} from '../rules/tribunalPolicy'
+import { joinPublicAssetPath, profilePhotoAvatar, resolveAvatar } from '../utils/avatar'
+import { getAppearanceAsset } from '../appearance/catalog'
+import {
+  getTwinShockActivationSeason,
+  MAX_SEASON_ARCHIVES,
+  type SeasonArchive,
+} from './seasonArchive'
+import { loadSeasonArchives } from './archivePersistence'
+import { resolveSkinAssetPathWithFallback } from '../utils/skinAssets'
+import { resolvePublicSaveNominee } from '../publicOpinion/PublicSaveService'
+import {
+  createInitialPregnancyStoryState,
+  normalizePregnancyStoryState,
+  getActivePregnancyAttempt,
+  recordPregnancyNewsShare as recordPregnancyStoryNewsShare,
+  revealPregnancyNewsLeak as revealPregnancyStoryNewsLeak,
+  processPregnancyStoryDay,
+  advancePregnancyWeekendDay as advancePregnancyStoryWeekendDay,
+  revealPaternityResult as resolvePaternityResult,
+  revealPregnancyTest as resolvePregnancyTest,
+  startPregnancyAttempt as createPregnancyAttempt,
+  markPregnancyReactions as markPregnancyStoryReactions,
+  type HumanPregnancyRoleChoice,
+  type PregnancyAttemptStartInput,
+} from '../social/reality/pregnancy'
+import { resolvePublicModeRuntimeEnabled } from '../publicOpinion/publicModeAccess'
+import {
+  addDirection,
+  resetDailyFeedBudget,
+  updateApproval,
+} from '../publicOpinion/publicOpinionSlice'
+import {
+  decaySocialMemory,
+  pushIncomingInteraction,
+  recordSocialAction,
+  snapshotWeekRelationships,
+  updateRelationship,
+  updateSocialMemory,
+} from '../social/socialSlice'
+import {
+  createSecretMissionState,
+  buildMissionTasks,
+  checkSecretMissionTrigger,
+  createMissionReward,
+  createImmunityReward,
+  MISSION_TEMPLATES,
+  canUseDoubleVote,
+  canOfferMissionImmunity,
+  canUseVoteDeduction,
+  isSecretMissionSuccessful,
+  getMissionTaskSetSignature,
+  getFirstSecretMissionScheduledDay,
+  pickMissionImmunityDuration,
+  repairLegacyMissionTasks,
+  type MissionTask,
+  type CurrentMissionRewardType,
+} from '../bb/secretMission'
+import {
+  buildDoubleEvictionTieResolutionMessage,
+  calculateRequiredDoubleEvictionSlots,
+} from '../features/twists/doubleEvictionTieUtils'
+import { buildDayStartShockSelection } from '../features/twists/dayStartShock'
+import {
+  BATTLE_BACK_RETRY_LIMIT,
+  getBattleBackEligiblePlayers,
+  getStoredBattleBackCandidates,
+  sanitizeBattleBackCandidateIds,
+  type BattleBackActivationSource,
+} from '../features/twists/battleBackRules'
+import {
+  areDistinctCupidPairs,
+  createCupidArrowPairs,
+  CUPID_ARROW_BREAK_AFTER_PAIRS,
+  expandCupidIds,
+  getCupidPair,
+  getCupidPartnerId,
+  isCupidArrowActive,
+  isCupidArrowTwistLocked,
+  shouldScheduleCupidArrowSeason,
+} from '../features/twists/cupidArrow'
+import {
+  createInitialTwinShockState,
+  resolveTwinShockTurn,
+  TWIN_SHOCK_ALI_ID,
+  TWIN_SHOCK_LIA_ID,
+  type TwinShockTurnResult,
+} from '../bb/twinShock'
+import { LIVE_VOTE_PITCHES_EVENT_KEY, LIVE_VOTE_PITCHES_TEXT } from '../constants/tvEvents'
+import {
+  buildHubSaysQuestionIds,
+  getHubSaysQuestion,
+  resolveHubSaysQuestion,
+} from '../features/weekend/hubSays'
+import { buildSeasonSoFarFacts } from '../features/weekend/seasonSoFar'
+import {
+  createInitialVoxPopuliState,
+  isVoxPopuliActive,
+  isVoxPopuliTwistLocked,
+  resolveVoxAudienceEviction,
+  resolveVoxAudiencePreview,
+  reconcileVoxAudienceResultWithPreview,
+  resolveVoxNominations,
+  resolveVoxReplacementNominees,
+  shouldScheduleVoxPopuliSeason,
+} from '../features/twists/voxPopuli'
+import {
+  getDefaultBroadcastOrder,
+  getBroadcastTemplate,
+  getBroadcastTemplateForMajor,
+  getPhaseCardTemplate,
+  matchBroadcastTemplate,
+  renderBroadcastTemplate,
+} from '../broadcasting/broadcastTemplateCatalog'
+import { loadBroadcastConfig } from '../broadcasting/broadcastConfigPersistence'
+import { isRecognizedBroadcastMajorKey } from '../broadcasting/broadcastPresentationRegistry'
+import { loadDepressionShockState } from '../features/twists/depressionShock'
+import {
+  BELLA_ID,
+  BELLA_WILL_REWARD_LABELS,
+  activateBellaInheritance,
+  buildBellaPoolEntry,
+  chooseBellaHeir,
+  createBellaWillState,
+  expireBellaWillAtEndgame,
+  getBellaHint,
+  isBellaHeirImmune,
+  shouldCastBella,
+  type BellaWillReward,
+} from '../features/twists/bellasWill'
+import {
+  FORCED_SHOCK_CRITICAL_RULES,
+  canCastClassicEvictionVote,
+  canPlayerTargetPlayer,
+  getCanonicalVoterId,
+  getClassicEvictionTieBreakerId,
+  isTwinAlliancePair,
+  isTwinShockActivePair,
+} from './criticalGameRules'
+import {
+  allianceIdentityBias,
+  assignAiGameIdentities,
+  betrayalChanceModifier,
+  nominationIdentityBias,
+  type AiIdentityMode,
+} from '../ai/aiGameIdentity'
+import {
+  applyCompetitionIntentToScore,
+  decideCompetitionIntent,
+  type CompetitionIntent,
+} from '../social/intelligenceSystem'
+import { getHoldTheWallDealDisposition } from '../features/holdTheWall/deal'
+import {
+  traceAiDecision,
+  type AiDecisionCandidate,
+  type AiDecisionFactor,
+} from '../utils/aiDecisionDebug'
+import {
+  buildSeasonDirectorPlan,
+  hasDirectorSpotlightRoom,
+  isSeasonDirectorKillSwitched,
+  isWithinDirectorWindow,
+} from '../features/twists/seasonDirector'
+import {
+  chooseWildcardOpportunity,
+  getWildcardAdmissionEligibility,
+  getWildcardQaQueueEligibility,
+  WILDCARD_LAST_TRIGGER_DAY,
+} from '../features/reserveEntrants/wildcardReplacement'
+
+// ─── Canonical phase order ────────────────────────────────────────────────────
+const PHASE_ORDER: Phase[] = [
+  'week_start',
+  'loh_comp_announcement',
+  'loh_comp',
+  'loh_results',
+  'social_1',
+  'nominations',
+  'nomination_results',
+  'pre_veto_public_save',
+  'pos_comp_announcement',
+  'pos_comp',
+  'pos_results',
+  'pos_ceremony',
+  'pos_ceremony_results',
+  'social_2',
+  'live_vote',
+  'eviction_results',
+  'week_end',
+]
+
+const IMMUNITY_REPLACEMENT_SEED_MODIFIER = 0x51c4f1d3
+const DAY_START_SHOCK_MIN_WEEK = 3
+const DAY_START_SHOCK_RNG_SALT = 0x7c2f5d19
+const DEPRESSION_SHOCK_MIN_WEEK = 5
+const DEPRESSION_SHOCK_RNG_SALT = 0x0de9a551 // distinguished from every other seasonal roll
+const AI_LOH_REVENGE_THREAT_WEIGHT = 6
+const AI_LOH_BASE_THREAT_WEIGHT = 2
+const AI_LOH_WIN_THREAT_WEIGHT = 4
+const AI_POS_WIN_THREAT_WEIGHT = 3
+const AI_NEVER_NOMINATED_THREAT_WEIGHT = 1
+const AI_CURRENT_LOH_POWER_THREAT_WEIGHT = 2
+const AI_HOLD_THE_WALL_DEAL_WEIGHT = 108
+const EARLY_HUMAN_EVICTION_GRACE_BY_WEEK = [0, 16, 12, 6] as const
+
+function getPhaseOrderIndex(phase: Phase): number {
+  return PHASE_ORDER.indexOf(phase)
+}
+
+function getForcedShockActivationWeek(
+  state: Pick<
+    GameState,
+    | 'phase'
+    | 'week'
+    | 'twistActivatedThisWeek'
+    | 'doubleEviction'
+    | 'specialVeto'
+    | 'democracia'
+    | 'missionPowers'
+  >,
+  safePhase: Phase
+): number {
+  const currentIndex = getPhaseOrderIndex(state.phase)
+  const safeIndex = getPhaseOrderIndex(safePhase)
+  const phaseWindowPassed = currentIndex === -1 || safeIndex === -1 || currentIndex > safeIndex
+  const currentWeekBlocked =
+    state.missionPowers?.usedDay === state.week ||
+    state.twistActivatedThisWeek === true ||
+    state.doubleEviction?.weekActive === true ||
+    state.specialVeto?.activeType != null ||
+    state.democracia?.active === true
+  const earliestWeek = phaseWindowPassed || currentWeekBlocked ? state.week + 1 : state.week
+  return safePhase === 'week_start'
+    ? Math.max(DAY_START_SHOCK_MIN_WEEK, earliestWeek)
+    : earliestWeek
+}
+
+function formatForcedShockLabel(type: ForcedShockType): string {
+  switch (type) {
+    case 'doubleEviction':
+      return 'Double Elimination'
+    case 'battleBack':
+      return 'Back 2 the Game'
+    case 'vip':
+      return 'Double Trouble'
+    case 'diamond':
+      return 'Halo Exchange'
+    case 'coup':
+      return 'Detox'
+    case 'spotlight':
+      return 'Force Majeure'
+    case 'democracia':
+      return 'Democracia'
+    case 'dayStartShock':
+      return 'Morning Shock'
+    case 'twinShock':
+      return 'Twin Shock'
+    case 'depressionShock':
+      return 'Depression Shock'
+    default:
+      return type
+  }
+}
+
+function isSpecialVetoType(type: ForcedShockType): type is SpecialVetoType {
+  return type === 'vip' || type === 'diamond' || type === 'coup' || type === 'spotlight'
+}
+
+function formatDemocraciaResultNames(state: GameState, candidateIds: string[]): string {
+  return candidateIds
+    .map((id) => state.players.find((p) => p.id === id)?.name ?? id)
+    .join(candidateIds.length === 2 ? ' and ' : ', ')
+}
+
+function buildDemocraciaResultDisplay(
+  mode: DemocraciaResultDisplay['mode'],
+  participantIds: string[],
+  voteCountsByCandidateId: Record<string, number>,
+  title: string,
+  subtitle: string
+): DemocraciaResultDisplay {
+  return {
+    mode,
+    participantIds,
+    voteCountsByCandidateId,
+    title,
+    subtitle,
+  }
+}
+
+function getForcedShockSafePhase(type: ForcedShockType): Phase {
+  switch (type) {
+    case 'doubleEviction':
+      return 'nominations'
+    case 'battleBack':
+      return 'eviction_results'
+    case 'twinShock':
+      return 'eviction_results'
+    case 'democracia':
+      return 'loh_comp_announcement'
+    case 'dayStartShock':
+    case 'depressionShock':
+      return 'week_start'
+    default:
+      return 'pos_results'
+  }
+}
+
+function createInitialDepressionShockState(): DepressionShockState {
+  return {
+    rollResolved: false,
+    pendingActivation: false,
+    activatedWeek: null,
+    activeDay: 0,
+    recoveryWeek: null,
+    completed: false,
+  }
+}
+
+function isDepressionShockEligibleMode(state: GameState): boolean {
+  // Vox Populi deliberately runs on the Classic game engine. Cupid and
+  // Survival have their own season-defining visual language, so neither is
+  // eligible for this compact weather shock.
+  return (
+    state.mode !== 'survival' &&
+    state.cupidArrow?.status !== 'scheduled' &&
+    !isCupidArrowActive(state)
+  )
+}
+
+function activeHousemateCount(state: GameState): number {
+  return state.players.filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+    .length
+}
+
+function createWeekendInterlude(
+  state: GameState,
+  afterDay: number,
+  debug = false,
+  weekendNumber: 1 | 2 | 3 = afterDay === 5 ? 1 : afterDay === 10 ? 2 : 3,
+  finaleWeekend = false
+): WeekendInterludeState {
+  const base = {
+    active: true as const,
+    afterDay,
+    weekendNumber,
+    weekendDay: 1 as const,
+    wallet: { energy: 30, influence: 999, info: 999 },
+    ...(finaleWeekend ? { finaleWeekend: true as const } : {}),
+    ...(debug ? { debug: true as const } : {}),
+  }
+
+  if (weekendNumber === 1) {
+    return {
+      ...base,
+      episode: 'hub_says',
+      stage: 'intro',
+      hubSays: {
+        questionIds: buildHubSaysQuestionIds(state.gameId, state.season, afterDay, 5),
+        currentQuestionIndex: 0,
+        beat: 'question',
+        selectedPlayerId: null,
+        results: [],
+      },
+    }
+  }
+
+  if (weekendNumber === 2) {
+    return {
+      ...base,
+      episode: 'party',
+      stage: 'intro',
+      party: { beats: [] },
+    }
+  }
+
+  return {
+    ...base,
+    episode: 'season_so_far',
+    stage: 'intro',
+    seasonSoFar: { facts: buildSeasonSoFarFacts(state), currentFactIndex: 0 },
+  }
+}
+
+function createFinaleTribunalSpeeches(state: GameState): WeekendTribunalSpeech[] {
+  const finalists = state.players
+    .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+    .sort((left, right) => {
+      const leftWins = (left.stats?.lohWins ?? 0) + (left.stats?.posWins ?? 0)
+      const rightWins = (right.stats?.lohWins ?? 0) + (right.stats?.posWins ?? 0)
+      return rightWins - leftWins
+    })
+  const tribunal = state.players
+    .filter((player) => player.status === 'jury' && player.tribunalEligible !== false)
+    .sort((left, right) => (right.evictedAtWeek ?? 0) - (left.evictedAtWeek ?? 0))
+    .slice(0, 3)
+
+  if (tribunal.length === 0) {
+    return [
+      {
+        speakerName: 'THE BIG EYE',
+        stance: 'neutral',
+        text: 'The Tribunal is settling into sequester. The finalists are all they can talk about tonight.',
+      },
+    ]
+  }
+
+  const defenses = [
+    (name: string) =>
+      `I’ll defend ${name}: making it to the Final Three takes more than luck. If I had to pick a winner tonight, they’d be in my top spot.`,
+    (name: string) =>
+      `People keep underestimating ${name}. They’re my dark horse to take the crown if they keep their nerve.`,
+    (name: string) =>
+      `${name} has a real shot. One last competition could turn them into my pick to win.`,
+  ]
+  const challenges = [
+    (name: string) =>
+      `But what is ${name}’s defining move? Getting here is one thing; I’m not ready to put them at the top of my ballot.`,
+    (name: string) =>
+      `I’m not convinced by ${name} yet. If they coast through these last days, I can’t see the jury choosing them.`,
+    (name: string) =>
+      `${name} is still in it, but surviving isn’t the same as leading. They could win the last battle and still need a stronger case.`,
+  ]
+
+  if (finalists.length === 0) return []
+
+  return finalists.slice(0, 3).flatMap((finalist, index) => {
+    const defender = tribunal[index % tribunal.length]
+    const skeptic = tribunal[(index + 1) % tribunal.length]
+    return [
+      {
+        speakerId: defender.id,
+        speakerName: defender.name,
+        stance: 'defend' as const,
+        text: defenses[index % defenses.length](finalist.name),
+      },
+      {
+        speakerId: skeptic.id,
+        speakerName: skeptic.name,
+        stance: 'challenge' as const,
+        text: challenges[index % challenges.length](finalist.name),
+      },
+    ]
+  })
+}
+
+// ─── Houseguest pool ─────────────────────────────────────────────────────────
+// All 22 houseguests in src/data/houseguests.ts have matching avatar images in
+// public/avatars/. This pool is the source for AI opponents each game.
+const HOUSEGUEST_POOL = HOUSEGUESTS.map((hg) => ({
+  id: hg.id,
+  name: hg.name,
+  avatar: hg.sex === 'Female' ? '👩' : '🧑',
+  age: hg.age,
+  sex: hg.sex,
+}))
+
+type SecretMissionTaskBuildResult = {
+  templateId: string
+  tasks: MissionTask[]
+}
+
+const TWIN_SHOCK_RESERVED_IDS = new Set([TWIN_SHOCK_LIA_ID, TWIN_SHOCK_ALI_ID, 'lia_ali'])
+const TWIN_SHOCK_LIA_AVATAR = 'assets/skins/Lia_avatar.webp'
+const TWIN_SHOCK_ALI_AVATAR = 'assets/skins/Ali_avatar.webp'
+const TWIN_SHOCK_LIA_FLIP_AVATAR = resolveSkinAssetPathWithFallback(
+  'Lia_flip_avatar.webp',
+  'Lia_avatar.webp'
+)
+// Keep the combined portrait as a stable public path so a live session can
+// pick it up even when the asset was added after the dev server started.
+const TWIN_SHOCK_COMBINED_AVATAR = 'assets/skins/Ali_lia_avatar.webp'
+const TWIN_SHOCK_LIA_POOL_ENTRY = {
+  id: TWIN_SHOCK_LIA_ID,
+  name: 'Lia',
+  avatar: TWIN_SHOCK_LIA_AVATAR,
+  age: 25,
+  sex: 'Female',
+}
+
+function buildSecretMissionTargetCandidates(state: GameState): string[] {
+  const humanId = state.players.find((player) => player.isUser)?.id
+  return state.players
+    .filter(
+      (player) =>
+        player.id !== humanId &&
+        player.id !== state.lohId &&
+        player.status !== 'evicted' &&
+        player.status !== 'jury' &&
+        player.status !== 'nominated' &&
+        player.status !== 'nominated+pos'
+    )
+    .map((player) => player.id)
+}
+
+function buildSecretMissionTasksForTemplate(
+  state: GameState,
+  templateId: string,
+  triggeredDay: number
+): SecretMissionTaskBuildResult {
+  const template = MISSION_TEMPLATES.find((t) => t.id === templateId) ?? MISSION_TEMPLATES[0]
+  const targetCandidateIds = buildSecretMissionTargetCandidates(state)
+  return {
+    templateId: template.id,
+    tasks: buildMissionTasks(template, triggeredDay, {
+      targetCandidateIds,
+      targetCandidateNamesById: Object.fromEntries(
+        state.players
+          .filter((player) => targetCandidateIds.includes(player.id))
+          .map((player) => [player.id, player.name])
+      ),
+      capabilities: {
+        publicModeEnabled: state.publicModeEnabled === true,
+        gameMode: isVoxPopuliActive(state) ? 'vox_populi' : 'classic',
+        nominationTargetCount: targetCandidateIds.length,
+      },
+      missionNumber: state.secretMission?.missionNumber,
+      seed: state.seed,
+      excludedTaskSetSignatures: state.secretMissionTaskSetHistory ?? [],
+    }),
+  }
+}
+
+const GAME_ROSTER_SIZE = DEFAULT_ROSTER_SIZE
+
+/**
+ * Build the human player from the stored profile.
+ * Falls back to name='You' and the You.png silhouette when no profile exists.
+ * The avatar resolver finds avatars/You.png via the name-based candidate
+ * capitalize('You') = 'You' → avatars/You.png.
+ */
+export function resolveProfileAge(value?: string): number | undefined {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized) return undefined
+  const exact = Number(normalized)
+  if (Number.isFinite(exact)) return exact
+  const range = normalized.match(/\b(early|mid|late)[ -]?(\d{2})s\b/)
+  if (range) {
+    const decade = Number(range[2])
+    const offset = range[1] === 'early' ? 2 : range[1] === 'late' ? 8 : 5
+    return decade + offset
+  }
+  const decade = normalized.match(/\b(\d{2})s\b/)
+  return decade ? Number(decade[1]) + 5 : undefined
+}
+
+export function resolveProfileSex(
+  value?: string,
+  reproductiveProfile?: Player['reproductiveProfile']
+): string | undefined {
+  const explicit = value?.trim()
+  if (explicit) return explicit
+
+  const canCause = reproductiveProfile?.canCausePregnancy === true
+  const canBecome = reproductiveProfile?.canBecomePregnant === true
+  if (canCause === canBecome) return undefined
+  return canCause ? 'Male' : 'Female'
+}
+function buildUserPlayer(profile: SeasonContestant): Player {
+  const appearance = profile.appearanceSelection
+  const mainAsset = getAppearanceAsset(appearance, 'main')
+  const parsedAge = resolveProfileAge(profile.bio?.age)
+  const resolvedSex = resolveProfileSex(profile.bio?.sex, profile.bio?.reproductiveProfile)
+  return {
+    id: 'user',
+    name: profile.name,
+    avatar: mainAsset
+      ? joinPublicAssetPath(mainAsset)
+      : profile.photoId
+        ? profilePhotoAvatar(profile.photoId)
+        : profile.avatar,
+    appearance,
+    status: 'active',
+    isUser: true,
+    ...(parsedAge !== undefined ? { age: parsedAge } : {}),
+    ...(resolvedSex ? { sex: resolvedSex } : {}),
+    ...(profile.bio?.reproductiveProfile
+      ? { reproductiveProfile: profile.bio.reproductiveProfile }
+      : {}),
+  }
+}
+
+function getE2ENewSeasonFixture(): Window['__bbE2ENewSeason'] {
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.__E2E__ === true) {
+    return window.__bbE2ENewSeason
+  }
+  return undefined
+}
+
+/**
+ * Pick (rosterSize - 1) houseguests at random from the full pool.
+ * Uses Math.random() to seed the pick so each new game has a fresh roster.
+ * rosterSize is read from persisted settings (gameUX.castSize) with a
+ * fallback to the GAME_ROSTER_SIZE constant.
+ */
+function pickHouseguests(rosterSize = GAME_ROSTER_SIZE, twinShockConsumed = false): Player[] {
+  const seed = getE2ENewSeasonFixture()?.rosterSeed ?? Math.floor(Math.random() * 0x100000000) >>> 0
+  const rng = mulberry32(seed)
+  const lia = {
+    ...(HOUSEGUEST_POOL.find((houseguest) => houseguest.id === TWIN_SHOCK_LIA_ID) ??
+      TWIN_SHOCK_LIA_POOL_ENTRY),
+    avatar: TWIN_SHOCK_LIA_AVATAR,
+  }
+  const eligiblePool = HOUSEGUEST_POOL.filter((houseguest) =>
+    twinShockConsumed
+      ? !TWIN_SHOCK_RESERVED_IDS.has(houseguest.id)
+      : houseguest.id !== TWIN_SHOCK_LIA_ID && houseguest.id !== TWIN_SHOCK_ALI_ID
+  )
+  const pickCount = twinShockConsumed ? rosterSize - 1 : Math.max(0, rosterSize - 2)
+  const picked = seededPickN(rng, eligiblePool, pickCount)
+  const roster = !twinShockConsumed && lia ? [lia, ...picked] : picked
+  return roster.map((hg) => ({
+    ...hg,
+    age: hg.age,
+    sex: hg.sex,
+    status: 'active' as const,
+  }))
+}
+
+function buildInitialPlayers(options: {
+  contestant: SeasonContestant
+  twinShockConsumed: boolean
+  seasonArchives: SeasonArchive[]
+  season: number
+  seed: number
+  allowBella: boolean
+  bellaProgress?: ReturnType<typeof loadProfilesState>['profiles'][number]['bellaProgress']
+}): Player[] {
+  const rosterSize = getConfiguredCastSize()
+  const aiPlayers = pickHouseguests(rosterSize, options.twinShockConsumed)
+  if (
+    shouldCastBella({
+      season: options.season,
+      seasonArchives: options.seasonArchives,
+      twinShockConsumed: options.twinShockConsumed,
+      seed: options.seed,
+      bellaProgress: options.bellaProgress,
+    }) &&
+    options.allowBella &&
+    aiPlayers.length > 0
+  ) {
+    const replaceIndex = options.seed % aiPlayers.length
+    aiPlayers[replaceIndex] = buildBellaPoolEntry() as Player
+  }
+  return [buildUserPlayer(options.contestant), ...aiPlayers]
+}
+
+function buildInitialCompetitionSeasonState(
+  players: Player[]
+): Record<string, ReturnType<typeof getDefaultCompetitionSeasonState>> {
+  return Object.fromEntries(
+    players.map((player) => [player.id, getDefaultCompetitionSeasonState()])
+  )
+}
+
+export const FINALE_INTERVIEW_VARIANT_COUNT = 3
+
+/**
+ * Derive the next season number from an array of season archives.
+ * Uses the maximum archived `seasonIndex` rather than array length so the
+ * result remains correct after the 1000-entry archive cap truncates history
+ * or if entries are ever non-contiguous / out of order.
+ *
+ * Returns 1 when no archives exist yet.
+ */
+function nextSeasonNumber(archives: SeasonArchive[]): number {
+  if (archives.length === 0) return 1
+  const maxIndex = archives.reduce((max, a) => Math.max(max, a.seasonIndex ?? 0), 0)
+  return maxIndex + 1
+}
+
+/**
+ * Build a fresh initial game state from the current settings and profile.
+ * Called both at store initialization and on every manual game reset, so that
+ * each new season always uses the latest persisted configuration rather than
+ * stale module-scope values.
+ */
+export function createInitialGameState(options?: {
+  twinShockConsumed?: boolean
+  seed?: number
+  seasonArchives?: SeasonArchive[]
+}): GameState {
+  const seed = options?.seed ?? 42
+  const freshSettings = loadSettings()
+  const broadcastConfig = loadBroadcastConfig()
+  // Guest mode never persists archives — treat as an empty history so guest
+  // sessions always start at Season 1 regardless of any logged-in user data.
+  const profilesState = loadProfilesState()
+  const isGuest = profilesState.isGuest
+  const activeStoredProfile =
+    !isGuest && profilesState.activeProfileId
+      ? profilesState.profiles.find((profile) => profile.id === profilesState.activeProfileId)
+      : undefined
+  const activeBellaProgress = activeStoredProfile?.bellaProgress
+  const seasonContestant =
+    getLaunchContestant() ??
+    activeStoredProfile?.contestantDefaults ??
+    contestantFromProfile(activeStoredProfile ?? loadActiveProfile())
+  const seasonArchives: SeasonArchive[] = isGuest
+    ? []
+    : (options?.seasonArchives ?? loadSeasonArchives(archiveKeyForActiveProfile()) ?? [])
+  const priorTwinShockConsumed = seasonArchives.some(
+    (archive) => archive.twinShockConsumed === true
+  )
+  const twinShockConsumed =
+    options?.twinShockConsumed === true ||
+    priorTwinShockConsumed ||
+    activeBellaProgress?.twinShockConsumedEver === true
+  const season = nextSeasonNumber(seasonArchives)
+  const expansionDebugAccess = import.meta.env.DEV || canAccessSpecialSettings()
+  const forceClassicLocal = import.meta.env.DEV && import.meta.env.VITE_FORCE_CLASSIC === 'true'
+  const cupidScheduleOptions = {
+    season,
+    seasonArchives,
+    seed,
+    seasonOverride: freshSettings.sim.cupidArrowSeasonOverride,
+  }
+  // Cupid may organically enter a Classic season only for an owner. An explicit
+  // debug season override remains available for testing, but DEV alone is not ownership.
+  const cupidArrowIsScheduled =
+    !forceClassicLocal &&
+    ((hasCachedStoreAccess('cupidArrow') && shouldScheduleCupidArrowSeason(cupidScheduleOptions)) ||
+      (expansionDebugAccess &&
+        freshSettings.sim.cupidArrowSeasonOverride === season &&
+        shouldScheduleCupidArrowSeason(cupidScheduleOptions)))
+  // Vox Populi is a separately launched expansion. It never enters Classic just
+  // because the product is owned; only the explicit debug override can pre-schedule it.
+  const voxPopuliIsScheduled =
+    !forceClassicLocal &&
+    expansionDebugAccess &&
+    freshSettings.sim.voxPopuliSeasonOverride === season &&
+    shouldScheduleVoxPopuliSeason({
+      season,
+      seasonArchives,
+      seed,
+      seasonOverride: freshSettings.sim.voxPopuliSeasonOverride,
+      cupidScheduled: cupidArrowIsScheduled,
+    })
+  const initialVoxPopuli = createInitialVoxPopuliState(voxPopuliIsScheduled ? season : null)
+  if (voxPopuliIsScheduled) {
+    initialVoxPopuli.status = 'active'
+    initialVoxPopuli.activatedSeason = season
+    initialVoxPopuli.activatedWeek = 1
+  }
+  const freshPlayers = buildInitialPlayers({
+    contestant: seasonContestant,
+    twinShockConsumed,
+    seasonArchives,
+    season,
+    seed,
+    allowBella: !cupidArrowIsScheduled && !voxPopuliIsScheduled,
+    bellaProgress: activeBellaProgress,
+  })
+  const publicModeEnabled = resolvePublicModeRuntimeEnabled(freshSettings.sim.publicMode === true, {
+    hasStoreAccess: hasCachedStoreAccess('publicMode'),
+    adminOverride: freshSettings.sim.publicModeAdminOverride === true,
+    isDev: import.meta.env.DEV,
+    hasSpecialAccess: canAccessSpecialSettings(),
+  })
+  const initialBroadcastCampaign: BroadcastCampaign = cupidArrowIsScheduled
+    ? 'cupid'
+    : voxPopuliIsScheduled
+      ? 'vox_populi'
+      : 'classic'
+  const aiIdentityMode: AiIdentityMode = cupidArrowIsScheduled
+    ? 'cupid'
+    : voxPopuliIsScheduled
+      ? 'vox_populi'
+      : 'classic'
+  const playersWithIdentity = assignAiGameIdentities(freshPlayers, seed, aiIdentityMode)
+  const tribunalStartingCastSize = playersWithIdentity.length
+  const tribunalSize = resolveTribunalSize(tribunalStartingCastSize)
+  const seasonDirectorPlan = buildSeasonDirectorPlan(season, seed)
+
+  // Season-opening broadcasts are built from the same persistent registry as
+  // every later phase. This makes edits, disabling, and mixed built-in/custom
+  // ordering effective before the first Play press as well.
+  const seasonStartBuiltIns = [
+    // SeasonStartOnboardingController owns the single opening welcome.
+    // Retired welcome templates remain readable only for saved-game migration.
+    { id: 'season.public-mode-rule', variables: [publicModeEnabled ? 'ON' : 'OFF'], include: true },
+    { id: 'season.vox-populi-intro', variables: [], include: voxPopuliIsScheduled },
+  ].flatMap(({ id, variables, include }) => {
+    const template = getBroadcastTemplate(id)
+    if (!include || !template) return []
+    const override = broadcastConfig.overrides[id]
+    if (override?.disabled) return []
+    const level = override?.level ?? template.level
+    const forceOnTv = override?.forceOnTv ?? template.forceOnTv ?? false
+    const defaultMajor = template.major
+    const selectedMajor = override?.major === null ? undefined : (override?.major ?? defaultMajor)
+    const major =
+      level === 'critical'
+        ? (selectedMajor ?? 'custom_critical')
+        : level === 'major'
+          ? (selectedMajor ?? 'custom_major')
+          : undefined
+    return [
+      {
+        id,
+        order: override?.order ?? getDefaultBroadcastOrder(template),
+        text: renderBroadcastTemplate(override?.text ?? template.text, variables),
+        type: override?.type ?? template.type,
+        level,
+        major,
+        forceOnTv,
+        title: override?.title,
+        customId: undefined as string | undefined,
+        templateId: id,
+        variables,
+      },
+    ]
+  })
+  const seasonStartCustom = broadcastConfig.customMessages
+    .filter(
+      (message) =>
+        message.enabled &&
+        message.phase === 'season_start' &&
+        (!message.campaign || message.campaign === initialBroadcastCampaign) &&
+        message.text.trim()
+    )
+    .map((message) => ({
+      id: message.id,
+      order: message.order ?? 10000,
+      text: message.text,
+      type: message.type,
+      level: message.level,
+      major:
+        message.level === 'critical'
+          ? (message.major ?? 'custom_critical')
+          : message.level === 'major'
+            ? (message.major ?? 'custom_major')
+            : undefined,
+      forceOnTv: message.forceOnTv !== false,
+      title: message.title,
+      customId: message.id,
+      templateId: message.key ?? message.id,
+      variables: [] as string[],
+    }))
+  const seasonStartTime = Date.now()
+  const seasonStartItems = [...seasonStartBuiltIns, ...seasonStartCustom].sort(
+    (left, right) => left.order - right.order
+  )
+  const initialTvFeed: TvEvent[] = seasonStartItems.map((item, index) => ({
+    id: `season-start-${item.id}-${index}`,
+    text: item.text,
+    type: item.type,
+    timestamp: seasonStartTime + index,
+    ...(item.major ? { major: item.major } : {}),
+    meta: {
+      phase: 'season_start',
+      week: 1,
+      broadcastTemplateId: item.templateId,
+      broadcastOrder: item.order,
+      broadcastLevel: item.level,
+      broadcastManaged: true,
+      broadcastVariables: item.variables,
+      ...(item.customId ? { customBroadcastId: item.customId } : {}),
+      ...(item.major ? { major: item.major } : {}),
+      ...(item.level === 'critical' ? { broadcastPriority: 'critical' } : {}),
+      ...(item.forceOnTv ? { forceOnTv: true } : {}),
+      ...(item.level !== 'minor' ? { announcementSubtitle: item.text } : {}),
+      ...(item.level !== 'minor' && item.title ? { announcementTitle: item.title } : {}),
+    },
+  }))
+  const initialBroadcastQueue = initialTvFeed
+    .filter((event) => event.meta?.forceOnTv === true)
+    .sort(
+      (left, right) =>
+        managedBroadcastPriority(left) - managedBroadcastPriority(right) ||
+        (typeof left.meta?.broadcastOrder === 'number' ? left.meta.broadcastOrder : 10000) -
+          (typeof right.meta?.broadcastOrder === 'number' ? right.meta.broadcastOrder : 10000) ||
+        left.timestamp - right.timestamp ||
+        left.id.localeCompare(right.id)
+    )
+    .map((event) => event.id)
+  const wildcardOpportunity =
+    initialBroadcastCampaign === 'classic' && playersWithIdentity.length === 16
+      ? chooseWildcardOpportunity(seed)
+      : { status: 'none' as const }
+  return {
+    gameId: crypto.randomUUID(),
+    seasonContestant,
+    expansionMode: null,
+    season,
+    week: 1,
+    phase: 'season_start',
+    weekendsEnabledForSeason: true,
+    weekendsEnabledAtSeasonStart: true,
+    firstRealWeekendStarted: false,
+    completedWeekendDays: [],
+    finaleWeekendCompleted: false,
+    wildcardOpportunity,
+    wildcardAdmissions: [],
+    weekendInterlude: null,
+    seed,
+    seasonDirectorPlan,
+    seasonDirectorLastSpotlightDay: null,
+    seasonDirectorHumanReturnUsed: false,
+    seasonDirectorAiBattleBackUsed: false,
+    lohId: null,
+    lohSocialPlan: null,
+    currentWeekNominationRecord: null,
+    lastWeekNominationRecord: null,
+    nominationDecisionReasons: {},
+    pregnancyStory: createInitialPregnancyStoryState(),
+    lohSafetyAdvice: null,
+    prevHohId: null,
+    nomineeIds: [],
+    publicModeEnabled,
+    pendingPublicModeEnabled: null,
+    posWinnerId: null,
+    replacementNeeded: false,
+    povSavedId: null,
+    replacementNomineeIds: [],
+    povProtectedIds: [],
+    awaitingNominations: false,
+    pendingNominee1Id: null,
+    awaitingPovDecision: false,
+    awaitingPovSaveTarget: false,
+    lastHohCompFinisherId: null,
+    lastHohCompFinisherType: null,
+    publicSavedNomineeId: null,
+    nominationContext: null,
+    awaitingPublicSave: false,
+    votes: {},
+    batteryLowVoteEffects: {},
+    awaitingHumanVote: false,
+    awaitingTieBreak: false,
+    tiedNomineeIds: null,
+    awaitingMissionImmunityOffer: false,
+    secretMissionCount: 0,
+    secretMissionLastResolvedDay: null,
+    secretMissionTaskSetHistory: [],
+    secretMissionTemplateHistory: seasonArchives[0]?.secretMissionTemplateIds?.slice(-2) ?? [],
+    secretMissionSecondChanceResolved: false,
+    awaitingFinal3Eviction: false,
+    awaitingFinal3Plea: false,
+    aiReplacementStep: 0,
+    aiReplacementWaiting: false,
+    f3Part1WinnerId: null,
+    f3Part2WinnerId: null,
+    finalThree: null,
+    voteResults: null,
+    voteResultsMode: 'house',
+    evictionSplashId: null,
+    pendingEviction: null,
+    players: playersWithIdentity,
+    cfg: {
+      tribunalSize,
+      tribunalStartingCastSize,
+    },
+    competitionSeasonStateByPlayerId: buildInitialCompetitionSeasonState(playersWithIdentity),
+    tvFeed: initialTvFeed,
+    broadcastQueue: initialBroadcastQueue,
+    activeBroadcastEventId: null,
+    presentationEventClaims: [],
+    lastPlainBroadcastEventId: null,
+    broadcastOverrides: broadcastConfig.overrides,
+    customBroadcasts: broadcastConfig.customMessages,
+    isLive: false,
+    hasSeenConfessionalSpotlight: false,
+    seasonArchives,
+    spectatorActive: null,
+    seasonFinale: null,
+    doubleEviction: { usedCount: 0, weekActive: false, pendingSecondEviction: null },
+    twistActivatedThisWeek: false,
+    specialVeto: {
+      seasonUsed: false,
+      activeType: null,
+      activatedWeek: null,
+      vipUseStage: 0,
+      awaitingHolderReplacement: false,
+      awaitingCoupReplacement1: false,
+      awaitingCoupReplacement2: false,
+      coupReplacement1Id: null,
+      awaitingVipSecondUseDecision: false,
+      awaitingVipSecondSaveTarget: false,
+    },
+    pendingForcedShock: null,
+    depressionShock: createInitialDepressionShockState(),
+    dayStartShock: null,
+    dayStartShockUsedThisSeason: false,
+    tribunalPhaseAnnounced: false,
+    tribunalInvitationAcknowledged: false,
+    twinShock: createInitialTwinShockState(),
+    twinShockConsumed,
+    twinShockActivatedSeason: null,
+    twinShockResolution: null,
+    twinShockResolvedDay: null,
+    twinShockDiscoveredByUser: false,
+    liaForcedUntilTwinShockResolved: !twinShockConsumed,
+    bellaWill: createBellaWillState({
+      active: playersWithIdentity.some((player) => player.id === BELLA_ID),
+      seed,
+      season,
+    }),
+    democracia: {
+      usedThisSeason: false,
+      active: false,
+      activatedDay: null,
+      round: 0,
+      candidateIds: [],
+      eligibleVoterIds: [],
+      votesByVoterId: {},
+      awaitingHumanVote: false,
+      awaitingPublicBreaker: false,
+      resultDisplay: null,
+    },
+    cupidArrow: {
+      scheduledSeason: cupidArrowIsScheduled ? season : null,
+      status: cupidArrowIsScheduled ? 'scheduled' : 'inactive',
+      activatedSeason: null,
+      activatedWeek: null,
+      pairs: [],
+      eliminatedPairCount: 0,
+      pendingPartnerEvictionId: null,
+      visualsRevealed: false,
+    },
+    voxPopuli: initialVoxPopuli,
+    coLohIds: null,
+    awaitingCoLohNomination: false,
+    coLohNomineeByCoLohId: null,
+    coLohReplacementOwnerId: null,
+    awaitingPosTieBreak: false,
+  }
+}
+
+const initialState: GameState = createInitialGameState()
+
+// ─── Helper ──────────────────────────────────────────────────────────────────
+/** Monotonic counter to guarantee unique event IDs within the same millisecond. */
+let _pushEventCounter = 0
+let _activeBroadcastPhase: Phase | null = null
+let _pendingPhaseCustoms: CustomBroadcastMessage[] | null = null
+let _flushingPhaseCustom = false
+const MAX_GAME_HISTORY_EVENTS = 1000
+
+if (initialState.cupidArrow?.status === 'scheduled') {
+  activateCupidArrowForSeason(initialState)
+}
+
+function inferObservedBroadcastSource(state: GameState, phase: Phase, text: string) {
+  const playerNames = [...new Set(state.players.map((player) => player.name).filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const tokenPattern =
+    playerNames.length > 0 ? new RegExp(`${playerNames.join('|')}|\\b\\d+\\b`, 'g') : /\b\d+\b/g
+  const variables: string[] = []
+  const sourceText = text.replace(tokenPattern, (value) => {
+    variables.push(value)
+    return '{value}'
+  })
+  const sourceHash = (hashString(`${phase}|${sourceText}`) >>> 0).toString(36)
+  return { id: `observed.${phase}.${sourceHash}`, sourceText, variables }
+}
+
+function currentBroadcastCampaign(state: GameState): BroadcastCampaign {
+  const depressionShock = loadDepressionShockState(state.gameId)
+  if (
+    depressionShock.status === 'active' &&
+    depressionShock.activatedDay != null &&
+    state.week >= depressionShock.activatedDay &&
+    state.week <= depressionShock.activatedDay + 2
+  ) {
+    return 'depression_shock'
+  }
+  if (state.mode === 'survival') return 'survival'
+  if (
+    state.cupidArrow?.status === 'scheduled' ||
+    state.cupidArrow?.status === 'active' ||
+    state.expansionMode === 'cupidArrow'
+  )
+    return 'cupid'
+  if (
+    state.voxPopuli?.status === 'scheduled' ||
+    state.voxPopuli?.status === 'active' ||
+    state.expansionMode === 'voxPopuli'
+  )
+    return 'vox_populi'
+  return 'classic'
+}
+
+function buildTvMeta(
+  state: Pick<GameState, 'gameId' | 'phase' | 'week'>,
+  meta?: TvEvent['meta']
+): NonNullable<TvEvent['meta']> {
+  return {
+    gameId: state.gameId,
+    phase: state.phase,
+    week: state.week,
+    ...(meta ?? {}),
+  }
+}
+
+/**
+ * A reducer transition can occasionally be resumed after an overlay or an
+ * automatic callback. Do not add the same broadcast line twice on the same
+ * in-game day; distinct wording and every other event remain intact.
+ */
+function findDuplicateDayBroadcast(state: GameState, text: string): TvEvent | undefined {
+  const normalizedText = text.replace(/\s+/g, ' ').trim()
+  return state.tvFeed.find(
+    (event) =>
+      event.meta?.week === state.week && event.text.replace(/\s+/g, ' ').trim() === normalizedText
+  )
+}
+
+function managedBroadcastOrder(state: GameState, event: TvEvent): number {
+  const templateId = event.meta?.broadcastTemplateId
+  if (typeof templateId === 'string') {
+    const overrideOrder = state.broadcastOverrides?.[templateId]?.order
+    if (typeof overrideOrder === 'number') return overrideOrder
+  }
+  const customId = event.meta?.customBroadcastId
+  if (typeof customId === 'string') {
+    const customOrder = state.customBroadcasts?.find((message) => message.id === customId)?.order
+    if (typeof customOrder === 'number') return customOrder
+  }
+  return typeof event.meta?.broadcastOrder === 'number' ? event.meta.broadcastOrder : 10000
+}
+
+/** Season-expansion activations always open the season before welcome copy. */
+function managedBroadcastPriority(event: TvEvent): number {
+  const major = event.meta?.major ?? event.major
+  if (event.meta?.phase === 'season_start' && (major === 'vox_populi' || major === 'cupid_arrow')) {
+    return -1
+  }
+  if (event.meta?.broadcastPriority === 'critical') return 0
+  // Delivery priority is deliberately separate from visual level. Runtime
+  // foreground prompts can take the next Faux-TV slot without being promoted
+  // into a critical/shock presentation.
+  if (event.meta?.broadcastDelivery === 'next') return 0.5
+  return 1
+}
+
+function enqueueManagedBroadcast(state: GameState, event: TvEvent) {
+  const shouldShow = event.meta?.forceOnTv === true
+  if (!shouldShow || event.meta?.broadcastConsumed === true) return
+  const activeEventsById = new Map(
+    state.tvFeed
+      .filter(
+        (candidate) =>
+          candidate.meta?.broadcastConsumed !== true &&
+          candidate.meta?.phase === state.phase &&
+          candidate.meta?.week === state.week
+      )
+      .map((candidate) => [candidate.id, candidate] as const)
+  )
+  const queue = [...(state.broadcastQueue ?? [])].filter((id) => activeEventsById.has(id))
+  if (!queue.includes(event.id)) queue.push(event.id)
+  const orderFor = (id: string) => {
+    const candidate = activeEventsById.get(id)
+    return candidate ? managedBroadcastOrder(state, candidate) : 10000
+  }
+  const priorityFor = (id: string) => {
+    const candidate = activeEventsById.get(id)
+    return candidate ? managedBroadcastPriority(candidate) : 1
+  }
+  queue.sort(
+    (left, right) => priorityFor(left) - priorityFor(right) || orderFor(left) - orderFor(right)
+  )
+  state.broadcastQueue = pinBroadcastQueueHead(queue, state.activeBroadcastEventId)
+}
+
+function rebuildManagedBroadcastQueue(state: GameState, phase: Phase) {
+  const retainedPlainEvent = state.lastPlainBroadcastEventId
+    ? state.tvFeed.find((event) => event.id === state.lastPlainBroadcastEventId)
+    : undefined
+  if (
+    state.lastPlainBroadcastEventId &&
+    (retainedPlainEvent?.meta?.phase !== phase || retainedPlainEvent?.meta?.week !== state.week)
+  ) {
+    state.lastPlainBroadcastEventId = null
+  }
+
+  const eligible = state.tvFeed.filter((event) => {
+    if (event.meta?.phase !== phase || event.meta?.week !== state.week) return false
+    if (event.meta?.broadcastManaged !== true || event.meta?.broadcastConsumed === true)
+      return false
+    if (event.meta?.forceOnTv !== true) return false
+    const templateId = event.meta?.broadcastTemplateId
+    if (typeof templateId === 'string' && state.broadcastOverrides?.[templateId]?.disabled)
+      return false
+    const customId = event.meta?.customBroadcastId
+    if (typeof customId === 'string') {
+      const custom = state.customBroadcasts?.find((message) => message.id === customId)
+      if (!custom?.enabled) return false
+    }
+    return true
+  })
+  eligible.sort(
+    (left, right) =>
+      managedBroadcastPriority(left) - managedBroadcastPriority(right) ||
+      managedBroadcastOrder(state, left) - managedBroadcastOrder(state, right) ||
+      left.timestamp - right.timestamp ||
+      left.id.localeCompare(right.id)
+  )
+  const eligibleIds = eligible.map((event) => event.id)
+  const activeEvent = state.activeBroadcastEventId
+    ? eligible.find((event) => event.id === state.activeBroadcastEventId)
+    : undefined
+  if (!activeEvent) state.activeBroadcastEventId = null
+  state.broadcastQueue = pinBroadcastQueueHead(eligibleIds, activeEvent?.id)
+}
+
+function refreshManagedBroadcastDefinition(state: GameState, event: TvEvent) {
+  if (event.meta?.broadcastManaged !== true || event.meta?.broadcastConsumed === true) return
+  const customId = event.meta?.customBroadcastId
+  const custom =
+    typeof customId === 'string'
+      ? state.customBroadcasts?.find((message) => message.id === customId)
+      : undefined
+  let templateId = event.meta?.broadcastTemplateId
+  const eventMajor = event.meta?.major ?? event.major
+  if (
+    event.meta?.phase === 'season_start' &&
+    eventMajor === 'vox_populi' &&
+    templateId !== 'season.vox-populi-intro'
+  ) {
+    templateId = 'season.vox-populi-intro'
+    event.meta = {
+      ...(event.meta ?? {}),
+      broadcastTemplateId: templateId,
+      broadcastVariables: [],
+    }
+    delete event.meta.broadcastSourceText
+  }
+  const template = typeof templateId === 'string' ? getBroadcastTemplate(templateId) : undefined
+  const override =
+    typeof templateId === 'string' ? state.broadcastOverrides?.[templateId] : undefined
+  const variables = Array.isArray(event.meta?.broadcastVariables)
+    ? event.meta.broadcastVariables.filter((value): value is string => typeof value === 'string')
+    : []
+  const level =
+    custom?.level ??
+    override?.level ??
+    template?.level ??
+    (event.meta?.broadcastLevel as BroadcastLevel | undefined) ??
+    'minor'
+  const forceOnTv = custom
+    ? custom.forceOnTv !== false
+    : (override?.forceOnTv ?? template?.forceOnTv ?? event.meta?.forceOnTv === true)
+  const configuredMajor =
+    custom?.major ??
+    (override?.major === null
+      ? undefined
+      : (override?.major ??
+        template?.major ??
+        (typeof eventMajor === 'string' && isRecognizedBroadcastMajorKey(eventMajor)
+          ? eventMajor
+          : undefined)))
+  const major =
+    level === 'critical'
+      ? (configuredMajor ?? 'custom_critical')
+      : level === 'major'
+        ? (configuredMajor ?? 'custom_major')
+        : undefined
+
+  if (custom) {
+    event.text = custom.text
+    event.type = custom.type
+  } else if (template) {
+    // Runtime consequences can borrow a template's presentation at a different
+    // boundary. Refreshing the phase must not replace their actual result copy
+    // with that template's generic rules.
+    if (event.meta?.broadcastRuntimeDelivery !== true || override?.text) {
+      event.text = renderBroadcastTemplate(override?.text ?? template.text, variables)
+    }
+    event.type = override?.type ?? template.type
+  }
+  event.major = major
+  const meta: NonNullable<TvEvent['meta']> = {
+    ...(event.meta ?? {}),
+    broadcastLevel: level,
+  }
+  if (major) meta.major = major
+  else delete meta.major
+  if (forceOnTv) meta.forceOnTv = true
+  else delete meta.forceOnTv
+  if (level === 'critical') meta.broadcastPriority = 'critical'
+  else delete meta.broadcastPriority
+  if (level !== 'minor') {
+    meta.announcementTitle =
+      custom?.title ??
+      override?.title ??
+      (event.meta?.broadcastRuntimeDelivery === true
+        ? event.meta.announcementTitle
+        : template?.title)
+    meta.announcementSubtitle = event.text
+  } else {
+    delete meta.announcementTitle
+    delete meta.announcementSubtitle
+  }
+  event.meta = meta
+}
+
+function pushEvent(
+  state: GameState,
+  text: string,
+  type: TvEvent['type'],
+  meta?: TvEvent['meta']
+): TvEvent | undefined {
+  const legacyVoxIntro =
+    (meta?.phase ?? _activeBroadcastPhase ?? state.phase) === 'season_start' &&
+    (meta?.major === 'vox_populi' || meta?.announcementKey === 'vox_populi')
+  const explicitTemplateId =
+    meta?.broadcastTemplateId ??
+    meta?.templateId ??
+    (legacyVoxIntro
+      ? 'season.vox-populi-intro'
+      : typeof meta?.major === 'string'
+        ? getBroadcastTemplateForMajor(meta.major, meta?.phase as Phase | undefined)?.id
+        : undefined)
+  const hintedPhase =
+    typeof meta?.phase === 'string' ? (meta.phase as Phase) : (_activeBroadcastPhase ?? state.phase)
+  const matched = matchBroadcastTemplate(text, hintedPhase, explicitTemplateId)
+  const template = matched?.template
+  const authoredTemplateId = typeof explicitTemplateId === 'string' ? explicitTemplateId : null
+  const observed =
+    template || authoredTemplateId ? null : inferObservedBroadcastSource(state, hintedPhase, text)
+  const templateId = template?.id ?? authoredTemplateId ?? observed?.id
+  const isDeclaredSource = Boolean(
+    template || authoredTemplateId || meta?.customBroadcastId || typeof meta?.major === 'string'
+  )
+  const variables = matched?.variables ?? observed?.variables ?? []
+  const override = templateId ? state.broadcastOverrides?.[templateId] : undefined
+  if (override?.disabled) return undefined
+
+  const finalText = override?.text ? renderBroadcastTemplate(override.text, variables) : text
+  const finalType = override?.type ?? type
+  const authoredLevel = meta?.broadcastLevel as BroadcastLevel | undefined
+  const defaultMajor = template?.major ?? (typeof meta?.major === 'string' ? meta.major : undefined)
+  const finalLevel =
+    override?.level ??
+    (isDeclaredSource
+      ? (template?.level ??
+        authoredLevel ??
+        (meta?.broadcastPriority === 'critical' ? 'critical' : defaultMajor ? 'major' : 'minor'))
+      : (authoredLevel ?? 'minor'))
+  const selectedMajor = override?.major === null ? undefined : (override?.major ?? defaultMajor)
+  // `forceOnTv` is an explicit delivery instruction from the event producer.
+  // It must work for live/observed events too, not only catalogued templates:
+  // Broadcast Manager and season-start flows both rely on this to promote an
+  // otherwise ordinary log line onto the faux TV.
+  const forceOnTv =
+    meta?.forceOnTv === true ||
+    (override?.forceOnTv ?? (isDeclaredSource ? (template?.forceOnTv ?? true) : false))
+  const finalMajor =
+    finalLevel === 'critical'
+      ? (selectedMajor ?? 'custom_critical')
+      : finalLevel === 'major'
+        ? (selectedMajor ?? 'custom_major')
+        : undefined
+  // A template describes its usual authoring slot. The producer owns the
+  // actual delivery boundary (including results and runtime shock reveals).
+  const intendedPhase = hintedPhase
+  const broadcastOrder =
+    override?.order ??
+    (template
+      ? getDefaultBroadcastOrder(template)
+      : typeof meta?.broadcastOrder === 'number'
+        ? meta.broadcastOrder
+        : 10000)
+  if (
+    !_flushingPhaseCustom &&
+    !meta?.customBroadcastId &&
+    _pendingPhaseCustoms &&
+    intendedPhase === _activeBroadcastPhase
+  ) {
+    flushPhaseCustomsBefore(state, broadcastOrder)
+  }
+  const finalMeta: TvEvent['meta'] = {
+    ...meta,
+    phase: intendedPhase,
+    ...(template && template.phase !== intendedPhase ? { broadcastRuntimeDelivery: true } : {}),
+    broadcastCampaign: template?.campaign ?? currentBroadcastCampaign(state),
+    ...(templateId ? { broadcastTemplateId: templateId } : {}),
+    ...(observed ? { broadcastSourceText: observed.sourceText } : {}),
+    broadcastVariables: variables,
+    broadcastOrder,
+    broadcastLevel: finalLevel,
+    broadcastManaged: true,
+    ...(template?.editorial && meta?.editorial == null ? { editorial: template.editorial } : {}),
+    ...(forceOnTv ? { forceOnTv: true } : {}),
+    ...(finalLevel !== 'minor' && override?.title ? { announcementTitle: override.title } : {}),
+    ...(finalLevel !== 'minor' ? { announcementSubtitle: finalText } : {}),
+  }
+  if (!forceOnTv) delete finalMeta.forceOnTv
+  if (finalLevel === 'minor' || !finalMajor) delete finalMeta.major
+  else finalMeta.major = finalMajor
+  if (finalLevel === 'critical') finalMeta.broadcastPriority = 'critical'
+  else if (override?.level) delete finalMeta.broadcastPriority
+
+  const duplicate = findDuplicateDayBroadcast(state, finalText)
+  if (duplicate) {
+    if (meta?.requeueDuplicateBroadcast === true) {
+      duplicate.text = finalText
+      duplicate.type = finalType
+      duplicate.major = finalMajor
+      duplicate.meta = {
+        ...(duplicate.meta ?? {}),
+        ...finalMeta,
+        broadcastConsumed: false,
+      }
+      enqueueManagedBroadcast(state, duplicate)
+    }
+    return duplicate
+  }
+
+  const ts = Date.now()
+  const event: TvEvent = {
+    id: `${state.phase}-w${state.week}-${ts}-${++_pushEventCounter}`,
+    text: finalText,
+    type: finalType,
+    timestamp: ts,
+    major: finalMajor,
+    meta: buildTvMeta(state, finalMeta),
+  }
+  state.tvFeed = [event, ...state.tvFeed].slice(0, MAX_GAME_HISTORY_EVENTS)
+  enqueueManagedBroadcast(state, event)
+  return event
+}
+
+/** Publish Bella's inheritance disclosure from every eviction path. */
+function publishBellaWillOnEviction(
+  state: GameState,
+  evicteeId: string,
+  excludedHeirIds: readonly string[] = []
+): void {
+  const will = state.bellaWill
+  if (evicteeId !== BELLA_ID || !will?.active || will.inherited) return
+
+  expireBellaWillAtEndgame(state)
+  const excluded = new Set(excludedHeirIds)
+  const heir = will.heirId ? state.players.find((player) => player.id === will.heirId) : null
+  const heirIsEligible =
+    heir != null &&
+    heir.id !== BELLA_ID &&
+    heir.status !== 'evicted' &&
+    heir.status !== 'jury' &&
+    !excluded.has(heir.id)
+  if (!heirIsEligible) will.heirId = chooseBellaHeir(state, excludedHeirIds)
+
+  const selectedHeir = state.players.find((player) => player.id === will.heirId)
+  if (!selectedHeir || !will.reward) return
+
+  activateBellaInheritance(state)
+  if (will.inherited) {
+    pushEvent(
+      state,
+      `Bella's Will is now in effect. ${selectedHeir.name} is named heir: ${BELLA_WILL_REWARD_LABELS[will.reward]}.`,
+      'game',
+      { major: 'bellas_will', broadcastPriority: 'critical', forceOnTv: true }
+    )
+  } else if (will.expiredAtEndgame) {
+    pushEvent(
+      state,
+      `Bella's Will is revealed. ${selectedHeir.name} is named heir, but the reward (${BELLA_WILL_REWARD_LABELS[will.reward]}) expired when the House reached the Final 4.`,
+      'game',
+      { major: 'bellas_will', broadcastPriority: 'critical', forceOnTv: true }
+    )
+  }
+}
+
+function pushDetoxEvent(state: GameState, text: string) {
+  pushEvent(state, text, 'game', { sequence: 'detox_safety' })
+}
+
+function refreshSecretMissionCompletion(
+  secretMission: GameState['secretMission'],
+  _currentDay: number
+) {
+  if (!secretMission || secretMission.status !== 'accepted') return
+  const allDone = isSecretMissionSuccessful(secretMission.tasks)
+  // Deliver the reward immediately when the actual requirements are complete.
+  // The survival task normally supplies the final day boundary.
+  if (allDone) {
+    secretMission.status = 'rewardPending'
+  }
+}
+
+function settleSecretMissionArrival(state: GameState): void {
+  const mission = state.secretMission
+  if (mission?.status !== 'accepted') return
+  // “Survive until Day N” resolves on reaching Day N, before that day's
+  // nomination window can make the reward strategically late.
+  for (const task of mission.tasks) {
+    if (task.type !== 'survive_days' || state.week < (task.targetDay ?? mission.endDay)) continue
+    task.current = task.target
+    task.completed = true
+    task.lastProgressDay = state.week
+    task.firstSatisfiedDay ??= state.week
+    task.auditLog = [...(task.auditLog ?? []), `Reached Day ${state.week}`].slice(-12)
+  }
+  refreshSecretMissionCompletion(mission, state.week)
+}
+
+const MIN_SECRET_MISSION_DAY_SPAN = Math.min(
+  ...MISSION_TEMPLATES.map((template) => template.daySpan)
+)
+
+function canReplaceSecretMissionSlot(secretMission: GameState['secretMission']): boolean {
+  if (!secretMission) return true
+  if (secretMission.status === 'declined' || secretMission.status === 'expired') return true
+  if (secretMission.status !== 'rewardClaimed') return false
+  const reward = secretMission.reward
+  if (!reward) return true
+  return (
+    reward.consumed ||
+    reward.expired ||
+    !reward.eligible ||
+    reward.type === 'plus1000Influence' ||
+    reward.type === 'resourceCache'
+  )
+}
+
+function getSeasonSecretMissionCount(
+  game: Pick<GameState, 'secretMission' | 'secretMissionCount'>
+): number {
+  if (typeof game.secretMissionCount === 'number') return game.secretMissionCount
+  if (typeof game.secretMission?.missionNumber === 'number') return game.secretMission.missionNumber
+  return game.secretMission ? 1 : 0
+}
+
+/** Three complete game days must pass before a replacement mission can appear. */
+const SECOND_SECRET_MISSION_COOLDOWN_FULL_DAYS = 3
+/** A second mission must begin no later than three evictions before Final 5. */
+const MIN_DAYS_BEFORE_FINAL_FIVE_FOR_SECOND_MISSION = 3
+
+function formatNameList(names: string[]): string {
+  if (names.length <= 2) return names.join(' and ')
+  return names.join(', ')
+}
+
+function getPovProtectedIds(state: GameState): string[] {
+  const ids = new Set<string>(state.povProtectedIds ?? [])
+  if (state.povSavedId) ids.add(state.povSavedId)
+  return [...ids]
+}
+
+function getDayNominationProtectedIds(state: GameState): string[] {
+  return [
+    ...new Set([
+      ...getPovProtectedIds(state),
+      ...(state.storeNominationProtections ?? [])
+        .filter((protection) => protection.week === state.week)
+        .map((protection) => protection.targetId),
+    ]),
+  ]
+}
+
+function addPovProtectedId(state: GameState, playerId: string | null | undefined) {
+  if (!playerId) return
+  const ids = new Set(getPovProtectedIds(state))
+  ids.add(playerId)
+  state.povProtectedIds = [...ids]
+}
+
+function getCupidRoleIds(state: GameState, playerId: string | null | undefined): string[] {
+  if (!playerId) return []
+  return expandCupidIds(state, [playerId]).filter((id) => {
+    const player = state.players.find((candidate) => candidate.id === id)
+    return player != null && player.status !== 'evicted' && player.status !== 'jury'
+  })
+}
+
+function getCupidHumanCoholder(
+  state: GameState,
+  holderId: string | null | undefined
+): Player | undefined {
+  const roleIds = new Set(getCupidRoleIds(state, holderId))
+  return state.players.find((player) => player.isUser && roleIds.has(player.id))
+}
+
+function syncCupidRoleStatuses(state: GameState) {
+  if (!isCupidArrowActive(state)) return
+  const lohIds = new Set(getCupidRoleIds(state, state.lohId))
+  const posIds = new Set(getCupidRoleIds(state, state.posWinnerId))
+  const nomineeIds = new Set(state.nomineeIds)
+  state.players.forEach((player) => {
+    if (player.status === 'evicted' || player.status === 'jury') return
+    const isLoh = lohIds.has(player.id)
+    const isPos = posIds.has(player.id)
+    const isNominee = nomineeIds.has(player.id)
+    if (isNominee && isPos) player.status = 'nominated+pos'
+    else if (isNominee) player.status = 'nominated'
+    else if (isLoh && isPos) player.status = 'loh+pos'
+    else if (isLoh) player.status = 'loh'
+    else if (isPos) player.status = 'pos'
+    else player.status = 'active'
+  })
+}
+
+function expandCupidNominees(state: GameState) {
+  if (!isCupidArrowActive(state)) return
+  const before = new Set(state.nomineeIds)
+  const expanded = expandCupidIds(state, state.nomineeIds)
+  state.nomineeIds = expanded
+  expanded.forEach((id) => {
+    if (!before.has(id)) incrementTimesNominated(state, id)
+  })
+  syncCupidRoleStatuses(state)
+}
+
+function removeCupidNomineeUnit(state: GameState, saveId: string): string[] {
+  const removedIds = expandCupidIds(state, [saveId]).filter((id) => state.nomineeIds.includes(id))
+  state.nomineeIds = state.nomineeIds.filter((id) => !removedIds.includes(id))
+  syncCupidRoleStatuses(state)
+  return removedIds
+}
+
+function collapseCupidCandidates(state: GameState, players: Player[]): Player[] {
+  if (!isCupidArrowActive(state)) return players
+  const seen = new Set<string>()
+  return players.filter((player) => {
+    const key = getCupidPair(state, player.id)?.id ?? `solo:${player.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function activateCupidArrowForSeason(state: GameState) {
+  if (isVoxPopuliTwistLocked(state)) return
+  if (state.cupidArrow?.status !== 'scheduled' || state.season !== state.cupidArrow.scheduledSeason)
+    return
+  const pairs = createCupidArrowPairs(state.players, state.seed)
+  if (pairs.length < 2) {
+    state.cupidArrow.status = 'inactive'
+    return
+  }
+  state.cupidArrow.status = 'active'
+  state.cupidArrow.activatedSeason = state.season
+  state.cupidArrow.activatedWeek = state.week
+  state.cupidArrow.pairs = pairs
+  state.cupidArrow.eliminatedPairCount = 0
+  state.cupidArrow.pendingPartnerEvictionId = null
+  state.cupidArrow.visualsRevealed = false
+  const cupidWelcome = getBroadcastTemplate('season.welcome-cupid')
+  if (cupidWelcome) {
+    state.tvFeed.forEach((event) => {
+      if (
+        event.meta?.broadcastTemplateId !== 'season.welcome' &&
+        event.meta?.broadcastTemplateId !== 'season.welcome-cupid'
+      )
+        return
+      const override = state.broadcastOverrides?.[cupidWelcome.id]
+      event.text = renderBroadcastTemplate(override?.text ?? cupidWelcome.text, [
+        String(state.season),
+      ])
+      event.meta = {
+        ...event.meta,
+        broadcastTemplateId: cupidWelcome.id,
+        broadcastCampaign: 'cupid',
+        broadcastVariables: [String(state.season)],
+      }
+    })
+  }
+  // Cupid's Arrow is a full-season expansion format, not a temporary shock.
+  state.twistActive = false
+  state.twistActivatedThisWeek = false
+  state.history = [
+    ...(state.history ?? []),
+    {
+      type: 'cupidArrow',
+      week: state.week,
+      data: { pairs: pairs.map((pair) => pair.memberIds) },
+      timestamp: Date.now(),
+    },
+  ]
+  const pairNames = pairs
+    .map((pair) =>
+      pair.memberIds
+        .map((id) => state.players.find((player) => player.id === id)?.name ?? id)
+        .join(' & ')
+    )
+    .join(' · ')
+  pushEvent(
+    state,
+    `🏹 The lights soften. A golden arrow crosses the Hub, splitting into eight trails of light. Cupid has chosen: ${pairNames}. From this moment, every victory, every danger, every vote, and every exit belongs to the pair. 💘`,
+    'twist',
+    {
+      major: 'cupid_arrow',
+      broadcastTemplateId: 'cupid.activation',
+      phase: state.phase,
+      broadcastLevel: 'critical',
+      broadcastPriority: 'critical',
+      forceOnTv: true,
+    }
+  )
+}
+
+function activateVoxPopuliForSeason(state: GameState) {
+  if (state.voxPopuli?.status !== 'scheduled' || state.season !== state.voxPopuli.scheduledSeason) {
+    return
+  }
+  state.voxPopuli.status = 'active'
+  state.voxPopuli.activatedSeason = state.season
+  state.voxPopuli.activatedWeek = state.week
+  state.voxPopuli.nominationBallots = {}
+  state.voxPopuli.nominationVoteCounts = {}
+  state.voxPopuli.nominationDaysByPlayerId = {}
+  state.voxPopuli.audienceVoteDaysByPlayerId = {}
+  state.voxPopuli.safetySaveCounts = {}
+  state.voxPopuli.finalThreePacingSeen = []
+  state.voxPopuli.lastReplacementNomineeIds = []
+  state.voxPopuli.immunityWinnerId = null
+  state.voxPopuli.autoNomineeId = null
+  // Vox Populi is a full-season expansion format, not a temporary shock.
+  state.twistActive = false
+  state.twistActivatedThisWeek = false
+  state.history = [
+    ...(state.history ?? []),
+    {
+      type: 'voxPopuli',
+      week: state.week,
+      data: { format: 'audience_led' },
+      timestamp: Date.now(),
+    },
+  ]
+  const intro = getBroadcastTemplate('season.vox-populi-intro')
+  if (intro) {
+    pushEvent(state, intro.text, intro.type, {
+      broadcastTemplateId: intro.id,
+      phase: intro.phase,
+      major: 'vox_populi',
+      broadcastLevel: 'critical',
+      broadcastPriority: 'critical',
+      forceOnTv: true,
+    })
+  }
+}
+
+function applyPendingPublicModeChange(state: GameState, phase: Phase) {
+  const requested = state.pendingPublicModeEnabled
+  if (typeof requested !== 'boolean') return
+
+  state.publicModeEnabled = requested
+  state.pendingPublicModeEnabled = null
+  pushEvent(
+    state,
+    requested
+      ? '📡 Public Mode is now live. The outside world will shape this cycle.'
+      : '📡 Public Mode is now off. The Hub will shape this cycle on its own.',
+    'game',
+    { phase }
+  )
+}
+
+function breakCupidArrowSpell(state: GameState) {
+  if (!isCupidArrowActive(state) || !state.cupidArrow) return
+  state.cupidArrow.status = 'broken'
+  state.cupidArrow.pendingPartnerEvictionId = null
+  state.twistActive = false
+  // QA can unlock and replay Cupid in the same day. Remove the prior consumed
+  // break event so duplicate suppression cannot swallow the new cinematic.
+  state.tvFeed = state.tvFeed.filter(
+    (event) => event.meta?.major !== 'cupid_arrow_broken' && event.major !== 'cupid_arrow_broken'
+  )
+  pushEvent(
+    state,
+    `💔 Four pairs have fallen. Cracks race through Cupid's hearts, the final arrow dissolves into light, and Cupid takes flight from The Big Eye hub. The rose glow fades: every survivor now plays alone. What the pairs felt—and what they did to each other—remains.`,
+    'twist',
+    {
+      major: 'cupid_arrow_broken',
+      broadcastTemplateId: 'cupid.spell-broken',
+      phase: state.phase,
+      broadcastPriority: 'critical',
+      forceOnTv: true,
+    }
+  )
+}
+
+function resolvePairAwarePublicSave(rootState: RootState) {
+  const { game } = rootState
+  const profiles = rootState.publicOpinion?.profiles ?? {}
+  if (!isCupidArrowActive(game)) {
+    return resolvePublicSaveNominee({ nomineeIds: game.nomineeIds, profiles })
+  }
+
+  const adjustedProfiles: typeof profiles = { ...profiles }
+  game.nomineeIds.forEach((id) => {
+    const partnerId = getCupidPartnerId(game, id)
+    const base = profiles[id]
+    const ownApproval = base?.approval ?? 50
+    const partnerApproval = partnerId ? (profiles[partnerId]?.approval ?? 50) : ownApproval
+    const pairApproval = Math.round((ownApproval + partnerApproval) / 2)
+    adjustedProfiles[id] = {
+      playerId: id,
+      approval: pairApproval,
+      previousApproval: base?.previousApproval ?? pairApproval,
+      seasonApprovals: base?.seasonApprovals ?? [],
+      completedDirectionCount: base?.completedDirectionCount ?? 0,
+      cumulativePositiveDelta: base?.cumulativePositiveDelta ?? 0,
+    }
+  })
+  return resolvePublicSaveNominee({
+    nomineeIds: game.nomineeIds,
+    profiles: adjustedProfiles,
+  })
+}
+
+function resolveCupidPairEviction(state: GameState): boolean {
+  if (!isCupidArrowActive(state)) return false
+  const units = new Map<string, string[]>()
+  state.nomineeIds.forEach((id) => {
+    const pair = getCupidPair(state, id)
+    const key = pair?.id ?? `solo:${id}`
+    const current = units.get(key) ?? []
+    if (!current.includes(id)) current.push(id)
+    units.set(key, current)
+  })
+  if (units.size === 0) return true
+
+  const directCounts: Record<string, number> = Object.fromEntries(
+    state.nomineeIds.map((id) => [id, 0])
+  )
+  Object.values(state.votes ?? {}).forEach((id) => {
+    if (id in directCounts) directCounts[id] += 1
+  })
+  const unitTotals = [...units.entries()].map(([key, memberIds]) => ({
+    key,
+    memberIds,
+    total: memberIds.reduce((sum, id) => sum + (directCounts[id] ?? 0), 0),
+  }))
+  const maxVotes = Math.max(...unitTotals.map((unit) => unit.total))
+  const topUnits = unitTotals.filter((unit) => unit.total === maxVotes)
+  state.voteResults = Object.fromEntries(
+    unitTotals.flatMap((unit) => unit.memberIds.map((id) => [id, unit.total]))
+  )
+
+  const queueUnit = (unit: (typeof unitTotals)[number], prefix = '') => {
+    const primaryId =
+      [...unit.memberIds].sort((a, b) => (directCounts[b] ?? 0) - (directCounts[a] ?? 0))[0] ??
+      unit.memberIds[0]
+    const names = formatNameList(
+      unit.memberIds.map((id) => state.players.find((player) => player.id === id)?.name ?? id)
+    )
+    state.pendingEviction = {
+      evicteeId: primaryId,
+      evictionMessage: `${prefix}${names}, Cupid's Arrow means you are eliminated together. 💔`,
+    }
+  }
+
+  if (topUnits.length === 1) {
+    queueUnit(topUnits[0])
+    return true
+  }
+
+  const tiedRepresentativeIds = topUnits.map((unit) => unit.memberIds[0])
+  const tieBreaker =
+    getCupidHumanCoholder(state, state.lohId) ??
+    state.players.find((player) => player.id === state.lohId)
+  if (tieBreaker?.isUser) {
+    state.awaitingTieBreak = true
+    state.tiedNomineeIds = tiedRepresentativeIds
+    pushEvent(
+      state,
+      `The nominated pairs are tied. ${tieBreaker.name}, your LOH pair must decide which pair leaves. 🗳️`,
+      'game',
+      { broadcastTemplateId: 'cupid.pair-tiebreak-prompt', phase: 'eviction_results' }
+    )
+    return true
+  }
+
+  const rng = mulberry32((state.seed ^ 0xc0a1d71e) >>> 0)
+  const chosen = topUnits[Math.floor(rng() * topUnits.length)]
+  queueUnit(chosen, `${tieBreaker?.name ?? 'The LOH'} breaks the tie. `)
+  return true
+}
+
+function getReplacementEligiblePlayers(
+  state: GameState,
+  alivePlayers: Player[],
+  _neededCount = 1,
+  options: { allowLoh?: boolean; actorId?: string | null } = {}
+): Player[] {
+  const actorId = options.actorId === undefined ? state.lohId : options.actorId
+  const lohRoleIds = new Set(getCupidRoleIds(state, state.lohId))
+  const posRoleIds = new Set(getCupidRoleIds(state, state.posWinnerId))
+  const baseEligible = collapseCupidCandidates(
+    state,
+    alivePlayers.filter((pl) => {
+      const unitIds = expandCupidIds(state, [pl.id])
+      return (
+        (options.allowLoh === true || unitIds.every((id) => !lohRoleIds.has(id))) &&
+        unitIds.every((id) => !posRoleIds.has(id)) &&
+        unitIds.every((id) => !state.nomineeIds.includes(id)) &&
+        canPlayerNominatePlayer(state, actorId, pl.id)
+      )
+    })
+  )
+  const protectedIds = new Set(getDayNominationProtectedIds(state))
+  return baseEligible.filter(
+    (player) =>
+      (options.allowLoh === true || !getMissionLeaderIds(state).includes(player.id)) &&
+      !isMissionBackupProtected(state, player.id) &&
+      expandCupidIds(state, [player.id]).every((id) => !protectedIds.has(id))
+  )
+}
+
+export function getEligibleReplacementNominees(
+  state: GameState,
+  actorId: string | null | undefined = state.lohId,
+  options: { allowLoh?: boolean; neededCount?: number } = {}
+): Player[] {
+  const alivePlayers = state.players.filter(
+    (player) => player.status !== 'evicted' && player.status !== 'jury'
+  )
+  return getReplacementEligiblePlayers(state, alivePlayers, options.neededCount ?? 1, {
+    actorId,
+    allowLoh: options.allowLoh,
+  })
+}
+
+function isEligibleReplacementNominee(
+  state: GameState,
+  playerId: string,
+  neededCount = 1,
+  options: { allowLoh?: boolean; actorId?: string | null } = {}
+): boolean {
+  const alivePlayers = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+  return getReplacementEligiblePlayers(state, alivePlayers, neededCount, options).some(
+    (player) => player.id === playerId
+  )
+}
+
+function appendNominee(state: GameState, playerId: string) {
+  const nomineeIds = expandCupidIds(state, [playerId])
+  nomineeIds.forEach((id) => {
+    if (state.nomineeIds.includes(id)) return
+    state.nomineeIds.push(id)
+    incrementTimesNominated(state, id)
+  })
+  syncCupidRoleStatuses(state)
+  if (!isCupidArrowActive(state)) {
+    const player = state.players.find((candidate) => candidate.id === playerId)
+    if (player) {
+      if (player.id === state.lohId) player.status = 'loh'
+      else if (player.id === state.posWinnerId) player.status = 'nominated+pos'
+      else player.status = 'nominated'
+    }
+  }
+}
+
+function getAiThreatScore(
+  state: GameState,
+  player: Player,
+  options: { preferLoh?: boolean; actorId?: string } = {}
+): number {
+  const lohWins = player.stats?.lohWins ?? 0
+  const posWins = player.stats?.posWins ?? 0
+  const timesNominated = player.stats?.timesNominated ?? 0
+  const competitionRead = getCompetitionPerceptionRead(
+    player.competitionProfile,
+    state.competitionSeasonStateByPlayerId?.[player.id]
+  )
+  let score = competitionRead.threatBonus
+  score +=
+    (options.actorId
+      ? state.strategicThreatReadsByActorId?.[options.actorId]?.[player.id]?.score
+      : undefined) ?? 0
+  if (player.id === state.lohId) {
+    score += options.preferLoh === true ? AI_LOH_REVENGE_THREAT_WEIGHT : AI_LOH_BASE_THREAT_WEIGHT
+  }
+  if (player.status === 'loh' || player.status === 'loh+pos') {
+    score += AI_CURRENT_LOH_POWER_THREAT_WEIGHT
+  }
+  score += lohWins * AI_LOH_WIN_THREAT_WEIGHT
+  score += posWins * AI_POS_WIN_THREAT_WEIGHT
+  score += timesNominated === 0 ? AI_NEVER_NOMINATED_THREAT_WEIGHT : 0
+  return score
+}
+
+function getStrategicRelationship(state: GameState, actorId: string, targetId: string) {
+  return state.strategicRelationships?.[actorId]?.[targetId] ?? null
+}
+
+/** Pregnancy protection applies only to a live pregnancy the decision-maker knows about. */
+function getKnownPregnancyBondContribution(
+  state: GameState,
+  actorId: string,
+  targetId: string
+): number {
+  const story = state.pregnancyStory
+  if (!story) return 0
+  for (const carrierId of [actorId, targetId]) {
+    const attempt = getActivePregnancyAttempt(story, carrierId)
+    if (
+      !attempt?.pregnant ||
+      attempt.status !== 'POSITIVE' ||
+      !attempt.participantIds.includes(actorId) ||
+      !attempt.participantIds.includes(targetId)
+    ) {
+      continue
+    }
+    const decisionMakerKnows =
+      (carrierId === actorId && attempt.resultKnown) ||
+      attempt.pregnancyPublicRevealed === true ||
+      attempt.pregnancyNewsSharedWithIds?.includes(actorId) === true ||
+      (attempt.paternityResultKnown === true && attempt.biologicalFatherId === actorId) ||
+      attempt.paternityPublicRevealed === true
+    if (decisionMakerKnows) return -125
+  }
+  return 0
+}
+
+function getKnownRomanticRivalPressure(
+  state: GameState,
+  actorId: string,
+  targetId: string
+): {
+  contribution: number
+  partnerId: string | null
+  evidenceDay: number | null
+  confidence: number
+  source: string | null
+} {
+  const evidence = state.dramaSocialMode
+    ? getStrategicRelationship(state, actorId, targetId)?.knownRomanticRival
+    : undefined
+  if (!evidence) {
+    return { contribution: 0, partnerId: null, evidenceDay: null, confidence: 0, source: null }
+  }
+  const confidence = Math.max(0, Math.min(1, evidence.confidence))
+  return {
+    contribution: Math.round(44 * confidence),
+    partnerId: evidence.partnerId,
+    evidenceDay: evidence.evidenceDay,
+    confidence,
+    source: evidence.source,
+  }
+}
+
+export type { StrategicAllianceDecisionRead } from '../ai/competition/allianceMinigameStrategy'
+
+function clampStrategicAllianceUnit(value: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0))
+}
+
+export function getStrategicAllianceDecisionRead(
+  state: Pick<GameState, 'strategicAlliances' | 'strategicRelationships'>,
+  actorId: string,
+  targetId: string
+): StrategicAllianceDecisionRead {
+  return getStrategicAllianceDecisionReadFromAlliances(
+    state.strategicAlliances,
+    actorId,
+    targetId,
+    state.strategicRelationships?.[actorId]?.[targetId]
+  )
+}
+
+function getAiIdentityMode(state: GameState): AiIdentityMode {
+  if (state.mode === 'survival') return 'survival'
+  if (isVoxPopuliActive(state)) return 'vox_populi'
+  if (isCupidArrowActive(state)) return 'cupid'
+  return 'classic'
+}
+
+function getEarlyHumanEvictionGrace(
+  state: GameState,
+  candidate: Player | undefined,
+  affinity: number,
+  tags: ReadonlySet<string>
+): number {
+  if (!candidate?.isUser || state.week < 1 || state.week > 3 || affinity < -15) return 0
+  if (tags.has('target') || tags.has('betrayal') || tags.has('rivalry')) return 0
+  return EARLY_HUMAN_EVICTION_GRACE_BY_WEEK[state.week] ?? 0
+}
+
+function getVoxNominationMomentumScore(state: GameState, candidate: Player): number {
+  if (!isVoxPopuliActive(state) || !state.voxPopuli) return 0
+  const nominationDays = state.voxPopuli.nominationDaysByPlayerId?.[candidate.id] ?? []
+  const recentNominations = nominationDays.filter(
+    (day) => day < state.week && day >= state.week - 3
+  ).length
+  const totalSurvivals = nominationDays.filter((day) => day < state.week).length
+  const repeatSaves = state.voxPopuli.safetySaveCounts?.[candidate.id] ?? 0
+
+  // A recent name is easier to write down again, but repeated audience survival
+  // eventually turns that familiarity into fear of sitting beside them.
+  let score = recentNominations === 1 ? 12 : recentNominations === 2 ? 18 : 0
+  if (totalSurvivals >= 3) score -= 22 + Math.min(12, (totalSurvivals - 3) * 4)
+  if (repeatSaves >= 2) score -= Math.min(12, repeatSaves * 3)
+  return score
+}
+
+function getSafetyRelationshipBreakdown(
+  state: GameState,
+  holderId: string,
+  nominee: Player
+): { total: number; factors: Record<string, AiDecisionFactor> } {
+  const relationship = getStrategicRelationship(state, holderId, nominee.id)
+  const allianceRead = getStrategicAllianceDecisionRead(state, holderId, nominee.id)
+  const threat = getAiThreatScore(state, nominee, { actorId: holderId })
+  const socialRead = state.strategicThreatReadsByActorId?.[holderId]?.[nominee.id]
+  const socialThreat = socialRead?.score ?? 0
+  const competitionThreat = threat - socialThreat
+  const competitionRead = getCompetitionPerceptionRead(
+    nominee.competitionProfile,
+    state.competitionSeasonStateByPlayerId?.[nominee.id]
+  )
+  const expendablePawnPenalty = competitionRead.pawnSuitability
+  const knownJealousy = getKnownRomanticRivalPressure(state, holderId, nominee.id)
+  const knownJealousyPenalty = -knownJealousy.contribution
+  const realityAllianceContribution = state.dramaSocialMode
+    ? allianceRead.sharedProtection * 82 -
+      allianceRead.currentTargetPressure * 58 -
+      allianceRead.fallbackTargetPressure * 28
+    : 0
+
+  const bellaSaveBonus = nominee.id === BELLA_ID ? 18 : 0
+
+  if (!relationship) {
+    const total =
+      -threat * 3 -
+      expendablePawnPenalty +
+      realityAllianceContribution +
+      bellaSaveBonus +
+      knownJealousyPenalty
+    return {
+      total,
+      factors: {
+        threatContribution: -competitionThreat * 3,
+        socialInfluenceThreat: -socialThreat * 3,
+        observedPersuasion: socialRead?.persuasion ?? 0,
+        observedNetworkReach: socialRead?.networkReach ?? 0,
+        publicStrategicRespect: socialRead?.publicRespect ?? 0,
+        estimatedTribunalAppeal: socialRead?.juryAppeal ?? 0,
+        expendablePawnPenalty: -expendablePawnPenalty,
+        sandbagSuspicion: competitionRead.sandbagSuspicion,
+        relationship: 'none',
+        realityAllianceContribution,
+        bellaSaveBonus,
+        knownJealousyPenalty,
+        knownRomanticPartnerId: knownJealousy.partnerId,
+        jealousyEvidenceDay: knownJealousy.evidenceDay,
+        jealousyEvidenceConfidence: knownJealousy.confidence,
+        jealousyEvidenceSource: knownJealousy.source,
+      },
+    }
+  }
+
+  const holder = state.players.find((player) => player.id === holderId)
+  const factors: Record<string, AiDecisionFactor> = {
+    affinity: relationship.affinity,
+    threatPenalty: -competitionThreat * 3,
+    socialInfluenceThreat: -socialThreat * 3,
+    observedPersuasion: socialRead?.persuasion ?? 0,
+    observedNetworkReach: socialRead?.networkReach ?? 0,
+    publicStrategicRespect: socialRead?.publicRespect ?? 0,
+    estimatedTribunalAppeal: socialRead?.juryAppeal ?? 0,
+    expendablePawnPenalty: -expendablePawnPenalty,
+    sandbagSuspicion: competitionRead.sandbagSuspicion,
+    tags: relationship.tags.join(', ') || 'none',
+    knownJealousyPenalty,
+    knownRomanticPartnerId: knownJealousy.partnerId,
+    jealousyEvidenceDay: knownJealousy.evidenceDay,
+    jealousyEvidenceConfidence: knownJealousy.confidence,
+    jealousyEvidenceSource: knownJealousy.source,
+  }
+  let score =
+    relationship.affinity -
+    threat * 3 -
+    expendablePawnPenalty +
+    bellaSaveBonus +
+    knownJealousyPenalty
+  factors.bellaSaveBonus = bellaSaveBonus
+  const identityContribution =
+    allianceIdentityBias(holder?.aiGameIdentity) *
+    (relationship.tags.includes('alliance') ? 1 : 0.18)
+  score += identityContribution
+  factors.identityContribution = identityContribution
+
+  if (!state.dramaSocialMode) {
+    if (relationship.tags.includes('alliance')) {
+      score += 55
+      factors.alliance = 55
+    }
+    if (relationship.tags.includes('protection') || relationship.tags.includes('shield')) {
+      score += 25
+      factors.protection = 25
+    }
+    if (relationship.tags.includes('betrayal')) {
+      score -= 35
+      factors.betrayal = -35
+    }
+    factors.total = score
+    return { total: score, factors }
+  }
+
+  const tags = new Set(relationship.tags)
+  if (tags.has('betrayal')) {
+    score -= 140
+    factors.betrayal = -140
+  }
+  if (tags.has('alliance')) {
+    const formalAllianceContribution =
+      state.strategicAlliances !== undefined && allianceRead.sharedAllianceCount > 0
+        ? 12 + Math.min(1.2, allianceRead.sharedProtection) * 70
+        : state.strategicAlliances !== undefined
+          ? 40
+          : 65
+    score += formalAllianceContribution
+    factors.alliance = formalAllianceContribution
+  }
+  if (tags.has('romance') || tags.has('bromance')) {
+    score += 45
+    factors.romance = 45
+  }
+  if (tags.has('protection') || tags.has('shield')) {
+    score += 35
+    factors.protection = 35
+  }
+  if (tags.has('safety_promise')) {
+    score += 100
+    factors.safetyPromise = 100
+  }
+  if (tags.has('target') || tags.has('rivalry')) {
+    const personalTargetPenalty = allianceRead.currentTargetPressure > 0 ? -18 : -45
+    score += personalTargetPenalty
+    factors.targetOrRivalry = personalTargetPenalty
+  }
+  score += realityAllianceContribution
+  factors.realityAllianceContribution = realityAllianceContribution
+  factors.realityAllianceProtection = allianceRead.sharedProtection
+  factors.realityAllianceTargetPressure = allianceRead.currentTargetPressure
+  factors.realityAllianceFallbackPressure = allianceRead.fallbackTargetPressure
+  factors.total = score
+  return { total: score, factors }
+}
+
+export function getSafetyRelationshipScore(
+  state: GameState,
+  holderId: string,
+  nominee: Player
+): number {
+  return getSafetyRelationshipBreakdown(state, holderId, nominee).total
+}
+
+function getNominationTargetBreakdown(
+  state: GameState,
+  lohId: string,
+  candidate: Player
+): { total: number; factors: Record<string, AiDecisionFactor> } {
+  const relationship = getStrategicRelationship(state, lohId, candidate.id)
+  const allianceRead = getStrategicAllianceDecisionRead(state, lohId, candidate.id)
+  const tags = new Set(relationship?.tags ?? [])
+  const affinity = relationship?.affinity ?? 0
+  const threat = getAiThreatScore(state, candidate, { actorId: lohId })
+  const socialRead = state.strategicThreatReadsByActorId?.[lohId]?.[candidate.id]
+  const socialThreat = socialRead?.score ?? 0
+  const knownJealousy = getKnownRomanticRivalPressure(state, lohId, candidate.id)
+  const pregnancyBondContribution = getKnownPregnancyBondContribution(state, lohId, candidate.id)
+  const factors: Record<string, AiDecisionFactor> = {
+    threatContribution: (threat - socialThreat) * 4,
+    socialInfluenceThreat: socialThreat * 4,
+    observedPersuasion: socialRead?.persuasion ?? 0,
+    observedNetworkReach: socialRead?.networkReach ?? 0,
+    publicStrategicRespect: socialRead?.publicRespect ?? 0,
+    estimatedTribunalAppeal: socialRead?.juryAppeal ?? 0,
+    affinityPenalty: -affinity,
+    tags: [...tags].join(', ') || 'none',
+    knownRomanticRivalJealousy: knownJealousy.contribution,
+    knownPregnancyBond: pregnancyBondContribution,
+    jealousyPartnerId: knownJealousy.partnerId,
+    jealousyEvidenceDay: knownJealousy.evidenceDay,
+    jealousyEvidenceConfidence: knownJealousy.confidence,
+    jealousyEvidenceSource: knownJealousy.source,
+  }
+  let score = threat * 4 - affinity + knownJealousy.contribution + pregnancyBondContribution
+  if (tags.has('betrayal')) {
+    score += 125
+    factors.betrayal = 125
+  }
+  if (tags.has('alliance')) {
+    const formalProtection =
+      state.dramaSocialMode &&
+      state.strategicAlliances !== undefined &&
+      allianceRead.sharedAllianceCount > 0
+        ? -(12 + Math.min(1.2, allianceRead.sharedProtection) * 105)
+        : state.dramaSocialMode && state.strategicAlliances !== undefined
+          ? -65
+          : -110
+    score += formalProtection
+    factors.alliance = formalProtection
+  }
+  if (tags.has('romance') || tags.has('bromance')) {
+    score -= 80
+    factors.romance = -80
+  }
+  if (tags.has('protection') || tags.has('shield')) {
+    score -= 45
+    factors.protection = -45
+  }
+  if (tags.has('target')) {
+    const directTarget = allianceRead.currentTargetPressure > 0 ? 20 : 55
+    score += directTarget
+    factors.target = directTarget
+  }
+  if (state.dramaSocialMode) {
+    const alliancePlanPressure =
+      allianceRead.currentTargetPressure * 72 + allianceRead.fallbackTargetPressure * 32
+    score += alliancePlanPressure
+    factors.realityAlliancePlanPressure = alliancePlanPressure
+    factors.realityAllianceProtection = allianceRead.sharedProtection
+  }
+  if (tags.has('rivalry')) {
+    score += 45
+    factors.rivalry = 45
+  }
+  if (tags.has('suspicious') || tags.has('unreliable')) {
+    score += 18
+    factors.suspicion = 18
+  }
+  const voxMomentum = getVoxNominationMomentumScore(state, candidate)
+  score += voxMomentum
+  factors.voxMomentum = voxMomentum
+  const loh = state.players.find((player) => player.id === lohId)
+  const identityMode = getAiIdentityMode(state)
+  const priorNominations = state.lastWeekNominationRecord
+  const wasRecentlyTargeted =
+    priorNominations?.lohId === candidate.id && priorNominations.nomineeIds.includes(lohId)
+  const identityBias = nominationIdentityBias(loh?.aiGameIdentity, identityMode, {
+    affinity,
+    tags: [...tags],
+    targetIdentity: candidate.aiGameIdentity,
+  })
+  score += identityBias
+  factors.personalityTargetBias = identityBias
+  if (identityMode === 'vox_populi' && loh?.aiGameIdentity) {
+    // Vox players who care about their public image prefer a house-consensus
+    // nomination over a conspicuous personal feud. Media strategists still
+    // retain enough threat focus to make opportunistic moves when protected.
+    const audienceMomentum = voxMomentum * (0.4 + loh.aiGameIdentity.audienceFocus)
+    score += audienceMomentum
+    factors.audienceMomentum = audienceMomentum
+    if (loh.aiGameIdentity.archetype === 'media_strategist') {
+      const mediaThreat = threat * 1.5
+      score += mediaThreat
+      factors.mediaStrategistThreat = mediaThreat
+    }
+  }
+  if (wasRecentlyTargeted) {
+    // A recent nomination creates a grievance, with stronger reactions from
+    // volatile or impulsive holders while calm holders stay focused on other reasons.
+    const volatility = loh?.aiGameIdentity?.emotionalVolatility ?? 0.86
+    const impulsiveBoost = loh?.aiGameIdentity?.temperament === 'impulsive' ? 6 : 0
+    const revenge = Math.round(8 + volatility * 26 + impulsiveBoost)
+    score += revenge
+    factors.revenge = revenge
+  }
+  const wallDeal = state.holdTheWallSafetyDeal
+  if (
+    wallDeal?.week === state.week &&
+    wallDeal.promisorId === lohId &&
+    wallDeal.beneficiaryId === candidate.id
+  ) {
+    const disposition = getHoldTheWallDealDisposition(state, wallDeal)
+    const contribution =
+      disposition === 'honor' ? -AI_HOLD_THE_WALL_DEAL_WEIGHT : AI_HOLD_THE_WALL_DEAL_WEIGHT
+    score += contribution
+    factors.holdTheWallDealDisposition = disposition
+    factors.holdTheWallDealContribution = contribution
+  }
+  factors.total = score
+  return { total: score, factors }
+}
+
+export function getNominationTargetScore(
+  state: GameState,
+  lohId: string,
+  candidate: Player
+): number {
+  return getNominationTargetBreakdown(state, lohId, candidate).total
+}
+
+const ELIMINATION_CLOSE_SCORE_MARGIN = 4
+
+export interface StrategicEliminationCandidate {
+  id: string
+  label: string
+  total: number
+  factors: Record<string, AiDecisionFactor>
+}
+
+export interface StrategicEliminationChoice {
+  selectedIds: string[]
+  rankedCandidates: StrategicEliminationCandidate[]
+  publicRationale: string | null
+}
+
+/**
+ * Resolve a decisive elimination choice from the same actor-specific read for
+ * ordinary vote ties, double-elimination ties, and the Final Four sole vote.
+ * The score uses current relationships, alliance plans, promises, competition
+ * threat, and the LOH's persisted plan. Seeded variation only orders candidates
+ * whose scores are within a narrow margin.
+ */
+export function chooseStrategicEliminationCandidates(
+  state: GameState,
+  decisionMakerId: string,
+  candidateIds: string[],
+  selectionCount: number,
+  decisionType: 'ordinary_tie' | 'double_tie' | 'final_four',
+  gameSeed: number
+): StrategicEliminationChoice {
+  const candidates = candidateIds
+    .map((id) => state.players.find((player) => player.id === id))
+    .filter((player): player is Player => Boolean(player))
+  const plan =
+    state.lohNominationPlan?.week === state.week &&
+    state.lohNominationPlan.lohId === decisionMakerId &&
+    !['failed', 'compromised'].includes(state.lohNominationPlan.status)
+      ? state.lohNominationPlan
+      : null
+  const scored = candidates.map((candidate) => {
+    const nomination = getNominationTargetBreakdown(state, decisionMakerId, candidate)
+    const relationship = getStrategicRelationship(state, decisionMakerId, candidate.id)
+    const allianceRead = getStrategicAllianceDecisionRead(state, decisionMakerId, candidate.id)
+    const tags = new Set(relationship?.tags ?? [])
+    const factors: Record<string, AiDecisionFactor> = { ...nomination.factors }
+    let total = nomination.total
+
+    // Keep a live alliance plan in the model in both classic and Reality saves.
+    // Reality mode already includes this pressure in getNominationTargetBreakdown.
+    const alliancePlanContribution = state.dramaSocialMode
+      ? 0
+      : allianceRead.currentTargetPressure * 52 + allianceRead.fallbackTargetPressure * 23
+    total += alliancePlanContribution
+    factors.alliancePlanContribution = alliancePlanContribution
+    factors.sharedAllianceProtection = allianceRead.sharedProtection
+
+    // A current, explicit protection promise weighs heavily, but remains
+    // defeasible when stronger threats or betrayal evidence point the other way.
+    const taggedPromiseProtection = tags.has('safety_promise') ? -92 : 0
+    // The nomination read already includes the wall bargain's honor/betrayal
+    // decision. Add only protection not already covered by that bargain.
+    const wallDealProtection = Math.min(
+      0,
+      Number(nomination.factors.holdTheWallDealContribution ?? 0)
+    )
+    const promiseProtection =
+      Math.min(taggedPromiseProtection, wallDealProtection) - wallDealProtection
+    total += promiseProtection
+    factors.promiseProtection = promiseProtection
+
+    // Preserve the LOH's stated priorities as meaningful evidence, not a forced
+    // outcome. A promise, alliance decision, or current threat can still outweigh it.
+    let currentPlanContribution = 0
+    if (plan) {
+      const priorities = plan.eliminationPriorityIds?.length
+        ? plan.eliminationPriorityIds
+        : [plan.targetId]
+      const priorityIndex = priorities.indexOf(candidate.id)
+      if (priorityIndex >= 0) currentPlanContribution = priorityIndex === 0 ? 48 : 34
+      if (plan.preferredSurvivorId === candidate.id) currentPlanContribution -= 58
+      const replacementTargetId =
+        plan.replacementTargetOverrideId ?? plan.replacementTargetId ?? plan.backupTargetId
+      if (replacementTargetId === candidate.id) currentPlanContribution += 22
+    }
+    total += currentPlanContribution
+    factors.currentPlanContribution = currentPlanContribution
+    factors.total = total
+
+    return { id: candidate.id, label: candidate.name, total, factors }
+  })
+
+  const scoreOrdered = [...scored].sort(
+    (left, right) => right.total - left.total || left.id.localeCompare(right.id)
+  )
+  const rankedCandidates: StrategicEliminationCandidate[] = []
+  for (let index = 0; index < scoreOrdered.length; ) {
+    const topScore = scoreOrdered[index].total
+    let clusterEnd = index + 1
+    while (
+      clusterEnd < scoreOrdered.length &&
+      topScore - scoreOrdered[clusterEnd].total <= ELIMINATION_CLOSE_SCORE_MARGIN
+    ) {
+      clusterEnd += 1
+    }
+    const closeCandidates = scoreOrdered.slice(index, clusterEnd).sort((left, right) => {
+      const rankFor = (candidateId: string) =>
+        mulberry32(
+          (gameSeed ^
+            hashString(`${state.week}:${decisionType}:${decisionMakerId}:${candidateId}`)) >>>
+            0
+        )()
+      return rankFor(right.id) - rankFor(left.id) || left.id.localeCompare(right.id)
+    })
+    rankedCandidates.push(...closeCandidates)
+    index = clusterEnd
+  }
+
+  const selectedIds = rankedCandidates
+    .slice(0, Math.max(0, Math.min(selectionCount, rankedCandidates.length)))
+    .map((candidate) => candidate.id)
+  const humanId = state.players.find((player) => player.isUser)?.id
+  const disclosedTargetId =
+    humanId &&
+    state.lohSocialPlan?.week === state.week &&
+    state.lohSocialPlan.lohId === decisionMakerId &&
+    state.lohSocialPlan.disclosureOutcomeByPlayerId?.[humanId] !== 'false'
+      ? state.lohSocialPlan.disclosedTargetByPlayerId?.[humanId]
+      : undefined
+  const publicRationale =
+    disclosedTargetId && !selectedIds.includes(disclosedTargetId) && selectedIds.length > 0
+      ? buildKnownPlanDepartureRationale(
+          state,
+          decisionMakerId,
+          disclosedTargetId,
+          selectedIds[0],
+          scored
+        )
+      : null
+
+  return { selectedIds, rankedCandidates, publicRationale }
+}
+
+function buildKnownPlanDepartureRationale(
+  state: GameState,
+  decisionMakerId: string,
+  disclosedTargetId: string,
+  selectedId: string,
+  candidates: StrategicEliminationCandidate[]
+): string | null {
+  const previousTarget = state.players.find((player) => player.id === disclosedTargetId)
+  const selected = state.players.find((player) => player.id === selectedId)
+  const actor = state.players.find((player) => player.id === decisionMakerId)
+  const selectedScore = candidates.find((candidate) => candidate.id === selectedId)
+  const previousScore = candidates.find((candidate) => candidate.id === disclosedTargetId)
+  if (!previousTarget || !selected || !actor || !selectedScore) return null
+
+  const selectedPublicWins = (selected.stats?.lohWins ?? 0) + (selected.stats?.posWins ?? 0)
+  const previousPublicWins =
+    (previousTarget.stats?.lohWins ?? 0) + (previousTarget.stats?.posWins ?? 0)
+  const threatLead =
+    Number(selectedScore.factors.threatContribution ?? 0) -
+    Number(previousScore?.factors.threatContribution ?? 0)
+  if (selectedPublicWins > previousPublicWins && threatLead >= 4) {
+    return `${actor.name} changed the earlier call from ${previousTarget.name} to ${selected.name}; ${selected.name}'s stronger competition record weighed in.`
+  }
+
+  const originalNomineeIds = new Set(state.currentWeekNominationRecord?.nomineeIds ?? [])
+  if (
+    state.nomineeIds.includes(selectedId) &&
+    !originalNomineeIds.has(selectedId) &&
+    state.povSavedId != null
+  ) {
+    return `${actor.name} changed the earlier call from ${previousTarget.name} to ${selected.name} after Safety changed the block.`
+  }
+
+  const humanId = state.players.find((player) => player.isUser)?.id
+  const sharedAlliancePlan = (state.strategicAlliances ?? []).some(
+    (alliance) =>
+      alliance.status !== 'DISSOLVED' &&
+      alliance.memberIds.includes(decisionMakerId) &&
+      Boolean(humanId && alliance.memberIds.includes(humanId)) &&
+      alliance.currentTargetIds.includes(selectedId)
+  )
+  if (sharedAlliancePlan) {
+    return `${actor.name} changed the earlier call from ${previousTarget.name} to ${selected.name} as the shared alliance plan shifted.`
+  }
+
+  const scoreGap = Math.abs(selectedScore.total - (previousScore?.total ?? selectedScore.total))
+  if (scoreGap <= ELIMINATION_CLOSE_SCORE_MARGIN) {
+    return `${actor.name} changed the earlier call from ${previousTarget.name} to ${selected.name}; the tied choices were closely matched.`
+  }
+  return `${actor.name} changed the earlier call from ${previousTarget.name} to ${selected.name} after reassessing the live nominees.`
+}
+
+function traceStrategicEliminationChoice(
+  state: GameState,
+  actorId: string,
+  choice: StrategicEliminationChoice,
+  decisionType: 'ordinary_tie' | 'double_tie' | 'final_four',
+  seed: number
+): void {
+  traceAiDecision({
+    kind: 'eviction_decision',
+    actorId,
+    actorName: state.players.find((player) => player.id === actorId)?.name,
+    chosenId: choice.selectedIds[0] ?? null,
+    chosenIds: choice.selectedIds,
+    week: state.week,
+    phase: state.phase,
+    seed,
+    reason: choice.publicRationale ?? 'highest explainable strategic elimination score',
+    context: {
+      decisionType,
+      selectedCount: choice.selectedIds.length,
+      candidateIds: choice.rankedCandidates.map((candidate) => candidate.id),
+    },
+    candidates: choice.rankedCandidates.map((candidate) => ({
+      id: candidate.id,
+      label: candidate.label,
+      total: candidate.total,
+      factors: {
+        ...candidate.factors,
+        selected: choice.selectedIds.includes(candidate.id),
+      },
+    })),
+  })
+}
+
+/**
+ * One strategic resolver for every ordinary replacement decision. It starts
+ * from the regular nomination read, then adds the time-sensitive information
+ * that exists only once Safety may open the block: the LOH's stored backup,
+ * an active Ambush, promises, competing pact pressure, and only a small
+ * seeded variation. Alliances are therefore strong protection, not immunity.
+ */
+export function getStrategicReplacementNomineeBreakdown(
+  state: GameState,
+  decisionMakerId: string,
+  candidate: Player,
+  randomDraw = 0
+): { total: number; factors: Record<string, AiDecisionFactor> } {
+  const nomination = getNominationTargetBreakdown(state, decisionMakerId, candidate)
+  const relationship = getStrategicRelationship(state, decisionMakerId, candidate.id)
+  const tags = new Set(relationship?.tags ?? [])
+  const allianceRead = getStrategicAllianceDecisionRead(state, decisionMakerId, candidate.id)
+  const isLohDecision = decisionMakerId === state.lohId
+  const socialPlan =
+    isLohDecision &&
+    state.lohSocialPlan?.week === state.week &&
+    state.lohSocialPlan.lohId === decisionMakerId
+      ? state.lohSocialPlan
+      : null
+  const nominationPlan = isLohDecision ? state.lohNominationPlan : null
+  const canonicalReplacementTargetId =
+    nominationPlan?.replacementTargetOverrideId ??
+    nominationPlan?.replacementTargetId ??
+    socialPlan?.backupTargetId
+  const canonicalBackupPressure = canonicalReplacementTargetId === candidate.id ? 78 : 0
+  const hiddenAmbushPressure =
+    nominationPlan?.strategy === 'backdoor' &&
+    nominationPlan.status !== 'executed' &&
+    nominationPlan.status !== 'failed' &&
+    nominationPlan.status !== 'compromised' &&
+    nominationPlan.targetId === candidate.id
+      ? 105
+      : 0
+  const explicitProtectionPenalty = tags.has('safety_promise')
+    ? -48
+    : tags.has('protection') || tags.has('shield')
+      ? -26
+      : 0
+  const ambushIntentPressure = allianceRead.betrayalPressure * 88
+  const competingAlliancePressure =
+    allianceRead.currentTargetPressure * 28 + allianceRead.fallbackTargetPressure * 12
+  const boundedVariation = Math.max(0, Math.min(1, randomDraw)) * 6
+  const factors: Record<string, AiDecisionFactor> = {
+    ...nomination.factors,
+    canonicalBackupPressure,
+    hiddenAmbushPressure,
+    explicitProtectionPenalty,
+    competingAlliancePressure,
+    ambushIntentPressure,
+    boundedVariation,
+  }
+  const total =
+    nomination.total +
+    canonicalBackupPressure +
+    hiddenAmbushPressure +
+    explicitProtectionPenalty +
+    competingAlliancePressure +
+    ambushIntentPressure +
+    boundedVariation
+  factors.total = total
+  return { total, factors }
+}
+
+function recordUnavoidableNominationReason(
+  state: GameState,
+  lohId: string | null | undefined,
+  selectedIds: string[],
+  legalCandidates: Player[],
+  stage: 'INITIAL' | 'REPLACEMENT'
+): void {
+  if (
+    !lohId ||
+    legalCandidates.length !== selectedIds.length ||
+    !selectedIds.every((id) => legalCandidates.some((candidate) => candidate.id === id))
+  )
+    return
+
+  state.nominationDecisionReasons ??= {}
+  for (const nomineeId of selectedIds) {
+    const tags = [
+      ...(state.strategicRelationships?.[lohId]?.[nomineeId]?.tags ?? []),
+      ...(state.strategicRelationships?.[nomineeId]?.[lohId]?.tags ?? []),
+    ]
+    const relationshipTier = tags.includes('ride_or_die')
+      ? 'RIDE_OR_DIE'
+      : tags.includes('romance')
+        ? 'ROMANCE'
+        : tags.includes('primary_alliance')
+          ? 'PRIMARY_ALLIANCE'
+          : tags.includes('alliance')
+            ? 'ALLIANCE'
+            : tags.includes('bromance')
+              ? 'BROMANCE'
+              : 'ORDINARY'
+    state.nominationDecisionReasons[`${state.week}:${lohId}:${stage}:${nomineeId}`] = {
+      week: state.week,
+      lohId,
+      nomineeId,
+      stage,
+      primaryReason: 'FORCED_BY_RULES',
+      factors: { unavoidable: true },
+      targetScoreAtDecision: 0,
+      eligibleAlternativeIds: [],
+      strongerProtectedIds: [],
+      forcedChoice: true,
+      relationshipTier,
+      relationshipTagsAtDecision: [...new Set(tags)],
+      trustAtDecision: state.strategicRelationships?.[nomineeId]?.[lohId]?.affinity,
+    }
+  }
+}
+
+function recordNominationDecisionReason(
+  state: GameState,
+  lohId: string,
+  nominee: Player,
+  stage: 'INITIAL' | 'REPLACEMENT',
+  selected: { total: number; factors: Record<string, AiDecisionFactor> },
+  candidates: Array<{ player: Player; total: number; factors: Record<string, AiDecisionFactor> }>
+): void {
+  const factors = selected.factors
+  const relationshipTags = String(factors.tags ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+  const relationshipTier = relationshipTags.includes('ride_or_die')
+    ? 'RIDE_OR_DIE'
+    : relationshipTags.includes('romance')
+      ? 'ROMANCE'
+      : relationshipTags.includes('primary_alliance')
+        ? 'PRIMARY_ALLIANCE'
+        : relationshipTags.includes('alliance')
+          ? 'ALLIANCE'
+          : relationshipTags.includes('bromance')
+            ? 'BROMANCE'
+            : 'ORDINARY'
+  const score = (key: string) => (typeof factors[key] === 'number' ? (factors[key] as number) : 0)
+  const primaryReason =
+    score('betrayal') > 0
+      ? 'BETRAYAL'
+      : score('hiddenAmbushPressure') > 0 || score('canonicalBackupPressure') > 0
+        ? 'BACKDOOR_PLAN'
+        : score('target') > 0 || score('realityAlliancePlanPressure') > 0
+          ? 'ALLIANCE_TARGET'
+          : score('threatContribution') >= Math.max(score('suspicion'), score('rivalry'))
+            ? 'COMPETITION_THREAT'
+            : score('affinityPenalty') > 0
+              ? 'LOW_TRUST'
+              : 'STRATEGIC_BUFFER'
+  const strongerProtectedIds = candidates
+    .filter(
+      (candidate) =>
+        candidate.player.id !== nominee.id &&
+        (Number(candidate.factors.alliance ?? 0) < 0 || Number(candidate.factors.romance ?? 0) < 0)
+    )
+    .map((candidate) => candidate.player.id)
+  state.nominationDecisionReasons ??= {}
+  state.nominationDecisionReasons[`${state.week}:${lohId}:${stage}:${nominee.id}`] = {
+    week: state.week,
+    lohId,
+    nomineeId: nominee.id,
+    stage,
+    primaryReason,
+    factors: { ...factors },
+    targetScoreAtDecision: selected.total,
+    eligibleAlternativeIds: candidates
+      .filter((candidate) => candidate.player.id !== nominee.id)
+      .map((candidate) => candidate.player.id),
+    strongerProtectedIds,
+    forcedChoice: candidates.length <= 1 || strongerProtectedIds.length >= candidates.length - 1,
+    relationshipTier,
+    relationshipTagsAtDecision: relationshipTags,
+    trustAtDecision: typeof factors.affinity === 'number' ? factors.affinity : undefined,
+    lohArchetype: state.players.find((player) => player.id === lohId)?.aiGameIdentity?.archetype,
+    lohTemperament: state.players.find((player) => player.id === lohId)?.aiGameIdentity
+      ?.temperament,
+  }
+}
+
+export function pickStrategicReplacementNominee(
+  state: GameState,
+  decisionMakerId: string | null | undefined,
+  candidates: Player[],
+  rng: () => number,
+  options: { reason?: string } = {}
+): Player | null {
+  if (!decisionMakerId || candidates.length === 0) return null
+  const scored = candidates.map((candidate) => {
+    const randomDraw = rng()
+    const breakdown = getStrategicReplacementNomineeBreakdown(
+      state,
+      decisionMakerId,
+      candidate,
+      randomDraw
+    )
+    return { player: candidate, ...breakdown }
+  })
+  const bestScore = Math.max(...scored.map((entry) => entry.total))
+  const tied = scored.filter((entry) => entry.total === bestScore)
+  const chosen = seededPick(rng, tied)?.player ?? null
+  traceAiDecision({
+    kind: 'replacement_nominee',
+    actorId: decisionMakerId,
+    actorName: state.players.find((player) => player.id === decisionMakerId)?.name,
+    chosenId: chosen?.id ?? null,
+    week: state.week,
+    phase: state.phase,
+    seed: state.seed,
+    reason: options.reason ?? 'selected strategic replacement nominee',
+    context: { tiedBestCount: tied.length },
+    candidates: scored.map<AiDecisionCandidate>((entry) => ({
+      id: entry.player.id,
+      label: entry.player.name,
+      total: entry.total,
+      factors: { ...entry.factors, selected: entry.player.id === chosen?.id },
+    })),
+  })
+  if (chosen) {
+    const chosenEntry = scored.find((entry) => entry.player.id === chosen.id)!
+    recordNominationDecisionReason(
+      state,
+      decisionMakerId,
+      chosen,
+      'REPLACEMENT',
+      chosenEntry,
+      scored
+    )
+  }
+  return chosen
+}
+
+function pickStrategicReplacementNominees(
+  state: GameState,
+  decisionMakerId: string | null | undefined,
+  candidates: Player[],
+  count: number,
+  rng: () => number,
+  options: { reason?: string } = {}
+): Player[] {
+  const remaining = [...candidates]
+  const chosen: Player[] = []
+  while (chosen.length < count && remaining.length > 0) {
+    const next = pickStrategicReplacementNominee(state, decisionMakerId, remaining, rng, options)
+    if (!next) break
+    chosen.push(next)
+    const index = remaining.findIndex((candidate) => candidate.id === next.id)
+    if (index >= 0) remaining.splice(index, 1)
+  }
+  return chosen
+}
+
+function rememberOriginalNominations(state: GameState): void {
+  if (!state.lohId || state.nomineeIds.length === 0) return
+  if (state.currentWeekNominationRecord?.week === state.week) return
+  state.currentWeekNominationRecord = {
+    week: state.week,
+    lohId: state.lohId,
+    nomineeIds: [...new Set(state.nomineeIds)],
+  }
+}
+
+function pickStrategicNominationTargets(
+  state: GameState,
+  lohId: string,
+  candidates: Player[],
+  count: number,
+  rng: () => number
+): Player[] {
+  const scored = candidates.map((player) => {
+    const breakdown = getNominationTargetBreakdown(state, lohId, player)
+    const randomDraw = rng()
+    return {
+      player,
+      score: breakdown.total + randomDraw * 8,
+      factors: { ...breakdown.factors, randomDraw, randomContribution: randomDraw * 8 },
+    }
+  })
+  const selected = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, count)
+    .map((entry) => entry.player)
+  traceAiDecision({
+    kind: getAiIdentityMode(state) === 'vox_populi' ? 'vox_nomination' : 'loh_nomination',
+    actorId: lohId,
+    actorName: state.players.find((player) => player.id === lohId)?.name,
+    chosenIds: selected.map((player) => player.id),
+    week: state.week,
+    phase: state.phase,
+    seed: state.seed,
+    reason: 'highest strategic nomination score',
+    context: { requestedCount: count, candidateCount: candidates.length },
+    candidates: scored.map<AiDecisionCandidate>((entry) => ({
+      id: entry.player.id,
+      label: entry.player.name,
+      total: entry.score,
+      factors: entry.factors,
+    })),
+  })
+  for (const selectedPlayer of selected) {
+    const selectedEntry = scored.find((entry) => entry.player.id === selectedPlayer.id)!
+    recordNominationDecisionReason(
+      state,
+      lohId,
+      selectedPlayer,
+      'INITIAL',
+      { total: selectedEntry.score, factors: selectedEntry.factors },
+      scored.map((entry) => ({
+        player: entry.player,
+        total: entry.score,
+        factors: entry.factors,
+      }))
+    )
+  }
+  return selected
+}
+
+function isVoxFinalFour(state: GameState): boolean {
+  return isVoxPopuliActive(state) && getAlivePlayers(state).length === 4
+}
+
+function getVoxNominationImmunityId(state: GameState): string | null {
+  if (isVoxFinalFour(state)) return null
+  return state.voxPopuli?.immunityWinnerId ?? state.lohId ?? null
+}
+
+function getVoxBallotSize(state: GameState): number {
+  return isVoxFinalFour(state) ? 1 : 2
+}
+
+/** A purchased Vox Extra Vote adds one distinct target to the human's secret ballot. */
+function getVoxHumanBallotSize(state: GameState, eligibleCount: number): number {
+  const bonus = state.storeVoxExtraNominationChoiceActive === true ? 1 : 0
+  return Math.min(getVoxBallotSize(state) + bonus, eligibleCount)
+}
+
+function resolveCurrentVoxNominations(state: GameState) {
+  const alive = getAlivePlayers(state)
+  return resolveVoxNominations({
+    activeIds: alive.map((player) => player.id),
+    immunityWinnerId: getVoxNominationImmunityId(state),
+    autoNomineeId: state.voxPopuli?.autoNomineeId ?? state.lastHohCompFinisherId ?? null,
+    protectedIds: alive.filter((p) => isMissionOpeningProtected(state, p.id)).map((p) => p.id),
+    ballots: state.voxPopuli?.nominationBallots ?? {},
+    ballotNomineeCount: getVoxBallotSize(state),
+    seed: state.seed,
+  })
+}
+
+/**
+ * Reconcile a completed Vox ballot after a rules-valid tally adjustment. This
+ * keeps the visible block, player statuses, and authoritative tally together.
+ */
+function applyVoxNominationResolution(
+  state: GameState,
+  resolution: ReturnType<typeof resolveCurrentVoxNominations>
+) {
+  const priorNomineeIds = new Set(state.nomineeIds)
+  const nextNomineeIds = new Set(resolution.nomineeIds)
+  state.voxPopuli!.nominationVoteCounts = resolution.voteCounts
+  state.nomineeIds = resolution.nomineeIds
+  state.voxPopuli!.nominationDaysByPlayerId ??= {}
+
+  priorNomineeIds.forEach((id) => {
+    if (nextNomineeIds.has(id)) return
+    const days = state.voxPopuli!.nominationDaysByPlayerId![id] ?? []
+    state.voxPopuli!.nominationDaysByPlayerId![id] = days.filter((day) => day !== state.week)
+    const player = state.players.find((candidate) => candidate.id === id)
+    if (player?.status === 'nominated') player.status = 'active'
+    else if (player?.status === 'nominated+pos') player.status = 'pos'
+    if (player) {
+      ensurePlayerStats(player).timesNominated = Math.max(0, player.stats!.timesNominated - 1)
+    }
+  })
+
+  resolution.nomineeIds.forEach((id) => {
+    const days = state.voxPopuli!.nominationDaysByPlayerId![id] ?? []
+    if (!days.includes(state.week)) days.push(state.week)
+    state.voxPopuli!.nominationDaysByPlayerId![id] = days.slice(-6)
+  })
+  state.players.forEach((player) => {
+    if (!nextNomineeIds.has(player.id)) return
+    if (player.status !== 'nominated' && player.status !== 'nominated+pos') {
+      player.status = 'nominated'
+      if (!priorNomineeIds.has(player.id)) incrementTimesNominated(state, player.id)
+    }
+  })
+}
+
+export function getEligibleNominationTargets(state: GameState, actorId: string): Player[] {
+  const alive = getAlivePlayers(state)
+
+  if (isVoxPopuliActive(state)) {
+    const immunityWinnerId = getVoxNominationImmunityId(state)
+    const autoNomineeId = state.voxPopuli?.autoNomineeId ?? state.lastHohCompFinisherId ?? null
+    return collapseCupidCandidates(
+      state,
+      alive.filter(
+        (candidate) =>
+          candidate.id !== actorId &&
+          candidate.id !== immunityWinnerId &&
+          candidate.id !== autoNomineeId &&
+          !isMissionOpeningProtected(state, candidate.id) &&
+          canPlayerNominatePlayer(state, actorId, candidate.id)
+      )
+    )
+  }
+
+  const lohUnitIds = new Set(
+    expandCupidIds(
+      state,
+      state.coLohIds?.length ? state.coLohIds : state.lohId ? [state.lohId] : [actorId]
+    )
+  )
+  let candidates = collapseCupidCandidates(
+    state,
+    alive.filter(
+      (candidate) =>
+        candidate.id !== actorId &&
+        !lohUnitIds.has(candidate.id) &&
+        !isMissionOpeningProtected(state, candidate.id) &&
+        canPlayerNominatePlayer(state, actorId, candidate.id)
+    )
+  )
+
+  const canUsePublicAutoNominee =
+    state.publicModeEnabled === true && state.doubleEviction?.weekActive !== true
+  if (canUsePublicAutoNominee && state.lastHohCompFinisherId) {
+    const forcedUnitIds = new Set(expandCupidIds(state, [state.lastHohCompFinisherId]))
+    candidates = candidates.filter((candidate) => !forcedUnitIds.has(candidate.id))
+  }
+
+  return candidates
+}
+
+function castVoxAiNominationBallots(state: GameState, rng: () => number) {
+  if (!state.voxPopuli) return
+  const alive = getAlivePlayers(state)
+  const immunityWinnerId = getVoxNominationImmunityId(state)
+  const autoNomineeId = state.voxPopuli.autoNomineeId ?? state.lastHohCompFinisherId ?? null
+  for (const voter of alive) {
+    if (voter.isUser) continue
+    // Vox nomination power belongs to every active housemate. Even the automatic
+    // Final 4 nominee still casts a secret nomination ballot; being on the block
+    // does not remove nomination power in Vox.
+    const candidates = alive.filter(
+      (candidate) =>
+        candidate.id !== voter.id &&
+        candidate.id !== immunityWinnerId &&
+        candidate.id !== autoNomineeId &&
+        !isMissionOpeningProtected(state, candidate.id) &&
+        canPlayerNominatePlayer(state, voter.id, candidate.id)
+    )
+    state.voxPopuli.nominationBallots[voter.id] = pickStrategicNominationTargets(
+      state,
+      voter.id,
+      candidates,
+      Math.min(getVoxBallotSize(state), candidates.length),
+      rng
+    ).map((player) => player.id)
+  }
+}
+
+function finalizeVoxNominations(state: GameState) {
+  if (!state.voxPopuli) return
+  const resolution = resolveCurrentVoxNominations(state)
+  applyVoxNominationResolution(state, resolution)
+  state.awaitingNominations = false
+  state.pendingNominee1Id = null
+  state.nominationContext = null
+  // There is no nominating leader to attribute this block to. Keeping a
+  // classic LOH nomination record would create false revenge logic next day.
+  state.currentWeekNominationRecord = null
+
+  // The Confessional instruction is actionable only while the human ballot is
+  // outstanding. Retire it before queuing the result so returning from the
+  // Confessional immediately hands the faux TV to the completed ballot.
+  const ballotPrompt = state.tvFeed.find(
+    (event) =>
+      event.meta?.week === state.week &&
+      event.meta?.broadcastTemplateId === 'nominations.vox-ballot' &&
+      event.meta?.broadcastConsumed !== true
+  )
+  if (ballotPrompt) {
+    ballotPrompt.meta = { ...(ballotPrompt.meta ?? {}), broadcastConsumed: true }
+    state.broadcastQueue = (state.broadcastQueue ?? []).filter((id) => id !== ballotPrompt.id)
+    if (state.lastPlainBroadcastEventId === ballotPrompt.id) state.lastPlainBroadcastEventId = null
+  }
+
+  const automaticNomineeId = state.voxPopuli.autoNomineeId ?? state.lastHohCompFinisherId ?? null
+  const automaticNominee = automaticNomineeId
+    ? state.players.find((candidate) => candidate.id === automaticNomineeId)
+    : null
+  const ballotNominees = resolution.nomineeIds
+    .filter((id) => id !== automaticNomineeId)
+    .map((id) => {
+      const player = state.players.find((candidate) => candidate.id === id)
+      const votes = resolution.voteCounts[id] ?? 0
+      return {
+        name: player?.name ?? id,
+        votes,
+      }
+    })
+  const ballotSummary = ballotNominees
+    .map(({ name, votes }) => `${name} received ${votes} vote${votes === 1 ? '' : 's'}`)
+    .join(', ')
+  const ballotNames = formatNameList(ballotNominees.map(({ name }) => name))
+  const resultCopy = automaticNominee
+    ? ballotNominees.length > 0
+      ? `The secret ballot is complete: ${ballotSummary}. ${ballotNames} ${
+          ballotNominees.length === 1 ? 'joins' : 'join'
+        } ${automaticNominee.name} on the block. They will face the audience vote.`
+      : `${automaticNominee.name} remains on the block for the audience vote.`
+    : ballotNominees.length > 0
+      ? `The secret ballot is complete: ${ballotSummary}. ${ballotNames} ${
+          ballotNominees.length === 1 ? 'is' : 'are'
+        } nominated for the audience vote.`
+      : 'The secret ballot is complete.'
+  state.history ??= []
+  if (
+    !state.history.some(
+      (event) => event.type === 'voxNominationResult' && event.week === state.week
+    )
+  ) {
+    state.history.push({
+      type: 'voxNominationResult',
+      week: state.week,
+      data: {
+        mode: 'vox_populi',
+        nomineeIds: [...resolution.nomineeIds],
+        voteCounts: { ...resolution.voteCounts },
+        automaticNomineeId,
+        playerNamesById: Object.fromEntries(
+          state.players.map((player) => [player.id, player.name])
+        ),
+        visibility: 'public_result',
+      },
+      timestamp: Date.now(),
+    })
+  }
+  pushEvent(state, resultCopy, 'game', {
+    broadcastTemplateId: automaticNominee
+      ? ballotNominees.length > 0
+        ? 'nominations.vox-result-with-auto'
+        : 'nominations.vox-auto-remains'
+      : ballotNominees.length > 0
+        ? 'nominations.vox-result'
+        : 'nominations.vox-ballot-complete',
+  })
+}
+
+function pickStrategicAiPlayer(
+  state: GameState,
+  candidates: Player[],
+  rng: () => number,
+  mode: 'highest' | 'lowest',
+  options: {
+    preferLoh?: boolean
+    actorId?: string
+    debug?: {
+      actorId?: string
+      kind: 'replacement_nominee'
+      reason?: string
+      context?: Record<string, AiDecisionFactor | string[]>
+    }
+  } = {}
+): Player | null {
+  if (candidates.length === 0) return null
+  const scored = candidates.map((player) => ({
+    player,
+    score: getAiThreatScore(state, player, {
+      ...options,
+      actorId: options.actorId ?? options.debug?.actorId,
+    }),
+  }))
+  const targetScore =
+    mode === 'highest'
+      ? Math.max(...scored.map((entry) => entry.score))
+      : Math.min(...scored.map((entry) => entry.score))
+  const tied = scored.filter((entry) => entry.score === targetScore).map((entry) => entry.player)
+  const chosen = seededPick(rng, tied)
+  if (options.debug) {
+    traceAiDecision({
+      kind: options.debug.kind,
+      actorId: options.debug.actorId,
+      actorName: state.players.find((player) => player.id === options.debug?.actorId)?.name,
+      chosenId: chosen?.id ?? null,
+      week: state.week,
+      phase: state.phase,
+      seed: state.seed,
+      reason: options.debug.reason ?? `${mode} strategic threat score`,
+      context: { mode, tiedBestCount: tied.length, ...(options.debug.context ?? {}) },
+      candidates: scored.map<AiDecisionCandidate>((entry) => ({
+        id: entry.player.id,
+        label: entry.player.name,
+        total: entry.score,
+        factors: { threatScore: entry.score, selected: entry.player.id === chosen?.id },
+      })),
+    })
+  }
+  return chosen
+}
+
+function pickStrategicAiPlayers(
+  state: GameState,
+  candidates: Player[],
+  count: number,
+  rng: () => number,
+  options: Parameters<typeof pickStrategicAiPlayer>[4] = {}
+): Player[] {
+  const remaining = [...candidates]
+  const picks: Player[] = []
+  while (picks.length < count && remaining.length > 0) {
+    const pick = pickStrategicAiPlayer(state, remaining, rng, 'highest', options)
+    if (!pick) break
+    picks.push(pick)
+    const idx = remaining.findIndex((player) => player.id === pick.id)
+    if (idx >= 0) remaining.splice(idx, 1)
+  }
+  return picks
+}
+
+function getCurrentLohSafetyAdvice(state: GameState, holderId: string, nominees: Player[]) {
+  const advice = state.lohSafetyAdvice
+  if (
+    !advice ||
+    advice.week !== state.week ||
+    advice.lohId !== state.lohId ||
+    advice.holderId !== holderId ||
+    (advice.advice === 'use' &&
+      advice.targetId &&
+      !nominees.some((nominee) => nominee.id === advice.targetId))
+  ) {
+    return null
+  }
+  return advice
+}
+
+function shouldAiUseTargetedSafetyPower(
+  state: GameState,
+  holderId: string | null | undefined,
+  currentNominees: Player[],
+  eligibleReplacements: Player[],
+  options: { replacementCount?: number; preferLoh?: boolean } = {}
+): boolean {
+  if (!holderId) return false
+  const replacementCount = Math.max(1, options.replacementCount ?? 1)
+  if (eligibleReplacements.length === 0 || currentNominees.length === 0) return false
+  const bestRelationship = Math.max(
+    ...currentNominees.map((nominee) => getSafetyRelationshipScore(state, holderId, nominee))
+  )
+
+  // Vox Populi makes Safety an explicitly personal decision: an AI holder will
+  // only intervene for somebody with whom they have a meaningful connection.
+  if (isVoxPopuliActive(state)) {
+    if (bestRelationship < 60) return false
+    return true
+  }
+
+  // A Classic holder may make a calculated block swap, but "this nominee is
+  // weak" is not itself a reason to save them. A strategic swap requires a
+  // replacement the holder actually wants exposed (enemy/target/betrayer), not
+  // merely a globally stronger competitor who happens to be available.
+  const currentScores = currentNominees
+    .map((player) => getNominationTargetScore(state, holderId, player))
+    .sort((a, b) => a - b)
+  const replacementScores = eligibleReplacements
+    .map((player) => getNominationTargetScore(state, holderId, player))
+    .sort((a, b) => b - a)
+  const currentValue = currentScores
+    .slice(0, Math.min(replacementCount, currentScores.length))
+    .reduce((sum, score) => sum + score, 0)
+  const replacementValue = replacementScores
+    .slice(0, Math.min(replacementCount, replacementScores.length))
+    .reduce((sum, score) => sum + score, 0)
+  const hasStrategicReplacement = eligibleReplacements.some((candidate) => {
+    const relationship = getStrategicRelationship(state, holderId, candidate.id)
+    const tags = new Set(relationship?.tags ?? [])
+    return (
+      (relationship?.affinity ?? 0) <= -20 ||
+      tags.has('target') ||
+      tags.has('rivalry') ||
+      tags.has('betrayal')
+    )
+  })
+  const strategicUpgrade = hasStrategicReplacement && replacementValue > currentValue + 18
+  let useChance = strategicUpgrade ? 0.35 : 0.05
+  if (currentNominees.some((nominee) => nominee.id === BELLA_ID)) useChance += 0.15
+  if (bestRelationship >= 75) useChance += 0.5
+  else if (bestRelationship >= 45) useChance += 0.35
+  else if (bestRelationship >= 20) useChance += 0.18
+  const lohAdvice = getCurrentLohSafetyAdvice(state, holderId, currentNominees)
+  let appliedLohAdviceInfluence = 0
+  let appliedLohAdviceSource: 'human_loh' | 'ai_ambush_pitch' | null = null
+  if (lohAdvice) {
+    const isAiAmbushPitch = lohAdvice.source === 'ai_ambush_pitch'
+    const holderViewOfLoh = getStrategicRelationship(state, holderId, lohAdvice.lohId)
+    const holderTags = new Set(holderViewOfLoh?.tags ?? [])
+    // A human LOH's explicit advice is powerful. An AI LOH's Ambush pitch is
+    // intentionally softer and varies with whether the holder trusts them.
+    const holderAffinity = holderViewOfLoh?.affinity ?? 0
+    const adviceInfluence = isAiAmbushPitch
+      ? holderAffinity >= 45
+        ? 0.3
+        : 0.12 +
+          (holderAffinity >= 20 ? 0.08 : 0) +
+          (holderTags.has('alliance') || holderTags.has('protection') ? 0.05 : 0)
+      : 0.38
+    appliedLohAdviceInfluence = adviceInfluence
+    appliedLohAdviceSource = lohAdvice.source ?? null
+    if (lohAdvice.advice === 'use') useChance += adviceInfluence
+    if (lohAdvice.advice === 'hold') useChance -= adviceInfluence
+  }
+  useChance = Math.max(0.03, Math.min(0.92, useChance))
+  const rng = mulberry32(
+    (state.seed ^
+      hashString(
+        `safety:${state.week}:${holderId}:${currentNominees.map((player) => player.id).join('|')}`
+      )) >>>
+      0
+  )
+  const randomDraw = rng()
+  const usePower = randomDraw < useChance
+  traceAiDecision({
+    kind: 'safety_use',
+    actorId: holderId,
+    actorName: state.players.find((player) => player.id === holderId)?.name,
+    chosenId: usePower ? holderId : null,
+    week: state.week,
+    phase: state.phase,
+    seed: state.seed,
+    reason: usePower ? 'seeded safety-use roll passed' : 'seeded safety-use roll failed',
+    context: {
+      replacementCount,
+      bestRelationship,
+      currentValue,
+      replacementValue,
+      strategicUpgrade,
+      hasStrategicReplacement,
+      useChance,
+      randomDraw,
+      lohAdvice: lohAdvice?.advice ?? null,
+      lohAdviceSource: appliedLohAdviceSource,
+      lohAdviceInfluence: appliedLohAdviceInfluence,
+    },
+    candidates: [
+      ...currentNominees.map((nominee) => ({
+        id: nominee.id,
+        label: nominee.name,
+        total: getSafetyRelationshipScore(state, holderId, nominee),
+        factors: { role: 'current nominee' },
+      })),
+      ...eligibleReplacements.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.name,
+        total: getNominationTargetScore(state, holderId, candidate),
+        factors: { role: 'eligible replacement', actorSpecific: true },
+      })),
+    ],
+  })
+  return usePower
+}
+
+function ensureMinimumNominees(
+  state: GameState,
+  alivePlayers: Player[],
+  minRequired: number,
+  rng: () => number
+): boolean {
+  while (state.nomineeIds.length < minRequired) {
+    const eligible = getReplacementEligiblePlayers(
+      state,
+      alivePlayers,
+      minRequired - state.nomineeIds.length
+    )
+    if (eligible.length === 0) {
+      pushEvent(
+        state,
+        'There were no eligible replacement nominees available, so the ceremony proceeds with a short block.',
+        'game'
+      )
+      return false
+    }
+
+    const lohPlayer = state.players.find((player) => player.id === state.lohId)
+    if (lohPlayer?.isUser) {
+      state.replacementNeeded = true
+      pushEvent(
+        state,
+        `${lohPlayer.name} must name a replacement nominee to restore the block. 🎯`,
+        'game'
+      )
+      return false
+    }
+
+    const replacement = pickStrategicReplacementNominee(state, state.lohId, eligible, rng, {
+      reason: 'restored the normal block with the canonical strategic replacement resolver',
+    })
+    if (!replacement) return false
+    appendNominee(state, replacement.id)
+    state.replacementNomineeIds = [
+      ...new Set([...(state.replacementNomineeIds ?? []), replacement.id]),
+    ]
+    pushEvent(
+      state,
+      `${lohPlayer?.name ?? 'The LOH'} named ${replacement.name} as the replacement nominee. 🎯`,
+      'game'
+    )
+  }
+
+  return true
+}
+
+function restoreVoxNomineeMinimum(state: GameState): string[] {
+  if (!isVoxPopuliActive(state) || !state.voxPopuli) return []
+  const requiredNomineeCount = state.doubleEviction?.weekActive ? 3 : 2
+  state.voxPopuli.lastReplacementNomineeIds = []
+  if (state.nomineeIds.length >= requiredNomineeCount) return []
+  const alive = getAlivePlayers(state)
+  const replacements = resolveVoxReplacementNominees({
+    activeIds: alive.map((player) => player.id),
+    currentNomineeIds: state.nomineeIds,
+    protectedIds: [
+      ...getDayNominationProtectedIds(state),
+      ...getAlivePlayers(state)
+        .filter((p) => isMissionBackupProtected(state, p.id))
+        .map((p) => p.id),
+    ],
+    immunityWinnerId: getVoxNominationImmunityId(state),
+    nominationVoteCounts: state.voxPopuli.nominationVoteCounts,
+    requiredNomineeCount,
+    seed: state.seed,
+  })
+  replacements.forEach((id) => appendNominee(state, id))
+  state.voxPopuli.lastReplacementNomineeIds = [...replacements]
+  if (replacements.length > 0) {
+    const rankedNames = replacements.map((id) => {
+      const name = state.players.find((player) => player.id === id)?.name ?? id
+      const votes = state.voxPopuli?.nominationVoteCounts[id] ?? 0
+      return `${name} (${votes} vote${votes === 1 ? '' : 's'})`
+    })
+    pushEvent(
+      state,
+      `${formatNameList(rankedNames)} ${
+        replacements.length === 1 ? 'joins' : 'join'
+      } the block from the next-highest secret-ballot rank.`,
+      'game',
+      { major: 'vox_populi_replacement', broadcastPriority: 'critical' }
+    )
+  }
+  state.replacementNeeded = false
+  state.aiReplacementStep = 0
+  return replacements
+}
+
+function pushVoxSafetyOutcome(state: GameState, holderId: string | null, savedId: string): void {
+  const holder = holderId ? state.players.find((player) => player.id === holderId) : null
+  const saved = state.players.find((player) => player.id === savedId)
+  const savedName = saved?.name ?? 'A nominee'
+  if (state.voxPopuli) {
+    state.voxPopuli.safetySaveCounts ??= {}
+    state.voxPopuli.safetySaveCounts[savedId] = (state.voxPopuli.safetySaveCounts[savedId] ?? 0) + 1
+  }
+  const saveLine =
+    holder?.id === savedId
+      ? `${savedName} has saved ${getPlayerReflexive(saved)} from the block.`
+      : `${holder?.name ?? 'The Safety holder'} has saved ${savedName} from the block.`
+  const nomineeNames = state.nomineeIds.map(
+    (id) => state.players.find((player) => player.id === id)?.name ?? id
+  )
+  const publicLine =
+    state.doubleEviction?.weekActive && nomineeNames.length >= 3
+      ? `${formatNameList(nomineeNames)} will now face the audience, and two of them will leave tonight.`
+      : `${formatNameList(nomineeNames)} will now face the audience, who will decide whose game ends tonight.`
+  const isSelfSave = holder?.id === savedId
+  const isDouble = Boolean(state.doubleEviction?.weekActive && nomineeNames.length >= 3)
+  pushEvent(state, `${saveLine} ${publicLine}`, 'game', {
+    broadcastTemplateId: isSelfSave
+      ? isDouble
+        ? 'safety.vox-self-save-double'
+        : 'safety.vox-self-save'
+      : isDouble
+        ? 'safety.vox-save-double'
+        : 'safety.vox-save',
+    savedId,
+    nomineeIds: [...state.nomineeIds],
+  })
+}
+
+function pushVoxSafetyStandPat(state: GameState, holderId: string | null): void {
+  const holder = holderId ? state.players.find((player) => player.id === holderId) : null
+  const nomineeNames = state.nomineeIds.map(
+    (id) => state.players.find((player) => player.id === id)?.name ?? id
+  )
+  const nominees = formatNameList(nomineeNames)
+  pushEvent(
+    state,
+    `${holder?.name ?? 'The Safety holder'} has chosen not to use the Power of Safety. ${nominees} ${
+      nomineeNames.length === 1 ? 'remains' : 'remain'
+    } on the block and will face the audience.`,
+    'game',
+    {
+      broadcastTemplateId: 'safety.vox-hold',
+      nomineeIds: [...state.nomineeIds],
+    }
+  )
+}
+
+function holdVoxFinalThreePrelude(
+  state: GameState,
+  key: string,
+  title: string,
+  text: string
+): boolean {
+  if (!isVoxPopuliActive(state) || !state.voxPopuli) return false
+  state.voxPopuli.finalThreePacingSeen ??= []
+  if (state.voxPopuli.finalThreePacingSeen.includes(key)) return false
+  state.voxPopuli.finalThreePacingSeen.push(key)
+  pushEvent(state, text, 'social', {
+    major: 'vox_final3_interlude',
+    broadcastPriority: 'critical',
+    finalThreePacingKey: key,
+    announcementTitle: title,
+    announcementSubtitle: text,
+  })
+  return true
+}
+
+function getFinalThreeActiveIds(state: GameState): string[] {
+  return state.players
+    .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+    .map((player) => player.id)
+}
+
+function isFinalThreePhase(phase: Phase): boolean {
+  return phase.startsWith('final3')
+}
+
+function beginFinalThreeController(state: GameState): void {
+  state.finalThree = {
+    mode: isVoxPopuliActive(state) ? 'vox_populi' : 'classic',
+    stage: 'part1',
+    openingSeen: false,
+    blockRevealSeen: false,
+    spectatorFinalPowerRevealSeen: false,
+    participantIds: getFinalThreeActiveIds(state),
+    part1: null,
+    part2: null,
+    part3: null,
+    finalPowerHolderId: null,
+    nomineeIds: [],
+    evicteeId: null,
+  }
+}
+
+/** Restore the durable controller for saves created before it existed. */
+function ensureFinalThreeController(state: GameState): void {
+  if (state.finalThree) return
+  if (!isFinalThreePhase(state.phase) && !state.f3Part1WinnerId && !state.f3Part2WinnerId) return
+
+  const participantIds = getFinalThreeActiveIds(state)
+  const part1WinnerId = state.f3Part1WinnerId ?? null
+  const part2WinnerId = state.f3Part2WinnerId ?? null
+  const stage =
+    state.phase === 'final3_decision'
+      ? state.awaitingFinal3Plea
+        ? 'ceremony'
+        : 'decision'
+      : state.phase === 'final3_comp3' || state.phase === 'final3_comp3_minigame'
+        ? 'part3'
+        : state.phase === 'final3_comp2' || state.phase === 'final3_comp2_minigame'
+          ? 'part2'
+          : 'part1'
+  state.finalThree = {
+    mode: isVoxPopuliActive(state) ? 'vox_populi' : 'classic',
+    stage,
+    // A legacy save should only replay an introduction or block reveal when it
+    // genuinely resumes at that exact presentation point.
+    openingSeen: state.phase !== 'final3',
+    blockRevealSeen: isVoxPopuliActive(state) || state.phase !== 'final3_comp3',
+    spectatorFinalPowerRevealSeen: false,
+    participantIds,
+    part1: part1WinnerId
+      ? { participantIds: [...participantIds], winnerId: part1WinnerId, seed: null }
+      : null,
+    part2: part2WinnerId
+      ? {
+          participantIds: participantIds.filter((id) => id !== part1WinnerId),
+          winnerId: part2WinnerId,
+          seed: null,
+        }
+      : null,
+    part3:
+      state.lohId && (state.phase === 'final3_decision' || state.awaitingFinal3Plea)
+        ? {
+            participantIds: [part1WinnerId, part2WinnerId].filter((id): id is string =>
+              Boolean(id)
+            ),
+            winnerId: state.lohId,
+            seed: null,
+          }
+        : null,
+    finalPowerHolderId: state.lohId ?? null,
+    nomineeIds: [...state.nomineeIds],
+    evicteeId: null,
+  }
+}
+
+function prepareFinalThreePart3Block(state: GameState): void {
+  // Vox Populi has no block at this point. Part 3 winner takes immunity and
+  // the audience chooses the remaining Final Two player after the appeal.
+  if (isVoxPopuliActive(state)) {
+    ensureFinalThreeController(state)
+    if (state.finalThree) state.finalThree.blockRevealSeen = true
+    return
+  }
+
+  const active = state.players.filter(
+    (player) => player.status !== 'evicted' && player.status !== 'jury'
+  )
+  const blockPlayer = active.find(
+    (player) => player.id !== state.f3Part1WinnerId && player.id !== state.f3Part2WinnerId
+  )
+  if (!blockPlayer) return
+
+  state.nomineeIds = [blockPlayer.id]
+  if (blockPlayer.status !== 'nominated') blockPlayer.status = 'nominated'
+  ensureFinalThreeController(state)
+  if (state.finalThree) {
+    state.finalThree.nomineeIds = [blockPlayer.id]
+    state.finalThree.blockRevealSeen = false
+  }
+}
+
+function recordFinalThreePartOutcome(
+  state: GameState,
+  part: 1 | 2 | 3,
+  winnerId: string,
+  participantIds: string[],
+  seed: number | null
+): void {
+  ensureFinalThreeController(state)
+  if (!state.finalThree) beginFinalThreeController(state)
+  const outcome = { participantIds: [...participantIds], winnerId, seed }
+  state.finalThree![part === 1 ? 'part1' : part === 2 ? 'part2' : 'part3'] = outcome
+  state.finalThree!.stage = part === 1 ? 'part2' : part === 2 ? 'part3' : 'decision'
+  if (part === 1) state.f3Part1WinnerId = winnerId
+  if (part === 2) state.f3Part2WinnerId = winnerId
+}
+
+function recordFinalThreePower(state: GameState, winnerId: string, nomineeIds: string[]): void {
+  ensureFinalThreeController(state)
+  if (!state.finalThree) beginFinalThreeController(state)
+  state.finalThree!.finalPowerHolderId = winnerId
+  state.finalThree!.nomineeIds = [...nomineeIds]
+  state.finalThree!.stage = isVoxPopuliActive(state) ? 'decision' : 'ceremony'
+}
+
+function completeFinalThreeController(state: GameState, evicteeId: string): void {
+  ensureFinalThreeController(state)
+  if (!state.finalThree) return
+  state.finalThree.evicteeId = evicteeId
+  state.finalThree.nomineeIds = state.finalThree.nomineeIds.filter((id) => id !== evicteeId)
+  state.finalThree.stage = 'complete'
+}
+
+/**
+ * Final Three is a self-contained Vox Populi ceremony.  Never allow a
+ * lingering Final Four nomination, safety, or competition result to leak into
+ * the next day: it reads as a broken story and can also make Play target the
+ * wrong blocker.
+ */
+function resetVoxFinalThreeRound(state: GameState): void {
+  state.lohId = null
+  state.prevHohId = null
+  state.nomineeIds = []
+  state.posWinnerId = null
+  state.replacementNeeded = false
+  state.povSavedId = null
+  state.replacementNomineeIds = []
+  state.povProtectedIds = []
+  state.lastHohCompFinisherId = null
+  state.lastHohCompFinisherType = null
+  state.publicSavedNomineeId = null
+  state.nominationContext = null
+  state.awaitingPublicSave = false
+  state.awaitingNominations = false
+  state.pendingNominee1Id = null
+  state.awaitingPovDecision = false
+  state.awaitingPovSaveTarget = false
+  state.awaitingHumanVote = false
+  state.awaitingTieBreak = false
+  state.tiedNomineeIds = null
+  state.awaitingFinal3Eviction = false
+  state.awaitingFinal3Plea = false
+  state.votes = {}
+  state.batteryLowVoteEffects = {}
+  state.voteResults = null
+  state.voteResultsMode = undefined
+  state.pendingEviction = null
+  state.pendingExitContext = null
+  state.minigameContext = null
+  state.f3Part1WinnerId = null
+  state.f3Part2WinnerId = null
+  state.finalThree = null
+  state.players.forEach((player) => {
+    if (['loh', 'nominated', 'pos', 'loh+pos', 'nominated+pos'].includes(player.status)) {
+      player.status = 'active'
+    }
+  })
+  if (state.voxPopuli) {
+    state.voxPopuli.immunityWinnerId = null
+    state.voxPopuli.autoNomineeId = null
+    state.voxPopuli.lastReplacementNomineeIds = []
+    state.voxPopuli.awaitingPublicVote = false
+    state.voxPopuli.publicVoteContext = null
+    state.voxPopuli.publicVotePercentages = null
+    state.voxPopuli.finalThreePacingSeen = []
+    state.voxPopuli.finalThreeAppeal = null
+    state.voxPopuli.finalThreeAppealUsed = false
+  }
+}
+
+function pushVoxFinalThreeResult(
+  state: GameState,
+  phase: Phase,
+  title: string,
+  subtitle: string
+): void {
+  pushEvent(state, subtitle, 'game', {
+    major: 'vox_final3_result',
+    phase,
+    broadcastPriority: 'critical',
+    forceOnTv: true,
+    announcementTitle: title,
+    announcementSubtitle: subtitle,
+  })
+}
+
+function pushClassicFinalThreePart1Result(
+  state: GameState,
+  winner: Player | undefined,
+  winnerId: string
+): void {
+  const winnerName = winner?.name ?? winnerId
+  const subtitle = `${winnerName} advances directly to Part 3. The other two finalists now compete for the last place in the Final Power Battle.`
+  pushEvent(state, subtitle, 'game', {
+    major: 'final3_part1_result',
+    phase: 'final3_comp2',
+    broadcastPriority: 'critical',
+    forceOnTv: true,
+    announcementTitle: 'Part 1 · Advancement',
+    announcementSubtitle: subtitle,
+  })
+}
+
+function pushClassicFinalThreePart2Result(
+  state: GameState,
+  winner: Player | undefined,
+  winnerId: string
+): void {
+  const winnerName = winner?.name ?? winnerId
+  const partOneWinnerName = state.players.find(
+    (player) => player.id === state.f3Part1WinnerId
+  )?.name
+  const subtitle = `${winnerName} takes the final place in Part 3, joining ${partOneWinnerName ?? 'the Part 1 winner'} in the Final Power Battle.`
+  pushEvent(state, subtitle, 'game', {
+    major: 'final3_part2_result',
+    phase: 'final3_comp3',
+    broadcastPriority: 'critical',
+    forceOnTv: true,
+    announcementTitle: 'Part 2 · Final qualifier',
+    announcementSubtitle: subtitle,
+  })
+}
+
+function pushVoxPostEvictionReaction(state: GameState, evictee: Player): void {
+  if (!isVoxPopuliActive(state)) return
+  const survivors = getAlivePlayers(state)
+  if (survivors.length <= 3 || survivors.length === 0) return
+  const affinityWithEvictee = (playerId: string): number => {
+    const outward = state.strategicRelationships?.[playerId]?.[evictee.id]?.affinity ?? 0
+    const inward = state.strategicRelationships?.[evictee.id]?.[playerId]?.affinity ?? 0
+    return (outward + inward) / 2
+  }
+  const ranked = survivors
+    .map((player) => ({ player, affinity: affinityWithEvictee(player.id) }))
+    .sort((left, right) => right.affinity - left.affinity)
+  const closest = ranked[0]
+  const rival = ranked[ranked.length - 1]
+  const seedOffset = [...evictee.id].reduce((sum, character) => sum + character.charCodeAt(0), 0)
+  const rng = mulberry32((state.seed ^ Math.imul(state.week + 1, 0x9e3779b1) ^ seedOffset) >>> 0)
+  const closeScenes = [
+    (name: string) => `${name} is crying quietly in the bedroom after ${evictee.name}'s exit.`,
+    (name: string) =>
+      `${name} has slipped into the yard to sob alone after saying goodbye to ${evictee.name}.`,
+    (name: string) =>
+      `${name} is clutching ${evictee.name}'s empty pillow, trying to hold it together.`,
+    (name: string) =>
+      `${name} is sitting silently by the pool, still shaken by ${evictee.name}'s elimination.`,
+    (name: string) =>
+      `${name} broke down in the dressing room once ${evictee.name}'s suitcase disappeared.`,
+    (name: string) => `${name} is being comforted in the bedroom after losing ${evictee.name}.`,
+  ]
+  const rivalScenes = [
+    (name: string) =>
+      `${name} has opened the sparkling cider. Their biggest rival, ${evictee.name}, is gone.`,
+    (name: string) =>
+      `${name} is already calling ${evictee.name}'s exit the turning point of the season.`,
+    (name: string) =>
+      `${name} cannot hide a relieved smile now that rival ${evictee.name} has left the Hub.`,
+    (name: string) => `${name} has quietly begun a victory lap after outlasting ${evictee.name}.`,
+    (name: string) =>
+      `${name} is telling allies that ${evictee.name}'s exit has opened the road to the finale.`,
+    (name: string) =>
+      `${name} raised a private toast in the kitchen after rival ${evictee.name} walked out.`,
+  ]
+  const useCloseScene = Boolean(closest && closest.affinity >= 25)
+  const useRivalScene = Boolean(!useCloseScene && rival && rival.affinity <= -25)
+  if (!useCloseScene && !useRivalScene) return
+  const subject = useCloseScene ? closest.player : rival.player
+  const pool = useCloseScene ? closeScenes : rivalScenes
+  const text = pool[Math.floor(rng() * pool.length)](subject.name)
+  pushEvent(state, text, 'social', {
+    voxPostEvictionReaction: true,
+    broadcastPriority: 'critical',
+  })
+}
+
+function emitCustomBroadcast(state: GameState, custom: CustomBroadcastMessage, phase: Phase) {
+  _flushingPhaseCustom = true
+  pushEvent(state, custom.text, custom.type, {
+    phase,
+    customBroadcastId: custom.id,
+    broadcastTemplateId: custom.key ?? custom.id,
+    broadcastOrder: custom.order ?? 10000,
+    broadcastLevel: custom.level,
+    forceOnTv: custom.forceOnTv !== false,
+    broadcastCampaign: custom.campaign ?? currentBroadcastCampaign(state),
+    ...(custom.level !== 'minor' && custom.major ? { major: custom.major } : {}),
+    ...(custom.level === 'critical' ? { broadcastPriority: 'critical' } : {}),
+    ...(custom.title ? { announcementTitle: custom.title } : {}),
+    ...(custom.level !== 'minor' ? { announcementSubtitle: custom.text } : {}),
+  })
+  _flushingPhaseCustom = false
+}
+
+function beginPhaseBroadcastSequence(state: GameState, phase: Phase) {
+  _activeBroadcastPhase = phase
+  _pendingPhaseCustoms = (state.customBroadcasts ?? [])
+    .filter(
+      (custom) =>
+        custom.enabled &&
+        custom.phase === phase &&
+        (!custom.campaign || custom.campaign === currentBroadcastCampaign(state)) &&
+        custom.text.trim() &&
+        !state.tvFeed.some(
+          (event) => event.meta?.week === state.week && event.meta?.customBroadcastId === custom.id
+        )
+    )
+    .sort((a, b) => (a.order ?? 10000) - (b.order ?? 10000))
+}
+
+function flushPhaseCustomsBefore(state: GameState, order: number) {
+  while (_pendingPhaseCustoms?.length && (_pendingPhaseCustoms[0].order ?? 10000) < order) {
+    const custom = _pendingPhaseCustoms.shift()!
+    emitCustomBroadcast(state, custom, _activeBroadcastPhase ?? custom.phase)
+  }
+}
+
+function finishPhaseBroadcastSequence(state: GameState) {
+  flushPhaseCustomsBefore(state, Number.POSITIVE_INFINITY)
+  _pendingPhaseCustoms = null
+  _activeBroadcastPhase = null
+}
+
+type CommitPublicSavePayload =
+  | string
+  | {
+      savedId: string
+    }
+
+/**
+ * Decide Tribunal membership at the moment an exit is committed.
+ *
+ * The Tribunal seat target stays locked to the starting cast. A committed
+ * reserve entrant adds one pre-Tribunal exit without changing the original
+ * cast-size record or the number of Tribunal seats.
+ */
+function evictedStatus(state: GameState, evictee: Player): 'evicted' | 'jury' {
+  if (isVoxPopuliActive(state) || evictee.tribunalEligible === false) return 'evicted'
+
+  const startingCastSize = state.cfg?.tribunalStartingCastSize ?? state.players.length
+  const tribunalSize = resolveTribunalSize(startingCastSize, state.cfg)
+  if (tribunalSize <= 0 || getTribunalMembers(state.players).length >= tribunalSize) {
+    return 'evicted'
+  }
+
+  const committedExits = state.players.filter(
+    (player) => player.status === 'evicted' || player.status === 'jury'
+  ).length
+  const admittedContestants = state.wildcardAdmissions?.length ?? 0
+  const preTribunalExits = preTribunalExitCount(
+    startingCastSize + admittedContestants,
+    tribunalSize
+  )
+  return committedExits < preTribunalExits ? 'evicted' : 'jury'
+}
+
+type WildcardTriggerType = 'double_elimination' | 'morning_shock' | 'self_elimination'
+
+function queueWildcardArrivalFromTrigger(state: GameState, triggerType: WildcardTriggerType) {
+  const opportunity = state.wildcardOpportunity
+  if (opportunity?.status !== 'selected' || !opportunity.playerId) return
+
+  const cancel = (reason: string) => {
+    state.wildcardOpportunity = { ...opportunity, status: 'cancelled', reason }
+  }
+  const startingCastSize = state.cfg?.tribunalStartingCastSize ?? state.players.length
+  if (startingCastSize !== 16 || state.mode === 'survival' || state.expansionMode != null) {
+    cancel('This reserve route is limited to standard 16-player Classic seasons.')
+    return
+  }
+  if (
+    state.cupidArrow?.status === 'scheduled' ||
+    state.cupidArrow?.status === 'active' ||
+    state.voxPopuli?.status === 'scheduled' ||
+    state.voxPopuli?.status === 'active'
+  ) {
+    cancel('This season has a separate format or arrival story.')
+    return
+  }
+  if (
+    state.twinShockConsumed !== true &&
+    state.players.some((player) => player.id === 'lia' || player.id === 'lia_ali')
+  ) {
+    cancel('Resolve the separate Twin Shock story before a reserve entry.')
+    return
+  }
+  if (state.wildcardAdmissions?.length) {
+    cancel('A reserve entrant has already joined this season.')
+    return
+  }
+  if (state.players.some((player) => player.status === 'jury') || state.tribunalPhaseAnnounced) {
+    cancel('The Tribunal has already begun.')
+    return
+  }
+  if (state.week > WILDCARD_LAST_TRIGGER_DAY) {
+    cancel('Reserve opportunities close after the first half of the season.')
+    return
+  }
+  const selectedProfile = getById(opportunity.playerId)
+  if (!selectedProfile?.avatar) {
+    cancel('The selected reserve does not have a complete profile and portrait.')
+    return
+  }
+
+  state.wildcardOpportunity = {
+    ...opportunity,
+    status: 'pending',
+    triggerType,
+    triggerDay: state.week,
+    arrivalDay: state.week + 1,
+  }
+}
+
+function archiveSeasonExitContext(state: GameState, playerId: string, exitMethodOverride?: string) {
+  const alreadyArchived = (state.history ?? []).some(
+    (event) =>
+      event.type === 'seasonExit' && event.week === state.week && event.data.playerId === playerId
+  )
+  if (alreadyArchived) return
+
+  const roundSnapshot =
+    state.pendingExitContext?.week === state.week ? state.pendingExitContext : null
+  const aliveCount = state.players.filter(
+    (player) => player.status !== 'evicted' && player.status !== 'jury'
+  ).length
+  const isFinalThreeDecision =
+    aliveCount === 3 && state.nomineeIds.length === 2 && Boolean(state.lohId)
+  const decisionMakerId = isVoxPopuliActive(state)
+    ? null
+    : state.phase === 'final4_eviction'
+      ? state.posWinnerId
+      : state.phase === 'final3_decision' || isFinalThreeDecision
+        ? state.lohId
+        : null
+  const leaderIds = isVoxPopuliActive(state)
+    ? []
+    : (roundSnapshot?.leaderIds ??
+      (state.coLohIds?.length ? [...state.coLohIds] : state.lohId ? [state.lohId] : []))
+  const pendingExitMethod =
+    state.pendingEviction?.evicteeId === playerId ? state.pendingEviction.exitMethod : undefined
+  const exitMethod =
+    exitMethodOverride ??
+    pendingExitMethod ??
+    (state.dayStartShock?.targetId === playerId
+      ? 'shock'
+      : isCupidArrowActive(state) && state.cupidArrow?.pendingPartnerEvictionId === playerId
+        ? 'linkedExit'
+        : decisionMakerId
+          ? 'directDecision'
+          : state.doubleEviction?.weekActive
+            ? 'doubleExit'
+            : 'vote')
+
+  state.history = [
+    ...(state.history ?? []),
+    {
+      type: 'seasonExit',
+      week: state.week,
+      data: {
+        playerId,
+        mode: isVoxPopuliActive(state)
+          ? 'vox_populi'
+          : isCupidArrowActive(state)
+            ? 'cupid'
+            : 'classic',
+        playerNamesById: Object.fromEntries(
+          state.players.map((player) => [player.id, player.name])
+        ),
+        leaderIds,
+        nomineeIds: roundSnapshot?.nomineeIds ?? [...state.nomineeIds],
+        votesByVoterId: roundSnapshot?.votesByVoterId ?? { ...(state.votes ?? {}) },
+        voteCounts: roundSnapshot?.voteCounts ?? { ...(state.voteResults ?? {}) },
+        decisionMakerId,
+        exitMethod,
+        doubleElimination: state.doubleEviction?.weekActive === true,
+        voxPopuli: isVoxPopuliActive(state),
+        nominationVoteCounts: isVoxPopuliActive(state)
+          ? { ...(state.voxPopuli?.nominationVoteCounts ?? {}) }
+          : undefined,
+        publicVotePercentages: isVoxPopuliActive(state)
+          ? { ...(state.voxPopuli?.publicVotePercentages ?? {}) }
+          : undefined,
+        automaticNomineeId: isVoxPopuliActive(state)
+          ? (state.voxPopuli?.autoNomineeId ?? state.lastHohCompFinisherId ?? null)
+          : undefined,
+      },
+      timestamp: Date.now(),
+    },
+  ]
+
+  const exit = state.history[state.history.length - 1]
+  const exitingPlayer = state.players.find((player) => player.id === playerId)
+  if (exitMethod === 'shock') {
+    queueWildcardArrivalFromTrigger(state, 'morning_shock')
+  } else if (exitMethod === 'selfEviction' && exitingPlayer && !exitingPlayer.isUser) {
+    queueWildcardArrivalFromTrigger(state, 'self_elimination')
+  } else if (exit?.data.doubleElimination === true) {
+    const sameDayDoubleExits = state.history.filter(
+      (event) =>
+        event.type === 'seasonExit' &&
+        event.week === state.week &&
+        event.data.doubleElimination === true
+    )
+    if (sameDayDoubleExits.length >= 2) {
+      queueWildcardArrivalFromTrigger(state, 'double_elimination')
+    }
+  }
+}
+
+/**
+ * Stamp the explicit season placement for a player at the moment they leave
+ * the house. This gives finale recap / archive views a reliable ordering
+ * source instead of inferring placement from the current array order.
+ * Also records the game week at eviction time so buildSummaries can derive
+ * how long each player survived (weeksAlive).
+ */
+function assignSeasonPlacementOnExit(state: GameState, playerId: string) {
+  const player = state.players.find((p) => p.id === playerId)
+  if (!player) return
+
+  archiveSeasonExitContext(state, playerId)
+
+  // Always stamp the eviction week (even for Battle Back returnees evicted a
+  // second time — their evictedAtWeek is cleared in completeBattleBack so this
+  // captures the second eviction's actual week).
+  player.evictedAtWeek = state.week
+
+  // Only assign seasonPlacement once; a player who won a Battle Back and was
+  // later evicted a second time keeps their original placement order.
+  if (typeof player.seasonPlacement === 'number') return
+
+  // Count houseguests still in the game at the moment the player leaves.
+  // Callers invoke this *before* mutating the player's status, so the exiting
+  // player is included in the count: 6 alive → evicted player finishes 6th.
+  const aliveCount = state.players.filter(
+    (p) => p.status !== 'evicted' && p.status !== 'jury'
+  ).length
+  player.seasonPlacement = aliveCount
+}
+
+function applyWildcardAdmission(state: GameState, wildcardId: string): boolean {
+  const eligibility = getWildcardAdmissionEligibility(state, wildcardId)
+  if (!eligibility.eligible || !eligibility.displacedPlayer || eligibility.rosterIndex == null) {
+    return false
+  }
+
+  const profile = getById(wildcardId)
+  if (!profile?.avatar) return false
+  const entrant: Player = {
+    id: profile.id,
+    name: profile.name,
+    avatar: profile.avatar,
+    sex: profile.sex,
+    age: profile.age,
+    status: 'active',
+    tribunalEligible: true,
+    lateEntrant: true,
+    enteredAtDay: state.week,
+    competitionProfile: profile.competitionProfile ?? getDefaultCompetitionProfile(),
+    stats: { lohWins: 0, posWins: 0, timesNominated: 0 },
+  }
+  const [identifiedEntrant] = assignAiGameIdentities(
+    [entrant],
+    state.seed,
+    getAiIdentityMode(state)
+  )
+
+  // A new contestant increases the field by one, so previously recorded
+  // placements shift down while each original exit record stays attached to
+  // its original identity.
+  for (const player of state.players) {
+    if (typeof player.seasonPlacement === 'number') player.seasonPlacement += 1
+    if (typeof player.firstExitPlacement === 'number') player.firstExitPlacement += 1
+  }
+
+  state.players.push(identifiedEntrant)
+  state.competitionSeasonStateByPlayerId = {
+    ...(state.competitionSeasonStateByPlayerId ?? {}),
+    [wildcardId]: getDefaultCompetitionSeasonState(),
+  }
+  state.wildcardAdmissions = [
+    ...(state.wildcardAdmissions ?? []),
+    {
+      playerId: wildcardId,
+      displacedPlayerId: eligibility.displacedPlayer.id,
+      rosterIndex: eligibility.rosterIndex,
+      enteredAtDay: state.week,
+      ...(state.wildcardOpportunity?.qaForced ? { forcedByQa: true } : {}),
+    },
+  ]
+  state.wildcardOpportunity = {
+    ...(state.wildcardOpportunity ?? { status: 'pending' as const }),
+    status: 'admitted',
+    playerId: wildcardId,
+  }
+  state.history = [
+    ...(state.history ?? []),
+    {
+      type: 'wildcardAdmission',
+      week: state.week,
+      data: {
+        playerId: wildcardId,
+        displacedPlayerId: eligibility.displacedPlayer.id,
+        triggerType: state.wildcardOpportunity.triggerType ?? 'qa',
+        triggerDay: state.wildcardOpportunity.triggerDay ?? state.week - 1,
+        forcedByQa: state.wildcardOpportunity.qaForced === true,
+      },
+      timestamp: Date.now(),
+    },
+  ]
+  pushEvent(
+    state,
+    `${profile.name} has entered The Hub as a reserve contestant. Their game begins today.`,
+    'game',
+    {
+      major: 'wildcard_arrival',
+      key: `wildcard_arrival_${wildcardId}_${state.week}`,
+      phase: 'week_start',
+      forceOnTv: true,
+      broadcastPriority: 'critical',
+      announcementTitle: 'A New Player Enters',
+    }
+  )
+  return true
+}
+
+/**
+ * Guarantee that `player.stats` is initialised and return it.
+ * All callers that need to write to `player.stats` should go through this
+ * helper to avoid duplicating the default-object creation inline.
+ */
+function ensurePlayerStats(player: Player): NonNullable<Player['stats']> {
+  if (!player.stats) player.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+  return player.stats
+}
+
+/**
+ * Increment timesNominated for a player by ID.
+ * Initializes stats if not already present.
+ */
+function incrementTimesNominated(state: GameState, playerId: string) {
+  const p = state.players.find((pl) => pl.id === playerId)
+  if (p) {
+    ensurePlayerStats(p).timesNominated += 1
+  }
+}
+
+type CompetitionSeasonUpdatePayload = Omit<CompetitionSeasonUpdateInput, 'playerIds'> & {
+  competitionIntents?: Record<string, CompetitionIntent>
+  gameKey?: string
+}
+type ApplyMinigameWinnerPayload = {
+  winnerId: string
+  coWinnerIds?: string[]
+  participants?: string[]
+  scores?: Record<string, number>
+  /** Canonical placement order supplied by the competition host (best → worst). */
+  placements?: string[]
+  /** Stable host run ID. Used to ensure mission progress is applied once. */
+  runId?: string
+  gameId?: string
+  originPhase?: string
+  attemptNumber?: number
+  prizeType?: string
+  winnerOverride?: { configuredWinnerId: string; measuredWinnerId: string }
+  /** Host game key for audits and result history. */
+  gameKey?: string
+  includePlacementBonuses?: boolean
+  skipSeasonUpdate?: boolean
+  /**
+   * Explicitly identify the last-place finisher for this LOH competition.
+   * When provided (and valid), this takes precedence over score-based derivation
+   * and the arbitrary nonWinners[0] fallback, ensuring the nomination auto-nominee
+   * matches the result shown on the competition scoreboard.
+   *
+   * For last-player-standing comps, pass the first-eliminated player.
+   * For scored comps, pass the lowest-scoring player.
+   */
+  lastPlaceId?: string | null
+  /**
+   * Competition type for the LOH comp. Stored in state.lastHohCompFinisherType and
+   * used to pick the compact disabled-option label in the nomination UI:
+   *   'scored'   → "Lowest Score"
+   *   'survival' → "First out"
+   * When omitted, defaults to 'scored' when scores are provided; when no scores
+   * are provided, the stored value will be null and the UI may apply its own default.
+   */
+  lastPlaceType?: 'scored' | 'survival'
+}
+
+function applyCompetitionSeasonUpdateToState(
+  state: GameState,
+  payload: CompetitionSeasonUpdatePayload
+) {
+  const playerIds = state.players.map((player) => player.id)
+  state.competitionSeasonStateByPlayerId = updateCompetitionSeasonStateByPlayerId(
+    state.competitionSeasonStateByPlayerId,
+    { playerIds, ...payload }
+  )
+}
+
+function getAlivePlayers(state: GameState): Player[] {
+  return state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+}
+
+function isPlayerActiveInHouse(state: GameState, playerId: string): boolean {
+  const player = state.players.find((candidate) => candidate.id === playerId)
+  return Boolean(player && player.status !== 'evicted' && player.status !== 'jury')
+}
+
+function canPlayerNominatePlayer(
+  state: GameState,
+  actorId: string | null | undefined,
+  targetId: string,
+  ignoreStoreProtection = false
+): boolean {
+  const isProtected =
+    !ignoreStoreProtection &&
+    state.storeNominationProtections?.some(
+      (protection) => protection.week === state.week && protection.targetId === targetId
+    )
+  return (
+    !isProtected &&
+    canPlayerTargetPlayer(state, actorId, targetId) &&
+    !isBellaHeirImmune(state, targetId)
+  )
+}
+
+/** True only when a Store nomination shield can actually remove this player from a ballot. */
+export function canStoreNominationProtectionAffectPlayer(
+  state: GameState,
+  targetId: string
+): boolean {
+  const target = state.players.find(
+    (player) => player.id === targetId && player.status !== 'evicted' && player.status !== 'jury'
+  )
+  if (!target || isBellaHeirImmune(state, targetId)) return false
+
+  const alive = getAlivePlayers(state)
+  if (isVoxPopuliActive(state)) {
+    const autoNomineeId = state.voxPopuli?.autoNomineeId ?? state.lastHohCompFinisherId
+    const immuneId = getVoxNominationImmunityId(state)
+    if (targetId === autoNomineeId || targetId === immuneId) return false
+    return alive.some(
+      (actor) => actor.id !== targetId && canPlayerNominatePlayer(state, actor.id, targetId, true)
+    )
+  }
+
+  const publicAutoNominee =
+    state.publicModeEnabled === true &&
+    state.doubleEviction?.weekActive !== true &&
+    state.lastHohCompFinisherId === targetId
+  if (publicAutoNominee) return false
+  const leaderIds = new Set(
+    state.coLohIds?.length ? state.coLohIds : state.lohId ? [state.lohId] : []
+  )
+  if (leaderIds.has(targetId)) return false
+  if (leaderIds.size === 0) return true
+  return [...leaderIds].some((leaderId) => canPlayerNominatePlayer(state, leaderId, targetId, true))
+}
+
+function usesPluralPlayerGrammar(
+  player: (Pick<Player, 'name'> & Partial<Pick<Player, 'twinMode'>>) | null | undefined
+): boolean {
+  if (!player) return false
+  return player.twinMode === 'combined' || player.name.includes('&')
+}
+
+function getPlayerBeVerb(
+  player: (Pick<Player, 'name'> & Partial<Pick<Player, 'twinMode'>>) | null | undefined,
+  singular: string,
+  plural: string
+): string {
+  return usesPluralPlayerGrammar(player) ? plural : singular
+}
+
+function getPlayerReflexive(
+  player: (Pick<Player, 'name'> & Partial<Pick<Player, 'twinMode'>>) | null | undefined
+): string {
+  return usesPluralPlayerGrammar(player) ? 'themselves' : 'themself'
+}
+
+function getTwinNomineeToSave(
+  state: GameState,
+  holderId: string | null | undefined,
+  nominees?: Player[]
+): Player | null {
+  if (!holderId || !isTwinShockActivePair(state)) return null
+  const nomineePool =
+    nominees ?? state.players.filter((player) => state.nomineeIds.includes(player.id))
+  return nomineePool.find((nominee) => isTwinAlliancePair(state, holderId, nominee.id)) ?? null
+}
+
+function pickSafetySaveTarget(
+  state: GameState,
+  holderId: string | null | undefined,
+  nominees: Player[],
+  rng: () => number
+): Player | null {
+  const twin = getTwinNomineeToSave(state, holderId, nominees)
+  if (twin) {
+    traceAiDecision({
+      kind: 'safety_save',
+      actorId: holderId ?? undefined,
+      actorName: state.players.find((player) => player.id === holderId)?.name,
+      chosenId: twin.id,
+      week: state.week,
+      phase: state.phase,
+      seed: state.seed,
+      reason: 'twin shock requires saving the paired nominee',
+      context: { forcedByTwinShock: true },
+      candidates: nominees.map((nominee) => ({
+        id: nominee.id,
+        label: nominee.name,
+        eligible: true,
+        total: nominee.id === twin.id ? 1 : 0,
+        factors: { twinPartner: nominee.id === twin.id },
+      })),
+    })
+    return twin
+  }
+  if (!holderId || nominees.length === 0) return null
+  const advice = isVoxPopuliActive(state)
+    ? null
+    : getCurrentLohSafetyAdvice(state, holderId, nominees)
+  const scored = nominees.map((nominee) => {
+    const breakdown = getSafetyRelationshipBreakdown(state, holderId, nominee)
+    // A named recommendation can tip a close decision. The holder still uses
+    // their own relationships, promises and strategy to choose the nominee.
+    const adviceBonus = advice?.advice === 'use' && advice.targetId === nominee.id ? 12 : 0
+    const score = breakdown.total + adviceBonus
+    return {
+      nominee,
+      score,
+      factors: adviceBonus
+        ? { ...breakdown.factors, lohRecommendation: adviceBonus, total: score }
+        : breakdown.factors,
+    }
+  })
+  const bestScore = Math.max(...scored.map((entry) => entry.score))
+  const chosen = seededPick(
+    rng,
+    scored.filter((entry) => entry.score === bestScore).map((entry) => entry.nominee)
+  )
+  traceAiDecision({
+    kind: 'safety_save',
+    actorId: holderId,
+    actorName: state.players.find((player) => player.id === holderId)?.name,
+    chosenId: chosen?.id ?? null,
+    week: state.week,
+    phase: state.phase,
+    seed: state.seed,
+    reason: 'highest safety target score',
+    context: { tiedBestCount: scored.filter((entry) => entry.score === bestScore).length },
+    candidates: scored.map<AiDecisionCandidate>((entry) => ({
+      id: entry.nominee.id,
+      label: entry.nominee.name,
+      total: entry.score,
+      factors: entry.factors,
+    })),
+  })
+  return chosen
+}
+
+function shouldUseSafetyForTwin(
+  state: GameState,
+  holderId: string | null | undefined,
+  nominees: Player[]
+): boolean {
+  return getTwinNomineeToSave(state, holderId, nominees) !== null
+}
+
+function getHumanPlayer(state: GameState): Player | undefined {
+  return state.players.find((player) => player.isUser)
+}
+
+function canHumanReceiveTwinShockConfessional(state: GameState): boolean {
+  const human = getHumanPlayer(state)
+  return Boolean(human && human.status !== 'evicted' && human.status !== 'jury')
+}
+
+function queueTwinShockConfessional(
+  state: GameState,
+  stage: NonNullable<GameState['twinShock']>['promptStage']
+) {
+  const twinShock = state.twinShock ?? createInitialTwinShockState()
+  twinShock.promptStage = stage
+  twinShock.queuedDay = state.week
+  twinShock.retryCount = 0
+  if (stage === 'day4_initial') {
+    twinShock.status = 'day4_pending'
+    state.twinShockActivatedSeason = state.season
+    state.liaForcedUntilTwinShockResolved = true
+  }
+  state.twinShock = twinShock
+  state.twistActivatedThisWeek = true
+  pushEvent(state, 'The Big Eye wants you in the Confessional.', 'diary', {
+    major: 'twin_shock_confessional',
+  })
+}
+
+function shouldQueueTwinShockBeforeDayEnd(state: GameState): boolean {
+  if (state.seasonDirectorPlan?.policy.lifetimeSpecials.twinShock.enabled === false) return false
+  if (isCupidArrowActive(state)) return false
+  if (!canHumanReceiveTwinShockConfessional(state)) return false
+  const twinShock = state.twinShock ?? createInitialTwinShockState()
+  const forcedTwinShock =
+    state.pendingForcedShock?.type === 'twinShock' &&
+    state.week >= state.pendingForcedShock.earliestWeek &&
+    twinShock.promptStage === null
+
+  if (
+    forcedTwinShock &&
+    twinShock.status !== 'resolved_discovered' &&
+    twinShock.status !== 'resolved_mission_success'
+  ) {
+    if (!isPlayerActiveInHouse(state, TWIN_SHOCK_LIA_ID)) {
+      state.pendingForcedShock = null
+      return false
+    }
+    queueTwinShockConfessional(state, 'day4_initial')
+    state.pendingForcedShock = null
+    return true
+  }
+
+  if (
+    !state.twinShockConsumed &&
+    twinShock.status === 'inactive' &&
+    state.week === 4 &&
+    isPlayerActiveInHouse(state, TWIN_SHOCK_LIA_ID)
+  ) {
+    queueTwinShockConfessional(state, 'day4_initial')
+    return true
+  }
+
+  if (
+    state.week === (twinShock.queuedDay ?? 4) + 1 &&
+    twinShock.status === 'day4_asked_no_correct_guess' &&
+    twinShock.promptStage === null
+  ) {
+    queueTwinShockConfessional(
+      state,
+      isPlayerActiveInHouse(state, TWIN_SHOCK_LIA_ID) ? 'day5_final' : 'secret_lost'
+    )
+    return true
+  }
+
+  return false
+}
+
+function pushTwinShockAnnouncement(state: GameState, text: string, major: string) {
+  pushEvent(state, text, 'twist', { major })
+}
+
+function ensureCompetitionStateForPlayer(state: GameState, playerId: string) {
+  if (!state.competitionSeasonStateByPlayerId) state.competitionSeasonStateByPlayerId = {}
+  if (!state.competitionSeasonStateByPlayerId[playerId]) {
+    state.competitionSeasonStateByPlayerId[playerId] = getDefaultCompetitionSeasonState()
+  }
+}
+
+function applyTwinShockFlipHint(state: GameState) {
+  const lia = state.players.find((player) => player.id === TWIN_SHOCK_LIA_ID)
+  if (!lia || lia.twinMode === 'combined') return
+  lia.avatar = TWIN_SHOCK_LIA_FLIP_AVATAR
+}
+
+function resolveTwinShockDiscovered(state: GameState) {
+  const lia = state.players.find((player) => player.id === TWIN_SHOCK_LIA_ID)
+  const humanName = getHumanPlayer(state)?.name ?? 'The player'
+  const fromName = lia?.name ?? 'Lia'
+  const fromAvatar = lia ? resolveAvatar(lia) : TWIN_SHOCK_LIA_AVATAR
+  if (lia) {
+    lia.name = 'Lia & Ali'
+    lia.avatar = TWIN_SHOCK_COMBINED_AVATAR
+    lia.twinMode = 'combined'
+    if (lia.status === 'evicted' || lia.status === 'jury') lia.status = 'active'
+  }
+  state.twinShockConsumed = true
+  state.twinShockResolution = 'discovered'
+  state.twinShockResolvedDay = state.week
+  state.twinShockDiscoveredByUser = true
+  state.liaForcedUntilTwinShockResolved = false
+  if (state.twinShock) {
+    state.twinShock.status = 'resolved_discovered'
+    state.twinShock.promptStage = null
+    state.twinShock.queuedDay = null
+    state.twinShock.retryCount = 0
+    state.twinShock.pendingRevealAnimation = {
+      type: 'combined',
+      playerId: TWIN_SHOCK_LIA_ID,
+      fromName,
+      fromAvatar,
+      toName: 'Lia & Ali',
+      toAvatar: TWIN_SHOCK_COMBINED_AVATAR,
+    }
+  }
+  pushTwinShockAnnouncement(
+    state,
+    `TWIN SHOCK! ${humanName} exposed that Lia had a twin. Lia has been secretly switching places with her twin sister, Ali. What a shock! Welcome Ali to the Hub. From now on, Lia & Ali will play as one contestant.`,
+    'twin_shock_discovered'
+  )
+}
+
+function resolveTwinShockMissionSuccess(state: GameState) {
+  const lia = state.players.find((player) => player.id === TWIN_SHOCK_LIA_ID)
+  const replacement =
+    state.players
+      .filter(
+        (player) =>
+          !player.isUser &&
+          player.id !== TWIN_SHOCK_LIA_ID &&
+          player.id !== TWIN_SHOCK_ALI_ID &&
+          (player.status === 'evicted' || player.status === 'jury')
+      )
+      .sort((a, b) => {
+        const placementDiff = (b.seasonPlacement ?? -1) - (a.seasonPlacement ?? -1)
+        if (placementDiff !== 0) return placementDiff
+        return (
+          (a.evictedAtWeek ?? Number.MAX_SAFE_INTEGER) -
+          (b.evictedAtWeek ?? Number.MAX_SAFE_INTEGER)
+        )
+      })[0] ?? null
+  const replacedPlayerId = replacement?.id ?? TWIN_SHOCK_ALI_ID
+  const replacedPlayerName = replacement?.name ?? 'an empty spot'
+  const replacedPlayerAvatar = replacement ? resolveAvatar(replacement) : TWIN_SHOCK_ALI_AVATAR
+
+  if (lia) {
+    lia.name = 'Lia'
+    lia.avatar = TWIN_SHOCK_LIA_AVATAR
+    delete lia.twinMode
+  }
+
+  if (replacement) {
+    replacement.id = TWIN_SHOCK_ALI_ID
+    replacement.name = 'Ali'
+    replacement.avatar = TWIN_SHOCK_ALI_AVATAR
+    replacement.status = 'active'
+    replacement.lateEntrant = true
+    replacement.evictedAtWeek = undefined
+    replacement.seasonPlacement = undefined
+    replacement.finalRank = undefined
+    replacement.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+  } else if (!state.players.some((player) => player.id === TWIN_SHOCK_ALI_ID)) {
+    state.players.push({
+      id: TWIN_SHOCK_ALI_ID,
+      name: 'Ali',
+      avatar: TWIN_SHOCK_ALI_AVATAR,
+      status: 'active',
+      lateEntrant: true,
+      stats: { lohWins: 0, posWins: 0, timesNominated: 0 },
+    })
+  }
+  ensureCompetitionStateForPlayer(state, TWIN_SHOCK_ALI_ID)
+  state.twinShockConsumed = true
+  state.twinShockResolution = 'mission_success'
+  state.twinShockResolvedDay = state.week
+  state.twinShockDiscoveredByUser = false
+  state.liaForcedUntilTwinShockResolved = false
+  if (state.twinShock) {
+    state.twinShock.status = 'resolved_mission_success'
+    state.twinShock.promptStage = null
+    state.twinShock.queuedDay = null
+    state.twinShock.retryCount = 0
+    state.twinShock.pendingRevealAnimation = {
+      type: 'ali_enters',
+      replacedPlayerId,
+      replacedPlayerName,
+      replacedPlayerAvatar,
+      incomingPlayerId: TWIN_SHOCK_ALI_ID,
+      incomingName: 'Ali',
+      incomingAvatar: TWIN_SHOCK_ALI_AVATAR,
+    }
+  }
+  pushTwinShockAnnouncement(
+    state,
+    replacement
+      ? `TWIN SHOCK REVEALED! Lia has been secretly switching places with her twin sister, Ali, all along. Because the secret mission was successful, Ali takes over ${replacedPlayerName}'s empty spot as a full contestant. Welcome Ali to the Hub!`
+      : 'TWIN SHOCK REVEALED! Lia has been secretly switching places with her twin sister, Ali, all along. Because the secret mission was successful, Ali has earned her place as a full contestant. Welcome Ali to the Hub!',
+    'twin_shock_mission_success'
+  )
+  if (lia) {
+    pushEvent(state, 'Lia and Ali share a powerful bond after the reveal.', 'social', {
+      major: 'twin_shock_bond',
+    })
+  }
+}
+
+function resolveTwinShockSecretLost(state: GameState) {
+  state.twinShockConsumed = true
+  state.twinShockResolution = 'secret_lost'
+  state.twinShockResolvedDay = state.week
+  state.twinShockDiscoveredByUser = false
+  state.liaForcedUntilTwinShockResolved = false
+  if (state.twinShock) {
+    state.twinShock.status = 'resolved_secret_lost'
+    state.twinShock.promptStage = null
+    state.twinShock.queuedDay = null
+    state.twinShock.retryCount = 0
+    state.twinShock.pendingRevealAnimation = null
+  }
+  state.history = [
+    ...(state.history ?? []),
+    {
+      type: 'twinShock',
+      week: state.week,
+      data: { resolution: 'secret_lost' },
+      timestamp: Date.now(),
+    },
+  ]
+}
+
+function applyTwinShockTurnResult(state: GameState, result: TwinShockTurnResult) {
+  const previousQueuedDay = state.twinShock?.queuedDay ?? null
+  const twinShock = state.twinShock ?? createInitialTwinShockState()
+  twinShock.status = result.status
+  twinShock.promptStage = result.promptStage
+  twinShock.retryCount = result.retryCount
+  if (result.promptStage === null && result.status !== 'day4_asked_no_correct_guess') {
+    twinShock.queuedDay = null
+  } else if (result.status === 'day4_asked_no_correct_guess' && previousQueuedDay !== null) {
+    twinShock.queuedDay = previousQueuedDay
+  }
+  state.twinShock = twinShock
+
+  if (result.status === 'day4_asked_no_correct_guess' && result.promptStage === null) {
+    applyTwinShockFlipHint(state)
+  }
+
+  if (result.resolution === 'resolved_discovered') resolveTwinShockDiscovered(state)
+  if (result.resolution === 'resolved_mission_success') resolveTwinShockMissionSuccess(state)
+  if (result.resolution === 'resolved_secret_lost') resolveTwinShockSecretLost(state)
+}
+
+function maybePushTwinShockClue(state: GameState) {
+  if (state.twinShockConsumed || !isPlayerActiveInHouse(state, TWIN_SHOCK_LIA_ID)) return
+  if (state.week < 2 || state.week > 4) return
+  const twinShock = state.twinShock ?? createInitialTwinShockState()
+  if (twinShock.cluesShownDays.includes(state.week) || twinShock.cluesShownDays.length >= 2) return
+
+  const clues = [
+    'Lia seemed unusually quiet this morning, then suddenly full of energy by lunch.',
+    'Lia laughed at a joke she claimed not to understand yesterday.',
+    'Someone mentioned that Lia looked different in the garden, but nobody pushed it further.',
+    'Lia forgot a conversation she had only a day ago.',
+  ]
+  const clue = clues[(state.week + twinShock.cluesShownDays.length) % clues.length]
+  twinShock.cluesShownDays = [...twinShock.cluesShownDays, state.week]
+  state.twinShock = twinShock
+  pushEvent(state, clue, 'social', {
+    major: 'twin_shock_clue',
+    // Foreshadowing stays visually subtle, but it must receive a real Faux-TV
+    // turn instead of existing only in the activity log.
+    broadcastLevel: 'minor',
+    forceOnTv: true,
+  })
+}
+
+function resolveCompetitionParticipants(state: GameState): string[] {
+  const alive = getAlivePlayers(state)
+  const aliveIds = alive.map((p) => p.id)
+  if (state.phase === 'loh_comp' && !isVoxPopuliActive(state)) {
+    const outgoingLohIds = new Set(expandCupidIds(state, getMissionOutgoingIds(state)))
+    const eligible = alive.filter((p) => !outgoingLohIds.has(p.id))
+    if (eligible.length > 0) {
+      return eligible.map((p) => p.id)
+    }
+    // Edge case: only the outgoing LOH remains alive; allow them for updates.
+    return aliveIds
+  }
+  return aliveIds
+}
+
+function buildFallbackScores(participants: string[], winnerId: string): Record<string, number> {
+  // Assumes winnerId is one of the participants; otherwise all scores stay at 0.
+  return Object.fromEntries(participants.map((id) => [id, id === winnerId ? 1 : 0]))
+}
+
+/**
+ * Mark a player as the Final LOH winner (Part 3 of Final 3).
+ * Sets the wonFinalHoh flag on their stats so it can be archived.
+ */
+function markFinalHohWinner(state: GameState, winnerId: string) {
+  const p = state.players.find((pl) => pl.id === winnerId)
+  if (p) {
+    if (!p.stats) p.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+    p.stats.wonFinalHoh = true
+  }
+}
+
+/**
+ * Apply an LOH winner to state.  Used by both advance() and completeMinigame().
+ */
+function applyLohWinner(state: GameState, winnerId: string, source?: string) {
+  if (import.meta.env.DEV) {
+    console.log('[applyLohWinner]', {
+      source: source ?? 'unknown',
+      previousHohId: state.lohId,
+      nextHohId: winnerId,
+      currentPhase: state.phase,
+    })
+  }
+  const voxPopuliActive = isVoxPopuliActive(state)
+  const voxFinalFour = voxPopuliActive && getAlivePlayers(state).length === 4
+  state.lohId = winnerId
+  if (voxPopuliActive && state.voxPopuli) {
+    state.voxPopuli.immunityWinnerId = voxFinalFour ? null : winnerId
+  }
+  const lohIds = new Set(getCupidRoleIds(state, winnerId))
+  state.players.forEach((p) => {
+    if (lohIds.has(p.id)) p.status = voxFinalFour ? 'active' : 'loh'
+    else if (p.status === 'loh') p.status = 'active'
+  })
+  const winner = state.players.find((p) => p.id === winnerId)
+  if (winner) {
+    if (!winner.stats) winner.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+    winner.stats.lohWins += 1
+  }
+  const partnerId = getCupidPartnerId(state, winnerId)
+  const partner = state.players.find((player) => player.id === partnerId)
+  if (voxPopuliActive) {
+    const finalFour = voxFinalFour
+    pushEvent(
+      state,
+      finalFour
+        ? `${winner?.name ?? winnerId} wins the Final 4 competition, but there is no immunity today. Last place will begin on the block, and the other three hubmates will each cast one secret nomination vote.`
+        : `${winner?.name ?? winnerId} won today's competition and is immune from nomination and the audience vote.`,
+      'game',
+      finalFour
+        ? {
+            major: 'vox_final4_immunity_comp',
+            broadcastPriority: 'critical',
+            announcementTitle: `${winner?.name ?? winnerId} Wins the Final 4 Competition`,
+            announcementSubtitle:
+              'There is no immunity today. Last place begins on the block, and the other three hubmates will each cast one secret vote.',
+          }
+        : undefined
+    )
+    return
+  }
+  pushEvent(
+    state,
+    partner
+      ? `${winner?.name ?? winnerId} won Leader of the Hub, making ${partner.name} co-LOH under Cupid's Arrow! 👑💘`
+      : `${winner?.name ?? winnerId} has won Leader of the Hub! 👑`,
+    'game',
+    {
+      phase: 'loh_results',
+      broadcastTemplateId: partner ? 'loh.cupid-winners' : 'loh.winner',
+    }
+  )
+}
+
+function announceVoxLastPlaceNominee(state: GameState): void {
+  if (!isVoxPopuliActive(state) || !state.voxPopuli || !state.lastHohCompFinisherId) {
+    return
+  }
+  state.voxPopuli.autoNomineeId = state.lastHohCompFinisherId
+  const lastPlaceName =
+    state.players.find((player) => player.id === state.lastHohCompFinisherId)?.name ??
+    state.lastHohCompFinisherId
+  pushEvent(
+    state,
+    `${lastPlaceName} finished in last place in the immunity competition and is now on the block for today's audience vote.`,
+    'game',
+    {
+      broadcastTemplateId: 'loh.vox-last-place',
+      playerId: state.lastHohCompFinisherId,
+    }
+  )
+}
+
+/**
+ * Apply a POS winner to state.  Handles Final-4 bypass logic.
+ * Returns the resolved next phase ('pos_results' or 'final4_eviction').
+ */
+function applyPosWinner(state: GameState, winnerId: string, alive: Player[]): Phase {
+  state.posWinnerId = winnerId
+  const posIds = new Set(getCupidRoleIds(state, winnerId))
+  const p = state.players.find((pl) => pl.id === winnerId)
+  state.players.forEach((player) => {
+    if (!posIds.has(player.id)) return
+    if (player.status === 'loh') player.status = 'loh+pos'
+    else if (player.status === 'nominated') player.status = 'nominated+pos'
+    else player.status = 'pos'
+  })
+  if (p) {
+    if (!p.stats) p.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+    p.stats.posWins += 1
+  }
+  const partnerId = getCupidPartnerId(state, winnerId)
+  const partner = state.players.find((player) => player.id === partnerId)
+  if (partnerId) addPovProtectedId(state, partnerId)
+  pushEvent(
+    state,
+    partner
+      ? `${p?.name ?? winnerId} won the Power of Safety. ${partner.name} also receives the immunity badge and cannot be named as a replacement! 🎭💘`
+      : `${p?.name ?? winnerId} has won the Power of Safety! 🎭`,
+    'game'
+  )
+
+  // ── Final 4 bypass (skip ceremony; POS holder has sole eviction vote) ──
+  // This rule always applies at Final 4 regardless of any config flags.
+  if (alive.length === 4 && !isVoxPopuliActive(state)) {
+    let f4Nominees = alive.filter((pl) => pl.id !== state.lohId && pl.id !== state.posWinnerId)
+    // Edge case: LOH wins POS → same ID excluded twice, leaving 3 candidates.
+    // Fall back to the original nominees from the nominations phase.
+    if (f4Nominees.length !== 2 && state.nomineeIds.length === 2) {
+      f4Nominees = alive.filter((pl) => state.nomineeIds.includes(pl.id))
+    }
+    if (f4Nominees.length === 2) {
+      const f4Names = f4Nominees.map((pl) => pl.name).join(' and ')
+      state.nomineeIds = f4Nominees.map((pl) => pl.id)
+      f4Nominees.forEach((pl) => {
+        const fp = state.players.find((x) => x.id === pl.id)
+        if (fp) {
+          if (fp.status === 'pos' || fp.status === 'loh+pos') {
+            fp.status = 'nominated+pos'
+          } else if (fp.status !== 'nominated' && fp.status !== 'nominated+pos') {
+            fp.status = 'nominated'
+          }
+        }
+      })
+      pushEvent(
+        state,
+        `Final 4! ${f4Names} are nominated. The POS holder has the sole vote to eliminate. 🏆`,
+        'game'
+      )
+      return 'final4_eviction'
+    } else {
+      pushEvent(
+        state,
+        `[Warning] Final 4 bypass skipped — unexpected eligible nominee count (${f4Nominees.length}).`,
+        'game'
+      )
+    }
+  }
+  return 'pos_results'
+}
+
+/** Remove the temporary Safety role badge once its ceremony is complete. */
+function clearExpiredSafetyStatuses(state: GameState) {
+  state.players.forEach((player) => {
+    if (player.status === 'pos') player.status = 'active'
+    else if (player.status === 'loh+pos') player.status = 'loh'
+    else if (player.status === 'nominated+pos') {
+      player.status = state.nomineeIds.includes(player.id) ? 'nominated' : 'active'
+    }
+  })
+}
+
+/** Clear nomination and Safety state as soon as the eviction cycle is resolved. */
+function clearResolvedEvictionRoles(state: GameState) {
+  state.players.forEach((player) => {
+    if (
+      player.status === 'nominated' ||
+      player.status === 'pos' ||
+      player.status === 'nominated+pos'
+    ) {
+      player.status = 'active'
+    } else if (player.status === 'loh+pos') {
+      player.status = 'loh'
+    }
+  })
+  state.nomineeIds = []
+  state.posWinnerId = null
+  state.povSavedId = null
+  state.povProtectedIds = []
+}
+
+/**
+ * Pick the winner from a set of participants and their scores.
+ * Returns the participant ID with the highest score.
+ *
+ * Ties are broken deterministically using an FNV-1a hash of the sorted tied
+ * IDs + high score, so equal tap counts never bias toward earlier IDs.
+ *
+ * Guard: participants with score <= 0 are excluded from winning unless all
+ * participants have score <= 0 (fallback to the full list).
+ */
+function determineWinner(participants: string[], scores: Record<string, number>): string {
+  if (participants.length === 0) {
+    throw new Error('determineWinner called with no participants')
+  }
+
+  // Prefer participants with a positive score; fall back to all if none qualify.
+  const positivePool = participants.filter((id) => (scores[id] ?? 0) > 0)
+  const pool = positivePool.length > 0 ? positivePool : participants
+
+  // Find the highest score within the eligible pool.
+  let highScore = -1
+  for (const id of pool) {
+    const score = scores[id] ?? 0
+    if (score > highScore) highScore = score
+  }
+
+  // Collect all pool participants that share the top score.
+  const topIds = pool.filter((id) => (scores[id] ?? 0) === highScore)
+
+  // Single winner — return directly.
+  if (topIds.length === 1) return topIds[0]
+
+  // Tie-break deterministically: hash sorted IDs + high score via FNV-1a.
+  const tieKey = `${[...topIds].sort().join('|')}:${highScore}`
+  let hash = 0x811c9dc5 >>> 0 // FNV-1a 32-bit offset basis
+  for (let i = 0; i < tieKey.length; i++) {
+    hash ^= tieKey.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0 // FNV-1a 32-bit prime
+  }
+  const rng = mulberry32(hash >>> 0)
+  return topIds[Math.floor(rng() * topIds.length)]
+}
+
+/**
+ * FNV-1a 32-bit hash for a string.
+ * Used to derive independent, deterministic per-voter RNG seeds from a
+ * voter's string ID, ensuring each AI voter produces a stable and distinct
+ * vote without needing a separate stored seed.
+ */
+function hashString(s: string): number {
+  let hash = 0x811c9dc5 >>> 0
+  for (let i = 0; i < s.length; i++) {
+    hash ^= s.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash
+}
+
+/** The same legal personal targets are used by conversations and actual ballots. */
+export function getAiEvictionVoteTargets(
+  state: GameState,
+  voterId: string | readonly string[],
+  nomineeIds: readonly string[] = state.nomineeIds
+): string[] {
+  const voters = typeof voterId === 'string' ? [voterId] : voterId
+  return nomineeIds.filter((nomineeId) =>
+    voters.every((id) => id !== nomineeId && canPlayerTargetPlayer(state, id, nomineeId))
+  )
+}
+
+/** Rank real motives and surviving commitments, with stable uncertainty within a decision. */
+export function chooseAiEvictionVote(
+  state: GameState,
+  voterId: string,
+  nomineeIds: string[],
+  gameSeed: number
+): string {
+  if (nomineeIds.length <= 1) return nomineeIds[0]
+
+  const voter = state.players.find((player) => player.id === voterId)
+  const voterIdentity = voter?.aiGameIdentity
+  const executedBackdoorTargetId =
+    state.lohNominationPlan?.week === state.week &&
+    state.lohNominationPlan.lohId === state.lohId &&
+    state.lohNominationPlan.strategy === 'backdoor' &&
+    state.lohNominationPlan.status === 'executed'
+      ? state.lohNominationPlan.targetId
+      : null
+  const scored = nomineeIds.map((nomineeId) => {
+    const nominee = state.players.find((player) => player.id === nomineeId)
+    const relationship = getStrategicRelationship(state, voterId, nomineeId)
+    const allianceRead = getStrategicAllianceDecisionRead(state, voterId, nomineeId)
+    const tags = new Set(relationship?.tags ?? [])
+    const affinity = relationship?.affinity ?? 0
+    const threat = nominee ? getAiThreatScore(state, nominee, { actorId: voterId }) : 0
+    const socialRead = state.strategicThreatReadsByActorId?.[voterId]?.[nomineeId]
+    const socialThreat = socialRead?.score ?? 0
+    const rng = mulberry32(
+      (gameSeed ^ hashString(`vote:${state.week}:${voterId}:${nomineeId}`)) >>> 0
+    )
+    const randomDraw = rng()
+
+    const grace = getEarlyHumanEvictionGrace(state, nominee, affinity, tags)
+    // An executed backdoor carries the LOH's strategic intent into the vote.
+    // It is meaningful pressure, not an automatic eviction: alliance/romance
+    // protection and their existing backstab rules are applied afterward and
+    // can still outweigh it.
+    const backdoorTargetContribution = nomineeId === executedBackdoorTargetId ? 30 : 0
+    const factors: Record<string, AiDecisionFactor> = {
+      threatContribution: (threat - socialThreat) * 8,
+      socialInfluenceThreat: socialThreat * 8,
+      observedPersuasion: socialRead?.persuasion ?? 0,
+      observedNetworkReach: socialRead?.networkReach ?? 0,
+      publicStrategicRespect: socialRead?.publicRespect ?? 0,
+      estimatedTribunalAppeal: socialRead?.juryAppeal ?? 0,
+      affinityPenalty: -affinity,
+      randomContribution: randomDraw * 4,
+      earlyHumanGrace: -grace * 1.35,
+      tags: [...tags].join(', ') || 'none',
+    }
+    const knownJealousy = getKnownRomanticRivalPressure(state, voterId, nomineeId)
+    factors.knownRomanticRivalJealousy = knownJealousy.contribution
+    factors.jealousyPartnerId = knownJealousy.partnerId
+    factors.jealousyEvidenceDay = knownJealousy.evidenceDay
+    factors.jealousyEvidenceConfidence = knownJealousy.confidence
+    factors.jealousyEvidenceSource = knownJealousy.source
+    if (backdoorTargetContribution > 0) {
+      factors.backdoorTargetContribution = backdoorTargetContribution
+    }
+    const alliancePlanContribution = state.dramaSocialMode
+      ? allianceRead.currentTargetPressure * 52 + allianceRead.fallbackTargetPressure * 23
+      : 0
+    factors.realityAlliancePlanContribution = alliancePlanContribution
+    factors.realityAllianceProtection = allianceRead.sharedProtection
+    let score =
+      threat * 8 -
+      affinity +
+      randomDraw * 4 +
+      knownJealousy.contribution -
+      grace * 1.35 +
+      backdoorTargetContribution +
+      alliancePlanContribution
+    if (tags.has('target')) {
+      score += 25
+      factors.target = 25
+    }
+    if (tags.has('betrayal')) {
+      score += 35
+      factors.betrayal = 35
+    }
+    if (tags.has('protection') || tags.has('shield')) {
+      score -= 20
+      factors.protection = -20
+    }
+    const hasRomanticBond = tags.has('romance') || tags.has('bromance')
+    const feelings = relationship?.reality
+    const strain = feelings
+      ? Math.max(0, 35 - feelings.trust) / 85 +
+        feelings.resentment / 140 +
+        Math.max(0, feelings.suspicion - 25) / 180
+      : Math.max(0, 30 - affinity) / 100
+    const competitionPressure = Math.max(0, threat - 6) / 12
+    const strategicRomancePressure = hasRomanticBond
+      ? Math.max(0, (feelings?.romanticStrategy ?? 0) - (feelings?.romanticSincerity ?? 0)) * 0.7
+      : 0
+    const endgamePressure =
+      state.week >= 7 &&
+      state.players.filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+        .length <= 6
+        ? Math.max(0, betrayalChanceModifier(voterIdentity)) * 1.5
+        : 0
+    const motivePressure = clampStrategicAllianceUnit(
+      strain +
+        (tags.has('betrayal') ? 0.6 : 0) +
+        allianceRead.currentTargetPressure * 0.8 +
+        allianceRead.fallbackTargetPressure * 0.3 +
+        (hasRomanticBond
+          ? allianceRead.betrayalPressure * 0.25
+          : allianceRead.betrayalPressure * 1.2) +
+        competitionPressure +
+        strategicRomancePressure +
+        endgamePressure +
+        knownJealousy.contribution / 110
+    )
+    factors.loyaltyConflictPressure = motivePressure
+    factors.loyaltyConflictReasons =
+      [
+        ...(strain > 0.1 ? ['damaged trust'] : []),
+        ...(tags.has('betrayal') ? ['unresolved betrayal'] : []),
+        ...(allianceRead.currentTargetPressure > 0 ? ['competing alliance plan'] : []),
+        ...(competitionPressure > 0 ? ['competition threat'] : []),
+        ...(strategicRomancePressure > 0.1 ? ['strategic romance'] : []),
+        ...(endgamePressure > 0 ? ['endgame ambition'] : []),
+        ...(allianceRead.actorInfiltrator ? ['secondary allegiance'] : []),
+      ].join(', ') || 'no significant loyalty conflict'
+    let backstabRoll: number | null = null
+    let backstabChance: number | null = null
+    if (hasRomanticBond) {
+      // Uncertainty can tip an existing conflict; it cannot invent a 250-point
+      // reversal in an otherwise healthy romance. Independent pacts still count.
+      backstabChance = Math.min(
+        0.35,
+        motivePressure * (0.18 + Math.max(0, betrayalChanceModifier(voterIdentity)))
+      )
+      backstabRoll = rng()
+      factors.backstabChance = backstabChance
+      factors.backstabRoll = backstabRoll
+      const romanceProtection =
+        -(125 + allianceRead.sharedProtection * 35 + allianceIdentityBias(voterIdentity)) *
+        (backstabRoll < backstabChance ? 1 - motivePressure * 0.65 : 1)
+      score += romanceProtection
+      factors.romanceProtection = romanceProtection
+      if (backstabRoll < backstabChance) {
+        const contribution = motivePressure * (40 + motivePressure * 70)
+        score += contribution
+        factors.romanceBackstab = contribution
+      }
+    } else if (tags.has('alliance') || allianceRead.sharedAllianceCount > 0) {
+      if (
+        state.dramaSocialMode &&
+        state.strategicAlliances !== undefined &&
+        allianceRead.sharedAllianceCount > 0
+      ) {
+        backstabChance = Math.min(
+          0.5,
+          motivePressure * (0.32 + Math.max(0, betrayalChanceModifier(voterIdentity)))
+        )
+        backstabRoll = rng()
+        factors.backstabChance = backstabChance
+        factors.backstabRoll = backstabRoll
+        factors.realityAllianceBetrayalPressure = allianceRead.betrayalPressure
+        const allianceProtection =
+          (-(25 + Math.min(1.2, allianceRead.sharedProtection) * 95) -
+            allianceIdentityBias(voterIdentity) * Math.min(1, allianceRead.sharedProtection)) *
+          (backstabRoll < backstabChance ? 1 - motivePressure * 0.65 : 1)
+        score += allianceProtection
+        factors.allianceProtection = allianceProtection
+        if (backstabRoll < backstabChance) {
+          const backstabContribution = motivePressure * (40 + motivePressure * 70)
+          score += backstabContribution
+          factors.allianceBackstab = backstabContribution
+        }
+      } else {
+        backstabChance = Math.min(
+          0.5,
+          motivePressure * (0.32 + Math.max(0, betrayalChanceModifier(voterIdentity)))
+        )
+        backstabRoll = rng()
+        factors.backstabChance = backstabChance
+        factors.backstabRoll = backstabRoll
+        const allianceProtection =
+          -(90 + allianceIdentityBias(voterIdentity)) *
+          (backstabRoll < backstabChance ? 1 - motivePressure * 0.65 : 1)
+        score += allianceProtection
+        factors.allianceProtection = allianceProtection
+        if (backstabRoll < backstabChance) {
+          const contribution = motivePressure * (40 + motivePressure * 70)
+          score += contribution
+          factors.allianceBackstab = contribution
+        }
+      }
+    }
+
+    if (voterIdentity?.archetype === 'chaos_agent') {
+      const chaosDraw = rng()
+      score += chaosDraw * 12
+      factors.chaosDraw = chaosDraw
+      factors.chaosContribution = chaosDraw * 12
+    }
+    if (voterIdentity?.archetype === 'active_floater') {
+      const floaterContribution = -Math.max(0, 7 - threat) * 2
+      score += floaterContribution
+      factors.floaterContribution = floaterContribution
+    }
+
+    return { nomineeId, score, factors, backstabRoll, backstabChance }
+  })
+
+  scored.sort((a, b) => b.score - a.score || a.nomineeId.localeCompare(b.nomineeId))
+  traceAiDecision({
+    kind: 'eviction_vote',
+    actorId: voterId,
+    actorName: voter?.name,
+    chosenId: scored[0].nomineeId,
+    week: state.week,
+    phase: state.phase,
+    seed: gameSeed,
+    reason: executedBackdoorTargetId
+      ? 'highest relationship-aware elimination score with executed replacement target pressure'
+      : 'highest relationship-aware elimination score',
+    context: {
+      nomineeIds: nomineeIds.join(', '),
+      ...(executedBackdoorTargetId ? { backdoorTargetId: executedBackdoorTargetId } : {}),
+    },
+    candidates: scored.map<AiDecisionCandidate>((entry) => ({
+      id: entry.nomineeId,
+      label: state.players.find((player) => player.id === entry.nomineeId)?.name,
+      total: entry.score,
+      factors: entry.factors,
+    })),
+  })
+  return scored[0].nomineeId
+}
+
+function chooseCupidPairEvictionVote(
+  state: GameState,
+  voterIds: string[],
+  nomineeIds: string[],
+  gameSeed: number
+): string {
+  const candidatePlayers = collapseCupidCandidates(
+    state,
+    nomineeIds
+      .map((id) => state.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+  )
+  const candidateIds = candidatePlayers.map((player) => player.id)
+  const effectiveCandidateIds = candidateIds.length > 0 ? candidateIds : nomineeIds
+  const preferences = voterIds.map((voterId) =>
+    chooseAiEvictionVote(state, voterId, effectiveCandidateIds, gameSeed)
+  )
+  const preferredPairIds = preferences.map(
+    (targetId) => getCupidPair(state, targetId)?.id ?? `solo:${targetId}`
+  )
+  if (preferredPairIds.every((pairId) => pairId === preferredPairIds[0])) return preferences[0]
+
+  const consensusRng = mulberry32(
+    (gameSeed ^
+      hashString(
+        `pair-vote:${state.week}:${[...voterIds].sort().join('|')}:${preferences.join('|')}`
+      )) >>>
+      0
+  )
+  return preferences[Math.floor(consensusRng() * preferences.length)]
+}
+
+function applyOneVoteDeductionToHuman(state: GameState): boolean {
+  if (!state.voteResults) return false
+
+  const humanPlayer = state.players.find((player) => player.isUser)
+  if (!humanPlayer || !(humanPlayer.id in state.voteResults)) return false
+  const previousCount = state.voteResults[humanPlayer.id] ?? 0
+  if (previousCount <= 0) return false
+
+  state.voteResults[humanPlayer.id] = Math.max(0, previousCount - 1)
+  if (state.pendingExitContext) {
+    state.pendingExitContext.voteCounts = { ...state.voteResults }
+  }
+
+  let maxVotes = -1
+  for (const id of state.nomineeIds) {
+    const count = state.voteResults[id] ?? 0
+    if (count > maxVotes) maxVotes = count
+  }
+  const topNominees = state.nomineeIds.filter((id) => (state.voteResults![id] ?? 0) === maxVotes)
+
+  if (topNominees.length === 1) {
+    const newEvictee = state.players.find((player) => player.id === topNominees[0])
+    if (newEvictee) {
+      state.awaitingTieBreak = false
+      state.awaitingPosTieBreak = false
+      state.tiedNomineeIds = null
+      state.pendingEviction = {
+        evicteeId: newEvictee.id,
+        evictionMessage: `${newEvictee.name}, you have been eliminated from the Hub. 🚪`,
+      }
+    }
+  } else {
+    state.pendingEviction = null
+    const isCoLohDay = Array.isArray(state.coLohIds) && state.coLohIds.length >= 2
+    const tieBreakerPlayerId = getClassicEvictionTieBreakerId(state)
+    const tieBreakerPlayer = state.players.find((player) => player.id === tieBreakerPlayerId)
+    const usesPosTieBreaker =
+      isCoLohDay ||
+      (tieBreakerPlayerId != null &&
+        tieBreakerPlayerId === state.posWinnerId &&
+        tieBreakerPlayerId !== state.lohId)
+    const tiedNames = topNominees
+      .map((id) => state.players.find((player) => player.id === id)?.name ?? id)
+      .join(' and ')
+
+    state.tiedNomineeIds = topNominees
+    if (tieBreakerPlayer?.isUser) {
+      state.awaitingTieBreak = true
+      state.awaitingPosTieBreak = usesPosTieBreaker
+      const roleLabel = usesPosTieBreaker ? 'as POS holder' : 'as LOH'
+      pushEvent(
+        state,
+        `It's a tie between ${tiedNames}! ${tieBreakerPlayer.name}, ${roleLabel}, you must break the tie. 🗳️`,
+        'game'
+      )
+    } else {
+      state.awaitingTieBreak = false
+      state.awaitingPosTieBreak = false
+      const decisionSeed = (state.seed ^ 0xdeadbeef) >>> 0
+      const decisionMakerId = tieBreakerPlayerId ?? state.lohId ?? state.posWinnerId
+      const decision = decisionMakerId
+        ? chooseStrategicEliminationCandidates(
+            state,
+            decisionMakerId,
+            topNominees,
+            1,
+            'ordinary_tie',
+            decisionSeed
+          )
+        : null
+      if (decisionMakerId && decision) {
+        traceStrategicEliminationChoice(
+          state,
+          decisionMakerId,
+          decision,
+          'ordinary_tie',
+          decisionSeed
+        )
+      }
+      const evicteeId = decision?.selectedIds[0] ?? topNominees[0]
+      const evicted = state.players.find((player) => player.id === evicteeId)
+      if (evicted) {
+        const evictionMessage = tieBreakerPlayer
+          ? `${tieBreakerPlayer.name} breaks the tie, voting to eliminate ${evicted.name}.${decision?.publicRationale ? ` ${decision.publicRationale}` : ''} ${evicted.name} has been eliminated from the Hub. 🗳️`
+          : `${evicted.name} has been eliminated from the Hub. 🚪`
+        state.pendingEviction = { evicteeId: evicted.id, evictionMessage }
+      }
+    }
+  }
+
+  return true
+}
+
+const gameSlice = createSlice({
+  name: 'game',
+  initialState,
+  reducers: {
+    archivePulseChronicle(state, action: PayloadAction<import('../types').PulseChronicle>) {
+      const chronicle = action.payload
+      if (!chronicle.complete || chronicle.season !== state.season) return
+      const episodes = state.pulseChronicles ?? []
+      const episodeKey = chronicle.episodeKey ?? `day:${chronicle.day}`
+      // Keep each final script stable while allowing a numbered day and its weekend episodes to coexist.
+      if (
+        episodes.some(
+          (entry) =>
+            entry.season === chronicle.season &&
+            (entry.episodeKey ?? `day:${entry.day}`) === episodeKey
+        )
+      )
+        return
+      state.pulseChronicles = [...episodes, { ...chronicle, episodeKey }]
+        .sort((a, b) => a.day - b.day || (a.episodeLabel ?? '').localeCompare(b.episodeLabel ?? ''))
+        .slice(-90)
+    },
+    setPhase(state, action: PayloadAction<Phase>) {
+      state.phase = action.payload
+    },
+    advanceWeek(state) {
+      state.week += 1
+      state.phase = 'week_start'
+      state.holdTheWallSafetyDeal = null
+      settleSecretMissionArrival(state)
+    },
+    updatePlayer(state, action: PayloadAction<Player>) {
+      const idx = state.players.findIndex((p) => p.id === action.payload.id)
+      if (idx !== -1) {
+        const previous = state.players[idx]
+        const player = {
+          ...previous,
+          ...action.payload,
+          confessionalMisconduct:
+            action.payload.confessionalMisconduct ?? previous.confessionalMisconduct,
+        }
+        if (
+          player.confessionalMisconduct?.season === state.season &&
+          player.confessionalMisconduct.administrativelyRemoved
+        ) {
+          player.status = 'evicted'
+          player.tribunalEligible = false
+        }
+        state.players[idx] = player
+      }
+    },
+    recordConfessionalMisconduct(
+      state,
+      action: PayloadAction<{
+        playerId: string
+        violation: NonNullable<Player['confessionalMisconduct']>['lastViolation']
+      }>
+    ) {
+      const player = state.players.find((candidate) => candidate.id === action.payload.playerId)
+      if (!player || player.status === 'evicted' || player.status === 'jury') return
+
+      const previous =
+        player.confessionalMisconduct?.season === state.season
+          ? player.confessionalMisconduct
+          : undefined
+      const strikes = (previous?.strikes ?? 0) + 1
+      const administrativelyRemoved = strikes >= 3
+      player.confessionalMisconduct = {
+        season: state.season,
+        strikes,
+        lastViolation: action.payload.violation,
+        administrativelyRemoved,
+      }
+
+      if (!administrativelyRemoved) return
+
+      // Treat this as an extraordinary removal: it is final for this season,
+      // outside the Tribunal, and ineligible for Battle Back.
+      assignSeasonPlacementOnExit(state, player.id)
+      player.status = 'evicted'
+      player.tribunalEligible = false
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== player.id)
+      if (state.lohId === player.id) state.lohId = null
+      if (state.posWinnerId === player.id) state.posWinnerId = null
+      if (state.povSavedId === player.id) state.povSavedId = null
+      if (state.povProtectedIds?.includes(player.id)) {
+        state.povProtectedIds = state.povProtectedIds.filter((id) => id !== player.id)
+      }
+      if (state.pendingNominee1Id === player.id) state.pendingNominee1Id = null
+      if (state.pendingEviction?.evicteeId === player.id) state.pendingEviction = null
+      if (state.doubleEviction?.pendingSecondEviction?.evicteeId === player.id) {
+        state.doubleEviction.pendingSecondEviction = null
+      }
+      if (state.coLohIds?.includes(player.id)) {
+        state.coLohIds = state.coLohIds.filter((id) => id !== player.id)
+        if (state.coLohIds.length === 0) state.coLohIds = null
+      }
+      if (state.coLohNomineeByCoLohId && player.id in state.coLohNomineeByCoLohId) {
+        delete state.coLohNomineeByCoLohId[player.id]
+      }
+      if (state.coLohReplacementOwnerId === player.id) state.coLohReplacementOwnerId = null
+
+      state.replacementNeeded = false
+      state.awaitingPublicSave = false
+      state.awaitingNominations = false
+      state.awaitingPovDecision = false
+      state.awaitingPovSaveTarget = false
+      state.awaitingHumanVote = false
+      state.awaitingTieBreak = false
+      state.awaitingPosTieBreak = false
+      state.awaitingCoLohNomination = false
+      state.awaitingMissionImmunityOffer = false
+      state.tiedNomineeIds = null
+      state.awaitingFinal3Eviction = false
+      state.awaitingFinal3Plea = false
+      state.evictionSplashId = null
+      state.votes = {}
+      state.voteResults = null
+
+      pushEvent(
+        state,
+        player.name +
+          ' was removed by The Big Eye after repeated Confessional misconduct. They are ineligible for the Tribunal and any return this season.',
+        'game'
+      )
+    },
+    syncStrategicRelationships(
+      state,
+      action: PayloadAction<NonNullable<GameState['strategicRelationships']>>
+    ) {
+      state.strategicRelationships = action.payload
+      if (state.bellaWill?.active && !state.bellaWill.debugForced) {
+        const heirId = chooseBellaHeir(state)
+        if (heirId !== state.bellaWill.heirId) {
+          state.bellaWill.heirId = heirId
+          state.bellaWill.lastHeirUpdateWeek = state.week
+        }
+      }
+    },
+    syncStrategicThreatReads(
+      state,
+      action: PayloadAction<NonNullable<GameState['strategicThreatReadsByActorId']>>
+    ) {
+      state.strategicThreatReadsByActorId = action.payload
+    },
+    syncStrategicAlliances(
+      state,
+      action: PayloadAction<NonNullable<GameState['strategicAlliances']>>
+    ) {
+      state.strategicAlliances = action.payload
+    },
+    setDramaSocialMode(state, action: PayloadAction<boolean>) {
+      state.dramaSocialMode = action.payload
+    },
+    /**
+     * Changes Public Mode for an in-progress Classic season without mutating
+     * an active weekly cycle. The next Day Start is the normal safe boundary;
+     * opening and day-boundary screens can apply it immediately.
+     */
+    requestPublicModeChange(state, action: PayloadAction<boolean>) {
+      if (state.mode === 'survival' || isVoxPopuliActive(state)) return
+
+      const requested = action.payload
+      if (state.publicModeEnabled === requested) {
+        state.pendingPublicModeEnabled = null
+        return
+      }
+
+      const isSafeBoundary = ['season_start', 'week_start', 'week_end'].includes(state.phase)
+      if (isSafeBoundary) {
+        state.pendingPublicModeEnabled = requested
+        applyPendingPublicModeChange(state, state.phase)
+        return
+      }
+
+      state.pendingPublicModeEnabled = requested
+      pushEvent(
+        state,
+        requested
+          ? '📡 Public Mode will enter at the next Day Start. The current cycle stays intact.'
+          : '📡 Public Mode will leave at the next Day Start. The current cycle stays intact.',
+        'game',
+        { phase: state.phase }
+      )
+    },
+    setLohSocialPlan(state, action: PayloadAction<NonNullable<GameState['lohSocialPlan']>>) {
+      state.lohSocialPlan = action.payload
+    },
+    recordHoldTheWallSafetyDeal(
+      state,
+      action: PayloadAction<NonNullable<GameState['holdTheWallSafetyDeal']>>
+    ) {
+      state.holdTheWallSafetyDeal = action.payload
+    },
+    adoptSuggestedReplacementTarget(
+      state,
+      action: PayloadAction<{ lohId: string; targetId: string; suggestedById: string }>
+    ) {
+      const plan = state.lohNominationPlan
+      if (
+        !plan ||
+        plan.week !== state.week ||
+        plan.lohId !== action.payload.lohId ||
+        plan.strategy === 'backdoor'
+      ) {
+        return
+      }
+      const target = state.players.find((player) => player.id === action.payload.targetId)
+      if (
+        !target ||
+        target.status !== 'active' ||
+        target.id === state.lohId ||
+        target.id === state.posWinnerId ||
+        state.nomineeIds.includes(target.id) ||
+        (state.povProtectedIds ?? []).includes(target.id)
+      ) {
+        return
+      }
+      plan.replacementTargetOverrideId = target.id
+      plan.replacementTargetId = target.id
+      if (state.lohSocialPlan?.week === state.week && state.lohSocialPlan.lohId === state.lohId) {
+        state.lohSocialPlan.backupTargetId = target.id
+      }
+    },
+    setLohSafetyAdvice(state, action: PayloadAction<NonNullable<GameState['lohSafetyAdvice']>>) {
+      state.lohSafetyAdvice = action.payload
+    },
+    addTvEvent(state, action: PayloadAction<Omit<TvEvent, 'id' | 'timestamp'>>) {
+      const event = pushEvent(state, action.payload.text, action.payload.type, {
+        ...(action.payload.meta ?? {}),
+        ...(action.payload.major ? { major: action.payload.major } : {}),
+      })
+      if (event) {
+        event.channels = action.payload.channels
+        event.source = action.payload.source
+      }
+    },
+    setHumanPregnancyRole(state, action: PayloadAction<HumanPregnancyRoleChoice>) {
+      state.pregnancyStory = {
+        ...(state.pregnancyStory ?? createInitialPregnancyStoryState()),
+        humanRoleChoice: action.payload,
+      }
+    },
+    resetPregnancyStoryForDebug(state) {
+      state.pregnancyStory = createInitialPregnancyStoryState()
+    },
+    startPregnancyAttempt(state, action: PayloadAction<PregnancyAttemptStartInput>) {
+      const result = createPregnancyAttempt(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        action.payload
+      )
+      if (result.attempt) state.pregnancyStory = result.story
+    },
+    revealPregnancyTest(state, action: PayloadAction<{ attemptId: string; currentDay: number }>) {
+      state.pregnancyStory = resolvePregnancyTest(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        action.payload
+      ).story
+    },
+    recordPregnancyNewsShare(
+      state,
+      action: PayloadAction<{ attemptId: string; recipientIds: string[]; currentDay: number }>
+    ) {
+      state.pregnancyStory = recordPregnancyStoryNewsShare(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        {
+          attemptId: action.payload.attemptId,
+          recipientIds: action.payload.recipientIds,
+          day: action.payload.currentDay,
+        }
+      )
+    },
+    revealPregnancyNewsLeak(
+      state,
+      action: PayloadAction<{ attemptId: string; leakerId: string; currentDay: number }>
+    ) {
+      state.pregnancyStory = revealPregnancyStoryNewsLeak(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        {
+          attemptId: action.payload.attemptId,
+          leakerId: action.payload.leakerId,
+          day: action.payload.currentDay,
+        }
+      )
+    },
+    revealPaternityResult(state, action: PayloadAction<{ carrierId: string }>) {
+      state.pregnancyStory = resolvePaternityResult(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        action.payload.carrierId
+      ).story
+    },
+    markPregnancyReactions(
+      state,
+      action: PayloadAction<{ attemptId: string; kind: 'reactions' | 'announcement' }>
+    ) {
+      state.pregnancyStory = markPregnancyStoryReactions(
+        state.pregnancyStory ?? createInitialPregnancyStoryState(),
+        action.payload.attemptId,
+        action.payload.kind
+      )
+    },
+    /** Update one existing broadcast without replacing its identity or position in the timeline. */
+    updateTvEvent(
+      state,
+      action: PayloadAction<{
+        id: string
+        text: string
+        type: TvEvent['type']
+        major?: string | null
+        broadcastPriority?: 'critical' | null
+        phase?: Phase
+        forceOnTv?: boolean
+        announcementTitle?: string
+      }>
+    ) {
+      const event = state.tvFeed.find((entry) => entry.id === action.payload.id)
+      if (!event) return
+
+      event.text = action.payload.text
+      event.type = action.payload.type
+      const meta = { ...(event.meta ?? {}) }
+      if (action.payload.phase) meta.phase = action.payload.phase
+
+      if (action.payload.major) {
+        event.major = action.payload.major
+        meta.major = action.payload.major
+      } else {
+        delete event.major
+        delete meta.major
+      }
+
+      if (action.payload.broadcastPriority === 'critical') {
+        meta.broadcastPriority = 'critical'
+      } else {
+        delete meta.broadcastPriority
+      }
+      meta.broadcastLevel =
+        action.payload.broadcastPriority === 'critical'
+          ? 'critical'
+          : action.payload.major
+            ? 'major'
+            : 'minor'
+      meta.broadcastManaged = true
+      if (action.payload.forceOnTv) {
+        meta.forceOnTv = true
+        // A live log entry can be promoted from Broadcast Manager after it was
+        // already consumed by an older presentation rule. Force to TV means
+        // show this current event now, not only on a future season.
+        delete meta.broadcastConsumed
+        if (state.lastPlainBroadcastEventId === event.id) state.lastPlainBroadcastEventId = null
+      } else {
+        delete meta.forceOnTv
+      }
+      if (meta.broadcastLevel !== 'minor') {
+        meta.announcementSubtitle = action.payload.text
+        if (action.payload.announcementTitle)
+          meta.announcementTitle = action.payload.announcementTitle
+      } else {
+        delete meta.announcementTitle
+        delete meta.announcementSubtitle
+      }
+      event.meta = meta
+      enqueueManagedBroadcast(state, event)
+    },
+    /** Remove one broadcast event from the current run. */
+    removeTvEvent(state, action: PayloadAction<string>) {
+      state.tvFeed = state.tvFeed.filter((event) => event.id !== action.payload)
+      state.broadcastQueue = (state.broadcastQueue ?? []).filter((id) => id !== action.payload)
+      if (state.activeBroadcastEventId === action.payload) state.activeBroadcastEventId = null
+      if (state.lastPlainBroadcastEventId === action.payload) {
+        state.lastPlainBroadcastEventId = null
+      }
+    },
+    /** Change the source definition used by future Play-driven broadcasts. */
+    setBroadcastOverride(state, action: PayloadAction<{ id: string; changes: BroadcastOverride }>) {
+      state.broadcastOverrides ??= {}
+      state.broadcastOverrides[action.payload.id] = {
+        ...(state.broadcastOverrides[action.payload.id] ?? {}),
+        ...action.payload.changes,
+      }
+      state.tvFeed.forEach((event) => {
+        const isLegacyVoxIntro =
+          action.payload.id === 'season.vox-populi-intro' &&
+          event.meta?.phase === 'season_start' &&
+          (event.meta?.major ?? event.major) === 'vox_populi'
+        if (event.meta?.broadcastTemplateId === action.payload.id || isLegacyVoxIntro) {
+          if (
+            action.payload.changes.forceOnTv === true &&
+            event.meta?.phase === state.phase &&
+            event.meta?.week === state.week
+          ) {
+            event.meta = { ...(event.meta ?? {}), broadcastConsumed: false }
+            if (state.lastPlainBroadcastEventId === event.id) state.lastPlainBroadcastEventId = null
+          }
+          refreshManagedBroadcastDefinition(state, event)
+        }
+      })
+      rebuildManagedBroadcastQueue(state, state.phase)
+    },
+    /** Restore a built-in message to its source copy and classification. */
+    resetBroadcastOverride(state, action: PayloadAction<string>) {
+      if (!state.broadcastOverrides) return
+      delete state.broadcastOverrides[action.payload]
+      state.tvFeed.forEach((event) => {
+        if (event.meta?.broadcastTemplateId === action.payload) {
+          refreshManagedBroadcastDefinition(state, event)
+        }
+      })
+      rebuildManagedBroadcastQueue(state, state.phase)
+    },
+    /**
+     * Apply authoring changes saved by another browser tab. The storage event
+     * is the bridge between a manager tab and a running game tab; rebuilding
+     * here makes those changes effective without restarting the season.
+     */
+    replaceBroadcastConfig(
+      state,
+      action: PayloadAction<{
+        overrides: Record<string, BroadcastOverride>
+        customMessages: CustomBroadcastMessage[]
+      }>
+    ) {
+      state.broadcastOverrides = action.payload.overrides
+      state.customBroadcasts = action.payload.customMessages
+      beginPhaseBroadcastSequence(state, state.phase)
+      finishPhaseBroadcastSequence(state)
+      for (const event of state.tvFeed) {
+        if (event.meta?.phase === state.phase && event.meta?.week === state.week) {
+          refreshManagedBroadcastDefinition(state, event)
+        }
+      }
+      rebuildManagedBroadcastQueue(state, state.phase)
+    },
+    /**
+     * Materialize and order every manager-controlled broadcast for the active
+     * phase. TvZone calls this on mount/phase entry so special phases and
+     * messages authored while the manager was open use the same runtime queue.
+     */
+    syncPhaseBroadcasts(state, action: PayloadAction<{ phase: Phase; cardMajor?: string | null }>) {
+      if (state.phase !== action.payload.phase) return
+      beginPhaseBroadcastSequence(state, action.payload.phase)
+      const cardMajor = action.payload.cardMajor ?? null
+      const activeCardTemplate = cardMajor
+        ? getPhaseCardTemplate(action.payload.phase, cardMajor)
+        : undefined
+
+      // A shock activation can emit its legacy event in the same turn that a
+      // phase is upgraded to a manager-controlled branch card (Democracia,
+      // Double Elimination, and similar). They describe the same beat. Keep
+      // one canonical card and consume every sibling before the TV can queue
+      // separate fullscreen announcements for each of them.
+      if (cardMajor && activeCardTemplate) {
+        const canonicalCardText = renderBroadcastTemplate(
+          state.broadcastOverrides?.[activeCardTemplate.id]?.text ?? activeCardTemplate.text,
+          []
+        )
+          .replace(/\s+/g, ' ')
+          .trim()
+        const sameMajorEvents = state.tvFeed.filter(
+          (event) =>
+            event.meta?.phase === action.payload.phase &&
+            event.meta?.week === state.week &&
+            event.meta?.broadcastRuntimeDelivery !== true &&
+            event.meta?.broadcastConsumed !== true &&
+            (event.meta?.major ?? event.major) === cardMajor
+        )
+        const canonicalEvent = sameMajorEvents.find(
+          (event) =>
+            event.meta?.broadcastTemplateId === activeCardTemplate.id &&
+            event.text.replace(/\s+/g, ' ').trim() === canonicalCardText
+        )
+        for (const event of sameMajorEvents) {
+          if (event !== canonicalEvent) {
+            event.meta = { ...(event.meta ?? {}), broadcastConsumed: true }
+          }
+        }
+      }
+
+      // A phase can change its branch without changing the phase name (for
+      // example, the ordinary LOH card becoming Democracia). Keep the old
+      // card in history, but never leave it eligible in the live queue beside
+      // the newly selected card.
+      for (const event of state.tvFeed) {
+        if (event.meta?.phase !== action.payload.phase || event.meta?.week !== state.week) continue
+        const templateId = event.meta?.broadcastTemplateId
+        const template =
+          typeof templateId === 'string' ? getBroadcastTemplate(templateId) : undefined
+        if (
+          template?.kind === 'phase_card' &&
+          event.meta?.broadcastRuntimeDelivery !== true &&
+          template.id !== activeCardTemplate?.id
+        ) {
+          event.meta = { ...(event.meta ?? {}), broadcastConsumed: true }
+        }
+      }
+
+      if (cardMajor) {
+        const template = activeCardTemplate
+        if (template) {
+          pushEvent(state, template.text, template.type, {
+            phase: action.payload.phase,
+            broadcastTemplateId: template.id,
+            broadcastLevel: 'major',
+            forceOnTv: true,
+            major: template.major,
+            announcementTitle: template.title,
+            announcementSubtitle: template.text,
+          })
+        }
+      }
+      finishPhaseBroadcastSequence(state)
+
+      for (const event of state.tvFeed) {
+        if (event.meta?.phase === action.payload.phase && event.meta?.week === state.week) {
+          refreshManagedBroadcastDefinition(state, event)
+        }
+      }
+
+      rebuildManagedBroadcastQueue(state, action.payload.phase)
+    },
+    /** Pin one current queued card once its on-screen presentation begins. */
+    claimActiveBroadcastEvent(state, action: PayloadAction<string>) {
+      const event = state.tvFeed.find((candidate) => candidate.id === action.payload)
+      const isPendingCurrentEvent = Boolean(
+        event &&
+        event.meta?.broadcastConsumed !== true &&
+        event.meta?.phase === state.phase &&
+        event.meta?.week === state.week &&
+        (state.broadcastQueue ?? []).includes(action.payload)
+      )
+      if (!isPendingCurrentEvent) return
+
+      const existing = state.activeBroadcastEventId
+        ? state.tvFeed.find((candidate) => candidate.id === state.activeBroadcastEventId)
+        : undefined
+      const existingIsStillActive = Boolean(
+        existing &&
+        existing.meta?.broadcastConsumed !== true &&
+        existing.meta?.phase === state.phase &&
+        existing.meta?.week === state.week &&
+        (state.broadcastQueue ?? []).includes(existing.id)
+      )
+      if (existingIsStillActive && existing?.id !== event!.id) return
+      state.activeBroadcastEventId = event!.id
+      state.broadcastQueue = pinBroadcastQueueHead(
+        state.broadcastQueue ?? [],
+        state.activeBroadcastEventId
+      )
+    },
+    /** Persist a one-shot media start claim; repeated starts are idempotent. */
+    claimPresentationEvent(state, action: PayloadAction<PresentationEventClaim>) {
+      if (action.payload.gameId !== state.gameId) return
+      if (hasPresentationEventClaim(state.presentationEventClaims, action.payload)) return
+      state.presentationEventClaims = addPresentationEventClaim(
+        state.presentationEventClaims,
+        action.payload
+      )
+    },
+    /** Consume exactly one faux-TV item; Play cannot advance while another remains. */
+    consumeBroadcastEvent(state, action: PayloadAction<string>) {
+      const event = state.tvFeed.find((candidate) => candidate.id === action.payload)
+      if (event) {
+        event.meta = { ...(event.meta ?? {}), broadcastConsumed: true }
+        if (event.meta.broadcastLevel === 'minor') {
+          state.lastPlainBroadcastEventId = event.id
+        }
+      }
+      state.broadcastQueue = (state.broadcastQueue ?? []).filter((id) => id !== action.payload)
+      if (state.activeBroadcastEventId === action.payload) state.activeBroadcastEventId = null
+    },
+    /** Day-boundary cleanup preserves ordered consumption in one transaction. */
+    consumeBroadcastEvents(state, action: PayloadAction<string[]>) {
+      if (!action.payload.length) return
+      const events = new Map<string, (typeof state.tvFeed)[number]>()
+      for (const event of state.tvFeed) if (!events.has(event.id)) events.set(event.id, event)
+      for (const id of action.payload) {
+        const event = events.get(id)
+        if (!event) continue
+        event.meta = { ...(event.meta ?? {}), broadcastConsumed: true }
+        if (event.meta.broadcastLevel === 'minor') state.lastPlainBroadcastEventId = event.id
+      }
+      const consumed = new Set(action.payload)
+      state.broadcastQueue = (state.broadcastQueue ?? []).filter((id) => !consumed.has(id))
+      if (state.activeBroadcastEventId && consumed.has(state.activeBroadcastEventId)) {
+        state.activeBroadcastEventId = null
+      }
+    },
+    addCustomBroadcast(
+      state,
+      action: PayloadAction<Omit<CustomBroadcastMessage, 'id'> & { id?: string }>
+    ) {
+      state.customBroadcasts ??= []
+      state.customBroadcasts.push({
+        ...action.payload,
+        id: action.payload.id ?? crypto.randomUUID(),
+      })
+    },
+    updateCustomBroadcast(state, action: PayloadAction<CustomBroadcastMessage>) {
+      state.customBroadcasts ??= []
+      const index = state.customBroadcasts.findIndex((message) => message.id === action.payload.id)
+      if (index !== -1) state.customBroadcasts[index] = action.payload
+    },
+    reorderCustomBroadcasts(state, action: PayloadAction<{ phase: Phase; orderedIds: string[] }>) {
+      const orderById = new Map(
+        action.payload.orderedIds.map((id, index) => [id, (index + 1) * 10])
+      )
+      for (const message of state.customBroadcasts ?? []) {
+        if (message.phase !== action.payload.phase) continue
+        const order = orderById.get(message.id)
+        if (order != null) message.order = order
+      }
+    },
+    reorderPhaseBroadcasts(
+      state,
+      action: PayloadAction<{
+        phase: Phase
+        items: Array<{ id: string; kind: 'source' | 'custom' }>
+      }>
+    ) {
+      state.broadcastOverrides ??= {}
+      action.payload.items.forEach((item, index) => {
+        const order = (index + 1) * 100
+        if (item.kind === 'custom') {
+          const message = (state.customBroadcasts ?? []).find(
+            (candidate) => candidate.id === item.id && candidate.phase === action.payload.phase
+          )
+          if (message) message.order = order
+        } else {
+          state.broadcastOverrides![item.id] = {
+            ...(state.broadcastOverrides![item.id] ?? {}),
+            order,
+          }
+        }
+      })
+    },
+    removeCustomBroadcast(state, action: PayloadAction<string>) {
+      state.customBroadcasts = (state.customBroadcasts ?? []).filter(
+        (message) => message.id !== action.payload
+      )
+    },
+    /** Persist a social phase summary to the Diary Room log (not the TV feed). */
+    addSocialSummary(state, action: PayloadAction<{ summary: string; week: number }>) {
+      // Route ONLY to the DR channel so the summary never appears in the main-screen
+      // TVLog strip. isVisibleInMainLog() returns false for events with channels=['dr'].
+      // source: 'manual' is required for isVisibleInDr() to return true.
+      const now = Date.now()
+      const event: TvEvent = {
+        id: crypto.randomUUID(),
+        text: `📊 Social Summary (Day ${action.payload.week}): ${action.payload.summary}`,
+        type: 'diary',
+        timestamp: now,
+        channels: ['dr'],
+        source: 'manual',
+        meta: buildTvMeta(state, { week: action.payload.week }),
+      }
+      state.tvFeed = [event, ...state.tvFeed].slice(0, MAX_GAME_HISTORY_EVENTS)
+    },
+    setLive(state, action: PayloadAction<boolean>) {
+      state.isLive = action.payload
+    },
+
+    /**
+     * Set up a pending TapRace session with pre-computed AI scores.
+     * Called by the startMinigame thunk; the GameScreen reacts by showing the
+     * TapRace overlay.
+     */
+    launchMinigame(state, action: PayloadAction<MinigameSession>) {
+      state.pendingMinigame = action.payload
+    },
+
+    /**
+     * Record the human player's final tap score, compute all participant scores,
+     * determine the winner, update personal records, and advance the phase.
+     *
+     * Called by the QuickTapRace component when the timer expires and the player
+     * presses the "Done" / "Continue ▶" button.
+     *
+     * Accepts either a legacy numeric payload (backward-compat) or a rich
+     * `CompleteMinigamePayload` with `humanScore` and optional canonical
+     * `winnerId` / `lastPlaceId` values. When supplied, those IDs are used
+     * directly rather than re-deriving from scores, ensuring the results UI
+     * and the applied state transition read from the same authoritative data.
+     */
+    completeMinigame(state, action: PayloadAction<number | CompleteMinigamePayload>) {
+      const session = state.pendingMinigame
+      if (!session) return
+
+      // Normalise legacy number payload → rich payload
+      const payload: CompleteMinigamePayload =
+        typeof action.payload === 'number' ? { humanScore: action.payload } : action.payload
+
+      const humanPlayer = state.players.find((p) => p.isUser)
+
+      if (import.meta.env.DEV) {
+        console.log('[completeMinigame] received', {
+          payload,
+          sessionKey: session.key,
+          sessionParticipants: session.participants,
+          hybridResolveOnComplete: session.hybridResolveOnComplete,
+          currentPhase: state.phase,
+          precomputedAiScores: session.aiScores,
+          humanPlayerId: humanPlayer?.id,
+        })
+      }
+
+      let scores: Record<string, number>
+
+      if (payload.rawResults) {
+        // Some games (such as Timing Bar) provide complete standings. Keep
+        // their raw scores authoritative instead of estimating AI scores from
+        // the human score in the generic hybrid resolver.
+        scores = Object.fromEntries(
+          session.participants.map((id) => [
+            id,
+            payload.rawResults?.[id] ?? session.aiScores[id] ?? 0,
+          ])
+        )
+      } else if (session.hybridResolveOnComplete) {
+        // ── Hybrid resolver path (score-based games) ─────────────────────────
+        // AI scores are computed NOW, after the human score is known.
+        let resolvedAiScores: Record<string, number>
+
+        if (session.key === 'snake') {
+          // Snake uses the headless simulator so the authoritative Redux scores
+          // match exactly what the SnakeGame UI displays.
+          resolvedAiScores = {}
+          for (const id of session.participants) {
+            if (id === humanPlayer?.id) continue
+            const p = state.players.find((pl) => pl.id === id)
+            resolvedAiScores[id] = simulateSnakeAiScore({
+              sessionSeed: session.seed,
+              playerId: id,
+              profile:
+                runtimeCompetitionProfile(
+                  session.aiRuntime,
+                  id,
+                  p?.competitionProfile,
+                  session.key
+                ) ?? getDefaultCompetitionProfile(),
+            }).score
+          }
+        } else {
+          // Generic hybrid resolver for all other score-based games.
+          // This prevents precomputed scores from collapsing near a very low human score.
+          const aiParticipants = session.participants
+            .filter((id) => id !== humanPlayer?.id)
+            .map((id) => {
+              const p = state.players.find((pl) => pl.id === id)
+              return {
+                id,
+                profile: runtimeCompetitionProfile(
+                  session.aiRuntime,
+                  id,
+                  p?.competitionProfile,
+                  session.key
+                ),
+              }
+            })
+
+          resolvedAiScores = resolveHybridAiScores({
+            gameKey: session.key,
+            humanScore: payload.humanScore,
+            aiParticipants,
+            seed: session.seed,
+          })
+        }
+
+        const sessionModel = getMinigameAiModel(session.key)
+        for (const [id, score] of Object.entries(resolvedAiScores)) {
+          resolvedAiScores[id] = applyCompetitionIntentToScore(
+            score,
+            sessionModel,
+            session.competitionIntents?.[id] ?? 'compete',
+            session.seed,
+            id
+          )
+        }
+
+        scores = { ...resolvedAiScores }
+        if (humanPlayer && session.participants.includes(humanPlayer.id)) {
+          scores[humanPlayer.id] = payload.humanScore
+        }
+      } else {
+        // ── Legacy / precomputed path (endurance, special games, test fixtures) ──
+        scores = { ...session.aiScores }
+        if (humanPlayer && session.participants.includes(humanPlayer.id)) {
+          scores[humanPlayer.id] = payload.humanScore
+        }
+      }
+
+      // Some elimination tournaments report actual per-round averages and a
+      // bracket order that is distinct from sorting those averages. Preserve
+      // both when supplied instead of mixing them with precomputed AI scores.
+      if (payload.rawResults) {
+        for (const id of session.participants) {
+          const reportedScore = payload.rawResults[id]
+          if (typeof reportedScore === 'number' && Number.isFinite(reportedScore)) {
+            scores[id] = reportedScore
+          }
+        }
+      }
+
+      // Prefer a canonical winner supplied by the UI component so the
+      // displayed leaderboard and the applied state transition stay aligned.
+      // When using the hybrid resolver the component also calls it with the
+      // same inputs, so the winnerId it supplies will be consistent.
+      const pressurePlankRanking =
+        session.key === 'pressurePlank'
+          ? rankPressurePlankResults(session.participants, scores, session.seed)
+          : null
+      const derivedWinnerId =
+        pressurePlankRanking?.[0]?.playerId ?? determineWinner(session.participants, scores)
+      const winnerId =
+        session.key === 'pressurePlank' ? derivedWinnerId : (payload.winnerId ?? derivedWinnerId)
+
+      if (import.meta.env.DEV) {
+        console.log('[completeMinigame] winner resolution', {
+          sessionKey: session.key,
+          resolvedScores: scores,
+          payloadWinnerId: payload.winnerId,
+          derivedWinnerId,
+          chosenWinnerId: winnerId,
+          usedExplicit: payload.winnerId != null,
+          currentPhase: state.phase,
+          payloadLastPlaceId: payload.lastPlaceId,
+        })
+      }
+
+      // Update personal records for every participant
+      const personalRecords: Record<string, number> = {}
+      for (const id of session.participants) {
+        const p = state.players.find((pl) => pl.id === id)
+        if (!p) continue
+        const score = scores[id] ?? 0
+        if (!p.stats) p.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+        // tapRacePR is specific to the Quick Tap Race minigame — only update it
+        // for that key so that TravelingDots (and other games sharing this reducer
+        // path) don't corrupt Quick Tap personal-record data.
+        if (session.key === 'quickTap') {
+          if (p.stats.tapRacePR == null || score > p.stats.tapRacePR) {
+            p.stats.tapRacePR = score
+            personalRecords[id] = score
+          }
+        }
+      }
+
+      applyCompetitionSeasonUpdateToState(state, {
+        participants: session.participants,
+        scores,
+        winnerId,
+      })
+
+      const reportedPlacements = payload.authoritativeRankedIds?.filter(
+        (id, index, allIds) => session.participants.includes(id) && allIds.indexOf(id) === index
+      )
+      const placements =
+        reportedPlacements?.length === session.participants.length
+          ? reportedPlacements
+          : [...session.participants].sort(
+              (left, right) =>
+                (scores[right] ?? 0) - (scores[left] ?? 0) || left.localeCompare(right)
+            )
+      state.lastCompetitionResolution = {
+        runId: `${session.key}:${session.seed}`,
+        gameKey: session.key,
+        week: state.week,
+        participants: [...session.participants],
+        status: 'completed',
+        humanId: humanPlayer?.id,
+        humanScore: humanPlayer ? (scores[humanPlayer.id] ?? 0) : undefined,
+        winnerId,
+        lastPlaceId: payload.lastPlaceId ?? placements.at(-1) ?? null,
+        placements,
+      }
+
+      state.pendingMinigame = null
+
+      // ── Auto-advance phase based on context ──────────────────────────────
+      // Apply the winner inline so minigameResult is never left set in state,
+      // which would risk being consumed by a later advance() call.
+      const alive = getAlivePlayers(state)
+      if (state.phase === 'loh_comp') {
+        applyLohWinner(state, winnerId, '[completeMinigame]')
+        state.phase = 'loh_results'
+        // Track the last-place LOH competition finisher for the third-nominee rule.
+        // Priority:
+        //   1. lastPlaceId explicitly supplied by the game component (authoritative)
+        //   2. Score-based derivation (fallback)
+        const winnerUnitIds = new Set(getCupidRoleIds(state, winnerId))
+        const nonWinners = session.participants.filter((id) => !winnerUnitIds.has(id))
+        if (nonWinners.length > 0) {
+          const explicitLastPlace =
+            payload.lastPlaceId != null && nonWinners.includes(payload.lastPlaceId)
+              ? payload.lastPlaceId
+              : null
+          const canonicalPressurePlankLast = pressurePlankRanking
+            ? [...pressurePlankRanking]
+                .reverse()
+                .find((result) => nonWinners.includes(result.playerId))?.playerId
+            : null
+          state.lastHohCompFinisherId =
+            canonicalPressurePlankLast ??
+            explicitLastPlace ??
+            nonWinners.reduce(
+              (worst, id) => ((scores[id] ?? 0) < (scores[worst] ?? 0) ? id : worst),
+              nonWinners[0]
+            )
+        }
+        announceVoxLastPlaceNominee(state)
+      } else if (state.phase === 'pos_comp') {
+        state.phase = applyPosWinner(state, winnerId, alive)
+      }
+      // Always keep minigameResult null. The winner was applied inline above for
+      // competition phases; for non-competition phases (e.g., debug Test TapRace)
+      // there is nothing to apply and we must not leave stale data that could be
+      // consumed by a future loh_results / pos_results advance() call.
+      state.minigameResult = null
+    },
+
+    /**
+     * Discard the active minigame session without completing it.
+     * Useful for debug bypasses; a subsequent advance() will pick randomly.
+     */
+    skipMinigame(state) {
+      const session = state.pendingMinigame
+      if (session) {
+        state.lastCompetitionResolution = {
+          runId: `${session.key}:${session.seed}`,
+          gameKey: session.key,
+          week: state.week,
+          participants: [...session.participants],
+          status: 'skipped',
+        }
+      }
+      state.pendingMinigame = null
+      pushEvent(state, `[DEBUG] Minigame skipped — winner will be picked randomly. 🔧`, 'game')
+    },
+
+    /**
+     * Apply a minigame winner determined by the challenge flow (MinigameHost).
+     * Advances the phase (loh_comp → loh_results, pos_comp → pos_results) and
+     * applies the appropriate winner effects without relying on pendingMinigame.
+     *
+     * This action is idempotent: if the winner for the current phase has already
+     * been applied (lohId or posWinnerId already set and phase has advanced), a
+     * second call is silently ignored.
+     */
+    applyMinigameWinner(state, action: PayloadAction<ApplyMinigameWinnerPayload>) {
+      const {
+        winnerId,
+        coWinnerIds,
+        participants,
+        scores,
+        includePlacementBonuses,
+        skipSeasonUpdate,
+        lastPlaceId,
+        lastPlaceType,
+        placements,
+        runId,
+        gameId,
+        originPhase,
+        attemptNumber,
+        prizeType,
+        winnerOverride,
+        gameKey,
+      } = action.payload
+      const competitionPhase = state.phase
+      const alive = getAlivePlayers(state)
+      const resolvedParticipants = participants ?? resolveCompetitionParticipants(state)
+      const hasScores = scores !== undefined
+      const resolvedScores = scores ?? buildFallbackScores(resolvedParticipants, winnerId)
+      // includePlacementBonuses takes precedence; scores imply we have ranking info.
+      const usePlacementBonuses = includePlacementBonuses ?? hasScores
+
+      if (import.meta.env.DEV) {
+        console.log('[applyMinigameWinner] entry', {
+          incomingWinnerId: winnerId,
+          incomingParticipants: participants,
+          resolvedParticipants,
+          incomingScores: scores,
+          resolvedScores,
+          lastPlaceId,
+          lastPlaceType,
+          currentPhase: state.phase,
+          currentHohId: state.lohId,
+        })
+      }
+
+      let winnerWasApplied = false
+      if (state.phase === 'loh_comp') {
+        // Idempotency: if lohId already set the winner was already applied.
+        if (state.lohId) {
+          if (import.meta.env.DEV) {
+            console.log('[applyMinigameWinner] LOH already applied, skipping.', {
+              existingHohId: state.lohId,
+              incomingWinnerId: winnerId,
+            })
+          }
+          return
+        }
+        if (import.meta.env.DEV) {
+          console.log('[applyMinigameWinner] applying LOH winner', {
+            winnerId,
+            currentPhase: state.phase,
+          })
+        }
+        applyLohWinner(state, winnerId, '[applyMinigameWinner]')
+        const validCoWinners = [...new Set([winnerId, ...(coWinnerIds ?? [])])].filter((id) =>
+          resolvedParticipants.includes(id)
+        )
+        if (validCoWinners.length > 1) {
+          state.coLohIds = validCoWinners
+          for (const coWinnerId of validCoWinners) {
+            const coWinner = state.players.find((player) => player.id === coWinnerId)
+            if (coWinner && coWinnerId !== winnerId) {
+              coWinner.status = 'loh'
+              if (!coWinner.stats) coWinner.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+              coWinner.stats.lohWins += 1
+            }
+          }
+        }
+        state.phase = 'loh_results'
+        winnerWasApplied = true
+        // Track the last-place LOH competition finisher for the third-nominee rule.
+        // Priority order:
+        //   1. lastPlaceId if explicitly provided by the caller (authoritative — from
+        //      elimination order or actual scores in the feature slice).
+        //   2. Score-based derivation when scores are available.
+        //   3. nonWinners[0] fallback (arbitrary, kept for backward compat).
+        const winnerUnitIds = new Set(
+          validCoWinners.flatMap((coWinnerId) => getCupidRoleIds(state, coWinnerId))
+        )
+        const nonWinners = resolvedParticipants.filter((id) => !winnerUnitIds.has(id))
+        if (nonWinners.length > 0) {
+          const validLastPlace =
+            lastPlaceId != null && nonWinners.includes(lastPlaceId) ? lastPlaceId : null
+          state.lastHohCompFinisherId =
+            validLastPlace ??
+            (hasScores
+              ? nonWinners.reduce(
+                  (worst, id) =>
+                    (resolvedScores[id] ?? 0) < (resolvedScores[worst] ?? 0) ? id : worst,
+                  nonWinners[0]
+                )
+              : nonWinners[0])
+          // Persist competition type for compact nomination-UI label selection.
+          // Explicit lastPlaceType wins; otherwise derive from whether scores were provided.
+          state.lastHohCompFinisherType = lastPlaceType ?? (hasScores ? 'scored' : null)
+        }
+        announceVoxLastPlaceNominee(state)
+      } else if (state.phase === 'pos_comp') {
+        // Idempotency: if posWinnerId already set the winner was already applied.
+        if (state.posWinnerId) {
+          if (import.meta.env.DEV) {
+            console.log('[applyMinigameWinner] POS already applied, skipping.', {
+              existingPovWinnerId: state.posWinnerId,
+              incomingWinnerId: winnerId,
+            })
+          }
+          return
+        }
+        if (import.meta.env.DEV) {
+          console.log('[applyMinigameWinner] applying POS winner', {
+            winnerId,
+            currentPhase: state.phase,
+          })
+        }
+        state.phase = applyPosWinner(state, winnerId, alive)
+        winnerWasApplied = true
+      }
+
+      if (!skipSeasonUpdate && winnerWasApplied && resolvedParticipants.length > 0) {
+        applyCompetitionSeasonUpdateToState(state, {
+          participants: resolvedParticipants,
+          scores: resolvedScores,
+          winnerId,
+          includePlacementBonuses: usePlacementBonuses,
+        })
+      }
+
+      // This path is used by MinigameHost and feature-owned competitions.  Keep
+      // the same canonical terminal receipt as completeMinigame so downstream
+      // consumers never need to guess a placement from a sparse action payload.
+      if (winnerWasApplied) {
+        const resolvedPlacementOrder =
+          placements?.filter(
+            (id, index, ids) => resolvedParticipants.includes(id) && ids.indexOf(id) === index
+          ) ??
+          (hasScores
+            ? [...resolvedParticipants].sort(
+                (left, right) =>
+                  (resolvedScores[right] ?? 0) - (resolvedScores[left] ?? 0) ||
+                  left.localeCompare(right)
+              )
+            : undefined)
+        const humanId = state.players.find((player) => player.isUser)?.id
+        state.lastCompetitionResolution = {
+          runId:
+            runId ??
+            `${state.week}:${competitionPhase}:${gameKey ?? 'competition'}:${winnerId}:${resolvedParticipants.join(',')}`,
+          gameKey: gameKey ?? 'competition',
+          week: state.week,
+          ...(gameId ? { gameId } : {}),
+          ...(originPhase ? { originPhase } : {}),
+          ...(attemptNumber != null ? { attemptNumber } : {}),
+          ...(prizeType ? { prizeType } : {}),
+          ...(winnerOverride ? { winnerOverride: { ...winnerOverride } } : {}),
+          participants: [...resolvedParticipants],
+          status: 'completed',
+          humanId,
+          humanScore: humanId ? resolvedScores[humanId] : undefined,
+          winnerId,
+          lastPlaceId: lastPlaceId ?? resolvedPlacementOrder?.at(-1) ?? null,
+          ...(resolvedPlacementOrder ? { placements: resolvedPlacementOrder } : {}),
+        }
+      }
+    },
+
+    /**
+     * Apply competition season-state updates after a deterministic competition result.
+     * Used by the challenge flow to keep modifiers in sync with minigame outcomes.
+     */
+    applyCompetitionSeasonUpdate(state, action: PayloadAction<CompetitionSeasonUpdatePayload>) {
+      applyCompetitionSeasonUpdateToState(state, action.payload)
+    },
+
+    /** Persist one-shot Battery Low vote effects without coupling them to Secret Missions. */
+    registerBatteryLowVoteEffects(
+      state,
+      action: PayloadAction<Record<string, 'doubleVote' | 'skipVote'>>
+    ) {
+      if (
+        state.mode === 'survival' ||
+        isVoxPopuliActive(state) ||
+        isCupidArrowActive(state) ||
+        state.doubleEviction?.weekActive === true
+      ) {
+        return
+      }
+      const activeIds = new Set(
+        state.players
+          .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+          .map((player) => player.id)
+      )
+      const validEntries = Object.entries(action.payload).filter(
+        ([playerId, effect]) =>
+          activeIds.has(playerId) && (effect === 'doubleVote' || effect === 'skipVote')
+      )
+      if (validEntries.length === 0) return
+      state.batteryLowVoteEffects = {
+        ...(state.batteryLowVoteEffects ?? {}),
+        ...Object.fromEntries(
+          validEntries.map(([playerId, effect]) => [playerId, { type: effect, cyclesRemaining: 2 }])
+        ),
+      }
+    },
+
+    /** Acknowledges the narrated opening without allowing a reload to replay it. */
+    completeFinalThreeOpening(state) {
+      if (state.phase !== 'final3') return
+      ensureFinalThreeController(state)
+      if (state.finalThree) state.finalThree.openingSeen = true
+    },
+
+    /** Acknowledges the Part 3 block setup before the final competition launches. */
+    completeFinalThreeBlockReveal(state) {
+      if (state.phase !== 'final3_comp3') return
+      ensureFinalThreeController(state)
+      if (state.finalThree) state.finalThree.blockRevealSeen = true
+    },
+
+    /** Prevent a second Final Power reveal after the Part 3 spectator already showed it. */
+    completeSpectatorFinalPowerReveal(state) {
+      ensureFinalThreeController(state)
+      if (state.finalThree) state.finalThree.spectatorFinalPowerRevealSeen = true
+    },
+
+    /**
+     * Apply the result of a Final 3 part minigame.
+     *
+     * Called by the GameScreen after the MinigameHost completes in a
+     * final3_comp*_minigame phase.  Sets the part winner, clears
+     * minigameContext, pushes result TV events, and advances to the
+     * next Final 3 phase (same logic as the deterministic AI-only path).
+     */
+    applyF3MinigameWinner(state, action: PayloadAction<string>) {
+      const winnerId = action.payload
+      const winner = state.players.find((p) => p.id === winnerId)
+
+      if (state.phase === 'final3_comp1_minigame') {
+        recordFinalThreePartOutcome(
+          state,
+          1,
+          winnerId,
+          state.minigameContext?.participants ?? getFinalThreeActiveIds(state),
+          state.minigameContext?.seed ?? null
+        )
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_comp2',
+            `PART 1: ${(winner?.name ?? winnerId).toUpperCase()} ADVANCES`,
+            `${winner?.name ?? winnerId} advances to Part 3. The other two finalists now fight for the remaining place.`
+          )
+        } else {
+          pushClassicFinalThreePart1Result(state, winner, winnerId)
+        }
+        state.minigameContext = null
+        state.phase = 'final3_comp2'
+      } else if (state.phase === 'final3_comp2_minigame') {
+        recordFinalThreePartOutcome(
+          state,
+          2,
+          winnerId,
+          state.minigameContext?.participants ?? getFinalThreeActiveIds(state),
+          state.minigameContext?.seed ?? null
+        )
+        const partOneWinnerName = state.players.find(
+          (player) => player.id === state.f3Part1WinnerId
+        )?.name
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_comp3',
+            `PART 2: ${(winner?.name ?? winnerId).toUpperCase()} ADVANCES`,
+            `${winner?.name ?? winnerId} joins ${partOneWinnerName ?? 'the Part 1 winner'} in Part 3. After the immunity battle, the other two finalists will face the audience vote.`
+          )
+        } else {
+          pushClassicFinalThreePart2Result(state, winner, winnerId)
+        }
+        prepareFinalThreePart3Block(state)
+        state.minigameContext = null
+        state.phase = 'final3_comp3'
+      } else if (state.phase === 'final3_comp3_minigame') {
+        recordFinalThreePartOutcome(
+          state,
+          3,
+          winnerId,
+          state.minigameContext?.participants ?? getFinalThreeActiveIds(state),
+          state.minigameContext?.seed ?? null
+        )
+        // Crown the Final LOH (mirrors the deterministic path in advance() for final3_comp3).
+        const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        if (import.meta.env.DEV) {
+          console.log('[applyLohWinner]', {
+            source: '[applyF3MinigameWinner/final3_comp3_minigame]',
+            previousHohId: state.lohId,
+            nextHohId: winnerId,
+            currentPhase: state.phase,
+          })
+        }
+        state.lohId = winnerId
+        markFinalHohWinner(state, winnerId)
+        state.players.forEach((p) => {
+          if (p.status === 'loh') p.status = 'active'
+        })
+        const lohPlayer = state.players.find((p) => p.id === winnerId)
+        if (lohPlayer) lohPlayer.status = 'loh'
+
+        const nominees = alive.filter((p) => p.id !== winnerId)
+        state.nomineeIds = nominees.map((p) => p.id)
+        nominees.forEach((p) => {
+          const np = state.players.find((x) => x.id === p.id)
+          if (np && np.status !== 'nominated') np.status = 'nominated'
+        })
+        recordFinalThreePower(state, winnerId, state.nomineeIds)
+
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_decision',
+            `FINAL IMMUNITY: ${(winner?.name ?? winnerId).toUpperCase()}`,
+            `${winner?.name ?? winnerId} has won immunity. The other two finalists now face the audience for the final place in the Final 2.`
+          )
+        } else {
+          pushEvent(
+            state,
+            `Final Power Battle: ${winner?.name ?? winnerId} wins and takes the final power! 👑`,
+            'game'
+          )
+        }
+
+        state.minigameContext = null
+
+        if (isVoxPopuliActive(state) && state.voxPopuli) {
+          state.voxPopuli.immunityWinnerId = winnerId
+          state.voxPopuli.awaitingPublicVote = false
+          state.voxPopuli.publicVoteContext = null
+          state.voxPopuli.publicVotePercentages = null
+          state.awaitingFinal3Eviction = false
+          state.awaitingFinal3Plea = false
+          state.phase = 'final3_decision'
+          return
+        }
+
+        // Every Classic Part-3 result enters the same ceremony.  In particular,
+        // a human who loses an interactive Part 3 must still see the Final LOH
+        // coronation, pleas, decision, and eviction cinematic.
+        state.awaitingFinal3Eviction = false
+        state.awaitingFinal3Plea = true
+        state.phase = 'final3_decision'
+      }
+    },
+
+    /**
+     * Record per-game personal-record scores for all participants after a
+     * challenge completes.  Only updates a player's PR if the new score beats
+     * their previous best.  `lowerIsBetter` controls comparison direction.
+     */
+    updateGamePRs(
+      state,
+      action: PayloadAction<{
+        gameKey: string
+        scores: Record<string, number>
+        lowerIsBetter?: boolean
+      }>
+    ) {
+      const { gameKey, scores, lowerIsBetter = false } = action.payload
+      if (isRemovedMinigameKey(gameKey)) return
+      for (const [id, score] of Object.entries(scores)) {
+        const player = state.players.find((p) => p.id === id)
+        if (!player) continue
+        if (!player.stats) player.stats = { lohWins: 0, posWins: 0, timesNominated: 0 }
+        if (!player.stats.gamePRs) player.stats.gamePRs = {}
+        const prev = player.stats.gamePRs[gameKey]
+        const isBetter = prev === undefined || (lowerIsBetter ? score < prev : score > prev)
+        if (isBetter) {
+          player.stats.gamePRs[gameKey] = score
+        }
+      }
+    },
+
+    /**
+     * Human LOH picks a replacement nominee after a POS auto-save.
+     * Clears replacementNeeded so the Continue button reappears.
+     * Validates that the selected player is eligible (not LOH, not POS holder,
+     * and not already a nominee) to guard against invalid dispatches.
+     */
+    setReplacementNominee(state, action: PayloadAction<string>) {
+      // Vox Populi replacements come only from the original secret-ballot
+      // ranking; immunity never grants anyone the power to name a backup.
+      if (isVoxPopuliActive(state)) return
+      const id = action.payload
+      const coLohOwnerId = state.coLohReplacementOwnerId ?? state.lohId
+      const coLohIds = state.coLohIds ?? []
+      // Eligibility guard: reject LOH, POS holder, already-nominated players, or the player saved by the veto
+      if (
+        (coLohIds.length > 0 ? coLohIds.includes(id) : id === state.lohId) ||
+        id === state.posWinnerId ||
+        state.nomineeIds.includes(id) ||
+        !isEligibleReplacementNominee(state, id)
+      ) {
+        return
+      }
+      const player = state.players.find((p) => p.id === id)
+      const lohPlayer = state.players.find((p) => p.id === coLohOwnerId)
+      if (!player || !lohPlayer) return
+
+      recordUnavoidableNominationReason(
+        state,
+        coLohOwnerId,
+        [id],
+        getEligibleReplacementNominees(state, coLohOwnerId),
+        'REPLACEMENT'
+      )
+      appendNominee(state, id)
+      state.replacementNomineeIds = [...new Set([...(state.replacementNomineeIds ?? []), id])]
+      state.replacementNeeded = false
+      state.coLohReplacementOwnerId = null
+      state.povSavedId = null
+      // VIP: advance stage after first replacement (stage 1 → 2) or second replacement (stage 3 → -1)
+      if (state.specialVeto?.activeType === 'vip') {
+        if (state.specialVeto.vipUseStage === 1) {
+          state.specialVeto.vipUseStage = 2
+        } else if (state.specialVeto.vipUseStage === 3) {
+          state.specialVeto.vipUseStage = -1
+        }
+      }
+      pushEvent(state, `${lohPlayer.name} named ${player.name} as the backup nominee. 🎯`, 'game')
+    },
+
+    resolveUnfillableReplacement(state) {
+      if (!state.replacementNeeded || getEligibleReplacementNominees(state).length > 0) return
+      state.replacementNeeded = false
+      state.coLohReplacementOwnerId = null
+      pushEvent(
+        state,
+        'No eligible backup nominee remains. The ceremony continues with a short block.',
+        'game'
+      )
+    },
+
+    /**
+     * Human LOH selects their first nominee during the two-step nomination flow.
+     * Sets `pendingNominee1Id` so the UI can move on to step 2.
+     * Eligibility: alive, not LOH. Guards: awaitingNominations must be true and
+     * phase must be nomination_results.
+     */
+    selectNominee1(state, action: PayloadAction<string>) {
+      if (!state.awaitingNominations || state.phase !== 'nomination_results') return
+      const id = action.payload
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+      const eligible = alive.filter(
+        (p) =>
+          p.id !== state.lohId &&
+          !isMissionOpeningProtected(state, p.id) &&
+          canPlayerNominatePlayer(state, state.lohId, p.id)
+      )
+      if (!eligible.some((p) => p.id === id)) return
+      state.pendingNominee1Id = id
+    },
+
+    /**
+     * Human LOH selects their second nominee, finalizing nominations.
+     * Validates: alive, not LOH, not equal to nominee 1.
+     * Guards: awaitingNominations must be true, phase must be nomination_results,
+     * and pendingNominee1Id must be set.
+     * Clears `awaitingNominations` and `pendingNominee1Id`.
+     */
+    finalizeNominations(state, action: PayloadAction<string>) {
+      if (!state.awaitingNominations || state.phase !== 'nomination_results') return
+      const id2 = action.payload
+      const id1 = state.pendingNominee1Id
+      if (!id1 || id2 === id1 || !areDistinctCupidPairs(state, [id1, id2])) return
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+      const eligible = alive.filter(
+        (p) =>
+          p.id !== state.lohId &&
+          !isMissionOpeningProtected(state, p.id) &&
+          canPlayerNominatePlayer(state, state.lohId, p.id)
+      )
+      if (!eligible.some((p) => p.id === id2)) return
+      if (!eligible.some((p) => p.id === id1)) return
+
+      const p1 = state.players.find((p) => p.id === id1)
+      const p2 = state.players.find((p) => p.id === id2)
+      const lohPlayer = state.players.find((p) => p.id === state.lohId)
+      if (!p1 || !p2) return
+
+      recordUnavoidableNominationReason(
+        state,
+        state.lohId,
+        [id1, id2],
+        getEligibleNominationTargets(state, state.lohId ?? ''),
+        'INITIAL'
+      )
+      state.nomineeIds = [id1, id2]
+      p1.status = 'nominated'
+      p2.status = 'nominated'
+      incrementTimesNominated(state, id1)
+      incrementTimesNominated(state, id2)
+      expandCupidNominees(state)
+      state.awaitingNominations = false
+      state.pendingNominee1Id = null
+      rememberOriginalNominations(state)
+      pushEvent(
+        state,
+        `${p1.name} and ${p2.name} have been nominated for elimination by ${lohPlayer?.name ?? 'the LOH'}. 🎯`,
+        'game'
+      )
+    },
+
+    /**
+     * Human LOH commits nominees in a single action (multi-select flow).
+     * Accepts 2 nominees normally; accepts 3 nominees during a Double Eviction week.
+     * Replaces the two-step `selectNominee1` / `finalizeNominations` pattern
+     * when TvMultiSelectModal is used. Validates all IDs are eligible.
+     */
+    commitNominees(state, action: PayloadAction<string[]>) {
+      if (!state.awaitingNominations || state.phase !== 'nomination_results') return
+      if (isVoxPopuliActive(state) && state.voxPopuli) {
+        const human = state.players.find(
+          (player) => player.isUser && player.status !== 'evicted' && player.status !== 'jury'
+        )
+        if (!human) return
+        const immunityWinnerId = getVoxNominationImmunityId(state)
+        const autoNomineeId = state.voxPopuli.autoNomineeId ?? state.lastHohCompFinisherId ?? null
+        const eligible = state.players.filter(
+          (candidate) =>
+            candidate.status !== 'evicted' &&
+            candidate.status !== 'jury' &&
+            candidate.id !== human.id &&
+            candidate.id !== immunityWinnerId &&
+            candidate.id !== autoNomineeId &&
+            !isMissionOpeningProtected(state, candidate.id) &&
+            canPlayerNominatePlayer(state, human.id, candidate.id)
+        )
+        const expectedCount = getVoxHumanBallotSize(state, eligible.length)
+        const ids = [...new Set(action.payload)]
+        if (
+          ids.length !== expectedCount ||
+          !ids.every((id) => eligible.some((candidate) => candidate.id === id))
+        ) {
+          return
+        }
+        state.voxPopuli.nominationBallots[human.id] = ids
+        state.storeVoxExtraNominationChoiceActive = false
+        finalizeVoxNominations(state)
+        return
+      }
+      const isDoubleEviction = state.doubleEviction?.weekActive === true
+      const publicModeEnabled = state.publicModeEnabled === true
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+      const canUsePublicNomineeRule = publicModeEnabled && !isDoubleEviction
+
+      // Defensive: in public mode non-DE weeks, strip the forced auto-nominee from the
+      // submitted IDs before validating count. The UI disables that option, but if it
+      // somehow appears in the payload it must not reduce the total to only 2 nominees.
+      const autoNomineeUnitIds =
+        canUsePublicNomineeRule && state.lastHohCompFinisherId
+          ? new Set(expandCupidIds(state, [state.lastHohCompFinisherId]))
+          : null
+      const ids = autoNomineeUnitIds
+        ? action.payload.filter((id) => !autoNomineeUnitIds.has(id))
+        : action.payload
+
+      // Human always picks 2 in normal weeks (3rd is auto-appended); picks 3 in DE.
+      const expectedCount = isDoubleEviction ? 3 : 2
+      if (ids.length !== expectedCount) return
+      if (new Set(ids).size !== ids.length) return // duplicates check
+      if (!areDistinctCupidPairs(state, ids)) return
+      const eligible = alive.filter(
+        (p) =>
+          p.id !== state.lohId &&
+          !isMissionOpeningProtected(state, p.id) &&
+          canPlayerNominatePlayer(state, state.lohId, p.id)
+      )
+      if (!ids.every((id) => eligible.some((p) => p.id === id))) return
+
+      const nominees = ids.map((id) => state.players.find((p) => p.id === id)!).filter(Boolean)
+      const lohPlayer = state.players.find((p) => p.id === state.lohId)
+      if (nominees.length !== expectedCount) return
+
+      recordUnavoidableNominationReason(
+        state,
+        state.lohId,
+        ids,
+        getEligibleNominationTargets(state, state.lohId ?? ''),
+        'INITIAL'
+      )
+      // Keep the submitted choices separate from the draft nominee list.
+      // appendNominee mutates nomineeIds below; assigning the payload array
+      // directly would also mutate `ids` and incorrectly attribute the forced
+      // public nominee to the LOH in nominationContext.
+      state.nomineeIds = [...ids]
+      nominees.forEach((n) => {
+        n.status = 'nominated'
+        incrementTimesNominated(state, n.id)
+      })
+      expandCupidNominees(state)
+
+      // In eligible weeks (including Final 4), auto-append the last-place LOH comp finisher.
+      if (canUsePublicNomineeRule && state.lastHohCompFinisherId) {
+        const autoId = state.lastHohCompFinisherId
+        let autoNomineeId: string | null = null
+        const autoPairAlreadyNominated = expandCupidIds(state, [autoId]).some((id) =>
+          state.nomineeIds.includes(id)
+        )
+        if (!autoPairAlreadyNominated) {
+          const autoPlayer = eligible.find((p) => p.id === autoId)
+          if (autoPlayer) {
+            appendNominee(state, autoId)
+            autoNomineeId = autoId
+          }
+        }
+        state.nominationContext = {
+          hohNomineeIds: expandCupidIds(state, ids),
+          autoNomineeId,
+          publicSaveApplied: false,
+        }
+      }
+
+      state.awaitingNominations = false
+      state.pendingNominee1Id = null
+      rememberOriginalNominations(state)
+      const allNomineePlayers = state.nomineeIds
+        .map((id) => state.players.find((p) => p.id === id))
+        .filter(Boolean)
+      const nameList = formatNameList(allNomineePlayers.map((n) => n!.name))
+      const autoNomineePlayer = state.nominationContext?.autoNomineeId
+        ? allNomineePlayers.find((player) => player?.id === state.nominationContext?.autoNomineeId)
+        : null
+      const hohName = lohPlayer?.name ?? 'the LOH'
+      const hohNomineeNames = formatNameList(nominees.map((n) => n.name))
+      const autoNomineeReason = autoNomineePlayer
+        ? state.missionPowers?.automaticNomineeToId === autoNomineePlayer.id
+          ? `${autoNomineePlayer.name} inherits the automatic nomination as the next eligible finisher because the last-place player is protected`
+          : isVoxPopuliActive(state)
+            ? `${autoNomineePlayer.name} finished last in the immunity competition and takes the first place on the block`
+            : `${autoNomineePlayer.name} was automatically nominated for finishing last in the LOH competition`
+        : null
+      const autoNomineeClause = autoNomineePlayer
+        ? `${hohName} nominated ${hohNomineeNames}, and ${autoNomineeReason}`
+        : null
+      const eventText = autoNomineeClause
+        ? `${nameList} have been nominated for elimination. ${autoNomineeClause}. 🎯`
+        : `${nameList} have been nominated for elimination by ${hohName}. 🎯`
+      const obsoletePrompt = state.tvFeed.find(
+        (event) =>
+          event.meta?.phase === state.phase &&
+          event.meta?.week === state.week &&
+          event.meta?.broadcastConsumed !== true &&
+          event.text.includes("it's time to make your nominations")
+      )
+      if (obsoletePrompt) {
+        obsoletePrompt.meta = { ...(obsoletePrompt.meta ?? {}), broadcastConsumed: true }
+        state.broadcastQueue = (state.broadcastQueue ?? []).filter((id) => id !== obsoletePrompt.id)
+        if (state.lastPlainBroadcastEventId === obsoletePrompt.id) {
+          state.lastPlainBroadcastEventId = null
+        }
+      }
+      pushEvent(state, eventText, 'game')
+    },
+
+    /**
+     * Resolve the pre-veto public save phase (normal weeks only).
+     * The UI calls this with the ID of the nominee to save (highest approval).
+     * Removes the saved player from nomineeIds, records publicSavedNomineeId,
+     * clears awaitingPublicSave, and advances the phase to pos_comp_announcement.
+     */
+    commitPublicSave(state, action: PayloadAction<CommitPublicSavePayload>) {
+      if (!state.awaitingPublicSave || state.phase !== 'pre_veto_public_save') return
+      const cupidActive = isCupidArrowActive(state)
+      const expectedBefore = cupidActive ? 6 : 3
+      const expectedAfter = cupidActive ? 4 : 2
+      if (state.nomineeIds.length !== expectedBefore) return
+      const savedId = typeof action.payload === 'string' ? action.payload : action.payload.savedId
+      if (!state.nomineeIds.includes(savedId)) return
+
+      const savedPlayer = state.players.find((p) => p.id === savedId)
+      if (!savedPlayer) return
+
+      const savedUnitIds = expandCupidIds(state, [savedId]).filter((id) =>
+        state.nomineeIds.includes(id)
+      )
+      const remainingNomineeIds = state.nomineeIds.filter((id) => !savedUnitIds.includes(id))
+      if (remainingNomineeIds.length !== expectedAfter) return
+
+      // Remove from active nominee block
+      state.nomineeIds = remainingNomineeIds
+      savedUnitIds.forEach((id) => {
+        const player = state.players.find((candidate) => candidate.id === id)
+        if (player) player.status = 'active'
+      })
+      syncCupidRoleStatuses(state)
+
+      // Record metadata
+      state.publicSavedNomineeId = savedId
+      const publicSaveAlreadyRecorded = (state.history ?? []).some(
+        (event) =>
+          event.type === 'seasonReceipt:publicSave' &&
+          event.week === state.week &&
+          event.data.playerId === savedId
+      )
+      if (!publicSaveAlreadyRecorded) {
+        state.history = [
+          ...(state.history ?? []),
+          {
+            type: 'seasonReceipt:publicSave',
+            week: state.week,
+            data: { playerId: savedId },
+            timestamp: Date.now(),
+          },
+        ]
+      }
+      if (state.nominationContext) {
+        state.nominationContext.publicSaveApplied = true
+      }
+
+      state.awaitingPublicSave = false
+      // Advance directly to pos_comp_announcement so veto starts with 2 nominees
+      state.phase = 'pos_comp_announcement'
+    },
+
+    /**
+     * Human POS holder decides whether to use or not use the veto.
+     * - `false`: the veto is not used; log the event and clear the flag.
+     * - `true`: set `awaitingPovSaveTarget` so the player can pick who to save.
+     */
+    submitPovDecision(state, action: PayloadAction<boolean>) {
+      if (!state.awaitingPovDecision) return
+      state.awaitingPovDecision = false
+      const posWinner = state.players.find((p) => p.id === state.posWinnerId)
+      const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+      const willUsePower = action.payload || shouldUseSafetyForTwin(state, posWinner?.id, nominees)
+      if (willUsePower) {
+        const svType = state.specialVeto?.activeType
+        if (svType === 'coup') {
+          // Detox: remove both nominees, await holder replacement picks
+          const oldNominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+          oldNominees.forEach((n) => {
+            n.status = 'active'
+          })
+          const removedNames = oldNominees.map((n) => n.name).join(' and ')
+          state.nomineeIds = []
+          state.povSavedId = null
+          state.povProtectedIds = oldNominees.map((nominee) => nominee.id)
+          pushDetoxEvent(
+            state,
+            `${posWinner?.name ?? 'The Detox holder'} ${getPlayerBeVerb(posWinner, 'has', 'have')} decided to use Detox. ⚡`
+          )
+          pushDetoxEvent(
+            state,
+            `${posWinner?.name ?? 'The Detox holder'} used Detox! ${removedNames} are cleared from the block! ⚡`
+          )
+          pushDetoxEvent(
+            state,
+            `${posWinner?.name ?? 'The Detox holder'}, name your two backup nominees. ⚡`
+          )
+          state.specialVeto!.awaitingCoupReplacement1 = true
+        } else {
+          // Standard / VIP / Diamond / Spotlight: set awaitingPovSaveTarget
+          state.awaitingPovSaveTarget = true
+        }
+      } else {
+        // not using veto
+        if (state.specialVeto?.activeType === 'vip') {
+          state.specialVeto.vipUseStage = -1
+        }
+        if (isVoxPopuliActive(state)) {
+          pushVoxSafetyStandPat(state, posWinner?.id ?? null)
+        } else {
+          pushEvent(
+            state,
+            `${posWinner?.name ?? 'The holder'} ${getPlayerBeVerb(posWinner, 'has', 'have')} decided not to use ${state.specialVeto?.activeType ? 'the power' : 'the Power of Safety'}. ⚡`,
+            'game'
+          )
+        }
+      }
+    },
+
+    /**
+     * Human POS holder picks which nominee to save with the veto.
+     * After saving, triggers the replacement nominee flow (human LOH → modal;
+     * AI LOH → deterministic pick).
+     */
+    submitPovSaveTarget(state, action: PayloadAction<string>) {
+      const saveId = action.payload
+      if (!state.awaitingPovSaveTarget) return
+      if (!state.nomineeIds.includes(saveId)) return
+
+      const savedPlayer = state.players.find((p) => p.id === saveId)
+      const posWinner = state.players.find((p) => p.id === state.posWinnerId)
+      let lohPlayer = state.players.find((p) => p.id === state.lohId)
+      if (!savedPlayer || !posWinner) return
+      const twinSaveTarget = getTwinNomineeToSave(state, posWinner.id)
+      if (twinSaveTarget && twinSaveTarget.id !== saveId) return
+
+      // Save the selected nominee
+      const savedUnitIds = removeCupidNomineeUnit(state, saveId)
+      savedPlayer.status = saveId === state.posWinnerId ? 'pos' : 'active'
+      state.awaitingPovSaveTarget = false
+      // Track the saved player so they cannot be immediately re-nominated as the replacement
+      state.povSavedId = saveId
+      savedUnitIds.forEach((id) => addPovProtectedId(state, id))
+      if (isVoxPopuliActive(state)) {
+        restoreVoxNomineeMinimum(state)
+        pushVoxSafetyOutcome(state, posWinner.id, saveId)
+        return
+      }
+      const savedNames = formatNameList(
+        savedUnitIds.map((id) => state.players.find((player) => player.id === id)?.name ?? id)
+      )
+      const coLohDay = (state.coLohIds?.length ?? 0) >= 2
+      const separateSaveAnnouncement = Boolean(state.specialVeto?.activeType) || coLohDay
+      const saveAnnouncement = `${posWinner.name} used ${state.specialVeto?.activeType ? 'the power' : 'the Power of Safety'} on ${savedNames}! 🛡️`
+      if (separateSaveAnnouncement) pushEvent(state, saveAnnouncement, 'game')
+
+      // Diamond: holder names replacement (not LOH)
+      if (state.specialVeto?.activeType === 'diamond') {
+        const posDecisionPlayer = getCupidHumanCoholder(state, posWinner.id) ?? posWinner
+        if (posDecisionPlayer.isUser) {
+          state.specialVeto.awaitingHolderReplacement = true
+          pushEvent(
+            state,
+            `${posWinner.name}, as the Halo Exchange holder, you must name the backup nominee. 😇`,
+            'game'
+          )
+        } else {
+          // AI holder names replacement
+          const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+          const eligible = getReplacementEligiblePlayers(state, alive, 1, {
+            actorId: posWinner.id,
+          })
+          if (eligible.length > 0) {
+            const rng = mulberry32(state.seed)
+            const replacement = pickStrategicReplacementNominee(
+              state,
+              posWinner.id,
+              eligible,
+              rng,
+              {
+                reason: 'selected Halo Exchange replacement from the holder strategic read',
+              }
+            )
+            if (!replacement) return
+            state.nomineeIds.push(replacement.id)
+            const rp = state.players.find((pl) => pl.id === replacement.id)
+            if (rp) rp.status = 'nominated'
+            incrementTimesNominated(state, replacement.id)
+            pushEvent(
+              state,
+              `${posWinner.name} named ${replacement.name} as the Halo Exchange backup nominee. 😇`,
+              'game'
+            )
+          }
+        }
+        return
+      }
+
+      // LOH must name a replacement. During Cupid's Arrow, a human coholder
+      // represents the whole LOH pair even when their AI partner won the comp.
+      if (coLohDay) {
+        const ownerId = Object.entries(state.coLohNomineeByCoLohId ?? {}).find(
+          ([, nomineeId]) => nomineeId === saveId
+        )?.[0]
+        const owner = ownerId ? state.players.find((player) => player.id === ownerId) : null
+        const alive = state.players.filter(
+          (player) => player.status !== 'evicted' && player.status !== 'jury'
+        )
+        const eligible = getReplacementEligiblePlayers(state, alive, 1, { actorId: ownerId })
+        if (owner && eligible.length > 0) {
+          if (owner.isUser) {
+            state.coLohReplacementOwnerId = owner.id
+            state.replacementNeeded = true
+            pushEvent(
+              state,
+              `${owner.name} must name the replacement for their nominee. 🎯`,
+              'game'
+            )
+          } else {
+            const replacement = pickStrategicReplacementNominee(
+              state,
+              owner.id,
+              eligible,
+              mulberry32(state.seed),
+              { reason: 'selected co-LOH replacement from the owner strategic read' }
+            )
+            if (!replacement) return
+            appendNominee(state, replacement.id)
+            state.coLohNomineeByCoLohId ??= {}
+            state.coLohNomineeByCoLohId[owner.id] = replacement.id
+            pushEvent(
+              state,
+              `${owner.name} named ${replacement.name} as their replacement nominee. 🎯`,
+              'game'
+            )
+          }
+        }
+        return
+      }
+      const lohDecisionPlayer = getCupidHumanCoholder(state, state.lohId) ?? lohPlayer
+      lohPlayer = lohDecisionPlayer
+      let backupPrompt: string
+      if (lohDecisionPlayer?.isUser) {
+        if (!lohPlayer) return
+        state.replacementNeeded = true
+        // VIP: track first use stage
+        if (state.specialVeto?.activeType === 'vip') {
+          state.specialVeto.vipUseStage = 1
+        }
+        backupPrompt = `${lohPlayer.name} must now name a backup nominee. 🎯`
+      } else {
+        // The changed block is a meaningful strategic checkpoint.  Leave the
+        // replacement unresolved until the next Continue so social actions can
+        // alter the LOH's current read without granting a new energy refresh.
+        state.aiReplacementStep = 1
+        state.aiReplacementWaiting = false
+        if (state.specialVeto?.activeType === 'vip') state.specialVeto.vipUseStage = 1
+        backupPrompt = `${lohPlayer?.name ?? 'The LOH'} has time to reconsider the replacement after the Safety result. 🎯`
+      }
+      pushEvent(
+        state,
+        separateSaveAnnouncement ? backupPrompt : `${saveAnnouncement} ${backupPrompt}`,
+        'game'
+      )
+    },
+
+    /**
+     * Human eligible voter casts their eviction vote during `live_vote`.
+     * Adds the vote to `state.votes` and clears `awaitingHumanVote`.
+     */
+    submitHumanVote(state, action: PayloadAction<string>) {
+      const nomineeId = action.payload
+      if (!state.awaitingHumanVote) return
+      if (!state.nomineeIds.includes(nomineeId)) return
+      const humanPlayer = state.players.find((p) => p.isUser)
+      if (!humanPlayer) return
+      if (!isVoxPopuliActive(state) && !canCastClassicEvictionVote(state, humanPlayer.id)) {
+        return
+      }
+      if (!canPlayerTargetPlayer(state, humanPlayer.id, nomineeId)) return
+      if (!state.votes) state.votes = {}
+      const voteMap = state.votes
+      const jointVoterIds = getCupidRoleIds(state, humanPlayer.id)
+      jointVoterIds.forEach((voterId) => {
+        const voter = state.players.find((player) => player.id === voterId)
+        if (voter && voter.status !== 'evicted' && voter.status !== 'jury') {
+          voteMap[voterId] = nomineeId
+          const batteryEffect = state.batteryLowVoteEffects?.[voterId]
+          if (
+            !isCupidArrowActive(state) &&
+            state.doubleEviction?.weekActive !== true &&
+            batteryEffect?.type === 'doubleVote'
+          ) {
+            voteMap[`${voterId}__dv2`] = nomineeId
+            delete state.batteryLowVoteEffects?.[voterId]
+          }
+        }
+      })
+      state.awaitingHumanVote = false
+    },
+
+    /**
+     * Human LOH breaks a tied eviction vote by selecting the evictee.
+     * Clears the tie state and queues the same deferred eviction cinematic used
+     * by a clear house vote. The phase advances only after the cinematic commits.
+     */
+    submitTieBreak(state, action: PayloadAction<string>) {
+      const nomineeId = action.payload
+      if (!state.awaitingTieBreak) return
+      const tied = state.tiedNomineeIds ?? state.nomineeIds
+      if (!tied.includes(nomineeId)) return
+
+      const evictee = state.players.find((p) => p.id === nomineeId)
+      const lohPlayer = state.players.find((p) => p.id === state.lohId)
+      if (!evictee || !lohPlayer?.isUser) return
+      if (state.coLohIds && state.coLohIds.length >= 2) return
+      if (getClassicEvictionTieBreakerId(state) !== lohPlayer.id) return
+      if (!canPlayerTargetPlayer(state, lohPlayer.id, nomineeId)) return
+
+      state.awaitingTieBreak = false
+      state.tiedNomineeIds = null
+      state.votes = {}
+
+      const tiedNames = tied
+        .map((id) => state.players.find((player) => player.id === id)?.name)
+        .filter((name): name is string => Boolean(name))
+      const tieBreakMessage = buildDoubleEvictionTieResolutionMessage({
+        deciderName: lohPlayer?.name ?? 'The LOH',
+        tiedNames,
+        selectedNames: [evictee.name],
+        publicModeEnabled: state.publicModeEnabled,
+        secondEvictionOnly: true,
+        includeEliminationClause: true,
+      })
+
+      if (
+        state.doubleEviction?.weekActive &&
+        state.pendingEviction &&
+        !state.doubleEviction.pendingSecondEviction
+      ) {
+        state.doubleEviction.pendingSecondEviction = {
+          evicteeId: nomineeId,
+          evictionMessage: tieBreakMessage,
+        }
+        return
+      }
+
+      // voteResults was already shown before the tie-break prompt; clear it now.
+      state.voteResults = null
+      // Defer the eviction commit until the cinematic overlay completes.
+      state.pendingEviction = {
+        evicteeId: nomineeId,
+        evictionMessage: `${lohPlayer?.name ?? 'The Leader of the Hub'} breaks the tie, voting to eliminate ${evictee.name}. ${evictee.name} has been eliminated from the Hub. 🗳️`,
+      }
+      // Keep the phase at eviction_results. GameScreen commits the eviction after
+      // the cinematic, then advances exactly once into week_end.
+    },
+
+    submitDoubleEvictionTieBreak(state, action: PayloadAction<string[]>) {
+      if (!state.doubleEviction?.weekActive || !state.awaitingTieBreak) return
+
+      const tied = state.tiedNomineeIds ?? state.nomineeIds
+      const selectedIds = [...new Set(action.payload)].filter((id) => tied.includes(id))
+      const slotsRequired = calculateRequiredDoubleEvictionSlots(
+        tied.length,
+        Boolean(state.pendingEviction)
+      )
+      if (selectedIds.length !== slotsRequired) return
+
+      const tieBreakerName = state.awaitingPosTieBreak
+        ? (state.players.find((player) => player.id === state.posWinnerId)?.name ??
+          'The Safety holder')
+        : (state.players.find((player) => player.id === state.lohId)?.name ?? 'The LOH')
+      const tieBreakerId = state.awaitingPosTieBreak
+        ? state.posWinnerId
+        : (getClassicEvictionTieBreakerId(state) ?? state.lohId ?? state.posWinnerId)
+      const tieBreaker = state.players.find((player) => player.id === tieBreakerId)
+      const aiDecision =
+        tieBreaker && !tieBreaker.isUser && !state.publicModeEnabled
+          ? chooseStrategicEliminationCandidates(
+              state,
+              tieBreaker.id,
+              tied,
+              slotsRequired,
+              'double_tie',
+              (state.seed ^ 0xdeadbeef) >>> 0
+            )
+          : null
+      if (tieBreaker && aiDecision) {
+        traceStrategicEliminationChoice(
+          state,
+          tieBreaker.id,
+          aiDecision,
+          'double_tie',
+          (state.seed ^ 0xdeadbeef) >>> 0
+        )
+      }
+      const resolvedSelectedIds = aiDecision?.selectedIds ?? selectedIds
+      const selectedPlayers = selectedIds
+        .map((id) => state.players.find((player) => player.id === id))
+        .filter((player): player is Player => Boolean(player))
+
+      if (selectedPlayers.length !== selectedIds.length) return
+
+      // The model is authoritative for an AI decider. The UI uses this same
+      // deterministic resolver, while recomputing here keeps the game rule
+      // correct if the state changed during the presentation delay.
+      const resolvedPlayers = resolvedSelectedIds
+        .map((id) => state.players.find((player) => player.id === id))
+        .filter((player): player is Player => Boolean(player))
+      if (resolvedPlayers.length !== slotsRequired) return
+
+      state.awaitingTieBreak = false
+      state.awaitingPosTieBreak = false
+      state.tiedNomineeIds = null
+      state.votes = {}
+
+      const tiedNames = tied
+        .map((id) => state.players.find((player) => player.id === id)?.name)
+        .filter((name): name is string => Boolean(name))
+      const selectedNames = resolvedPlayers.map((player) => player.name)
+      const tieResolutionBaseMessage = buildDoubleEvictionTieResolutionMessage({
+        deciderName: tieBreakerName,
+        tiedNames,
+        selectedNames,
+        publicModeEnabled: state.publicModeEnabled,
+        secondEvictionOnly: Boolean(state.pendingEviction),
+        includeEliminationClause: true,
+      })
+      const tieResolutionMessage = `${tieResolutionBaseMessage}${aiDecision?.publicRationale ? ` ${aiDecision.publicRationale}` : ''}`
+      const buildFollowUpMessage = (player: Player) =>
+        state.publicModeEnabled
+          ? `${player.name} had the lower public approval and has been eliminated from the Hub. 📉`
+          : `Following the tie-break, ${player.name} has also been eliminated from the Hub. 🗳️`
+
+      if (state.pendingEviction && !state.doubleEviction.pendingSecondEviction) {
+        state.doubleEviction.pendingSecondEviction = {
+          evicteeId: resolvedPlayers[0].id,
+          evictionMessage: tieResolutionMessage,
+        }
+        return
+      }
+
+      state.pendingEviction = {
+        evicteeId: resolvedPlayers[0].id,
+        evictionMessage: tieResolutionMessage,
+      }
+
+      if (resolvedPlayers[1]) {
+        state.doubleEviction.pendingSecondEviction = {
+          evicteeId: resolvedPlayers[1].id,
+          evictionMessage: buildFollowUpMessage(resolvedPlayers[1]),
+        }
+      }
+    },
+
+    // ── Democracia twist reducers ─────────────────────────────────────────────
+
+    /**
+     * Activate the Democracia twist for the current day.
+     * Its manager-controlled LOH branch card is the single announcement source.
+     * Called by tryActivateDemocracia / tryActivatePendingForcedDemocracia thunks.
+     */
+    activateDemocracia(state) {
+      if (isVoxPopuliTwistLocked(state)) return
+      if (!state.democracia) {
+        state.democracia = {
+          usedThisSeason: false,
+          active: false,
+          activatedDay: null,
+          round: 0,
+          candidateIds: [],
+          eligibleVoterIds: [],
+          votesByVoterId: {},
+          awaitingHumanVote: false,
+          awaitingPublicBreaker: false,
+          resultDisplay: null,
+        }
+      }
+      state.democracia.usedThisSeason = true
+      state.democracia.active = true
+      state.democracia.activatedDay = state.week
+      state.democracia.round = 0
+      state.democracia.candidateIds = []
+      state.democracia.eligibleVoterIds = []
+      state.democracia.votesByVoterId = {}
+      state.democracia.awaitingHumanVote = false
+      state.democracia.awaitingPublicBreaker = false
+      state.democracia.resultDisplay = null
+      state.twistActive = true
+      state.twistActivatedThisWeek = true
+    },
+
+    /**
+     * Human player casts their Democracia vote.
+     * Validates: voter is eligible, target is a candidate, no self-vote.
+     * Clears awaitingHumanVote when accepted.
+     */
+    submitDemocraciaVote(state, action: PayloadAction<string>) {
+      const dem = state.democracia
+      if (!dem?.awaitingHumanVote) return
+      const targetId = action.payload
+      const humanPlayer = state.players.find((p) => p.isUser)
+      if (!humanPlayer) return
+      if (targetId === humanPlayer.id) return // no self-vote
+      if (!canPlayerTargetPlayer(state, humanPlayer.id, targetId)) return
+      if (!dem.candidateIds.includes(targetId)) return // must be a candidate
+      if (!dem.eligibleVoterIds.includes(humanPlayer.id)) return // must be eligible voter
+      dem.votesByVoterId[humanPlayer.id] = targetId
+      dem.awaitingHumanVote = false
+    },
+
+    dismissDemocraciaResultDisplay(state) {
+      if (!state.democracia) return
+      state.democracia.resultDisplay = null
+    },
+
+    /**
+     * Resolve the Democracia ballotage final tie when public mode is ON.
+     * The UI picks the tied candidate with higher public approval and dispatches this action.
+     * Applies the winner as LOH and advances to democracia_results.
+     */
+    resolveDemocraciaPublicBreaker(state, action: PayloadAction<{ winnerId: string }>) {
+      const dem = state.democracia
+      if (!dem?.awaitingPublicBreaker) return
+      const { winnerId } = action.payload
+      if (!dem.candidateIds.includes(winnerId)) return
+      const winnerName = state.players.find((p) => p.id === winnerId)?.name ?? winnerId
+      pushEvent(
+        state,
+        `🗳️ The public has spoken! ${winnerName} wins the tie-break with higher approval! 👑`,
+        'game'
+      )
+      applyLohWinner(state, winnerId, '[democracia/public_breaker]')
+      dem.awaitingPublicBreaker = false
+      dem.active = false
+      state.phase = 'democracia_results'
+    },
+
+    /**
+     * Human co-LOH submits their nomination on a Democracia co-LOH day.
+     * Validates eligibility (not self, not other co-LOH, not already nominated, must be alive).
+     * Clears awaitingCoLohNomination when accepted.
+     */
+    submitCoLohNomination(state, action: PayloadAction<{ coLohId: string; nomineeId: string }>) {
+      const { coLohId, nomineeId } = action.payload
+      if (!state.awaitingCoLohNomination) return
+      if (!state.coLohIds?.includes(coLohId)) return
+      const coLoh = state.players.find((p) => p.id === coLohId)
+      if (!coLoh?.isUser) return // only human co-LOH submits via this action
+      // Validate the nominated player
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+      if (!alive.some((p) => p.id === nomineeId)) return
+      if (isMissionOpeningProtected(state, nomineeId)) return
+      if (nomineeId === coLohId) return // no self-nomination
+      const otherCoLohIds = state.coLohIds.filter((id) => id !== coLohId)
+      if (otherCoLohIds.includes(nomineeId)) return // can't nominate other co-LOH
+      if (state.nomineeIds.includes(nomineeId)) return // already nominated
+      // Apply nomination
+      state.nomineeIds.push(nomineeId)
+      const np = state.players.find((pl) => pl.id === nomineeId)
+      if (np) np.status = 'nominated'
+      incrementTimesNominated(state, nomineeId)
+      if (!state.coLohNomineeByCoLohId) state.coLohNomineeByCoLohId = {}
+      state.coLohNomineeByCoLohId[coLohId] = nomineeId
+      state.awaitingCoLohNomination = false
+      const allNomineeNames = state.nomineeIds
+        .map((id) => state.players.find((p) => p.id === id)?.name)
+        .filter(Boolean)
+        .join(' and ')
+      pushEvent(state, `${allNomineeNames} have been nominated for elimination. 🎯`, 'game')
+    },
+
+    /**
+     * Human POS holder breaks an eviction tie when the rules delegate authority
+     * away from the LOH: either a co-LOH Democracia day or a shock that puts
+     * the sitting LOH on the block.
+     *
+     * Clears awaitingTieBreak and awaitingPosTieBreak, then queues the eviction.
+     */
+    submitPosTieBreak(state, action: PayloadAction<string>) {
+      const nomineeId = action.payload
+      if (!state.awaitingPosTieBreak || !state.awaitingTieBreak) return
+      const tied = state.tiedNomineeIds ?? state.nomineeIds
+      if (!tied.includes(nomineeId)) return
+      const evictee = state.players.find((p) => p.id === nomineeId)
+      const posHolder = state.players.find((p) => p.id === state.posWinnerId)
+      if (!evictee || !posHolder?.isUser) return
+      if (getClassicEvictionTieBreakerId(state) !== posHolder.id) return
+      state.awaitingTieBreak = false
+      state.awaitingPosTieBreak = false
+      state.tiedNomineeIds = null
+      state.votes = {}
+      // voteResults was already shown before the tie-break prompt; clear it now.
+      state.voteResults = null
+      // Defer the eviction commit until the cinematic overlay completes.
+      state.pendingEviction = {
+        evicteeId: nomineeId,
+        evictionMessage: `${posHolder?.name ?? 'The Power of Safety holder'} breaks the tie as a special exception, voting to eliminate ${evictee.name}. ${evictee.name} has been eliminated from the Hub. 🗳️`,
+      }
+      // Keep the phase at eviction_results. The shared cinematic completion
+      // handler finalizes the eviction and advances to week_end.
+    },
+
+    /** Record the active user's one Final Three message to the Vox audience. */
+    selectVoxFinalThreeAppeal(state, action: PayloadAction<'underdog' | 'loyalty' | 'resume'>) {
+      if (
+        !isVoxPopuliActive(state) ||
+        !state.voxPopuli ||
+        state.voxPopuli.finalThreeAppealUsed ||
+        state.phase !== 'final3_decision' ||
+        !state.voxPopuli.awaitingPublicVote
+      ) {
+        return
+      }
+      const human = state.players.find((player) => player.isUser)
+      if (!human || !state.nomineeIds.includes(human.id)) return
+      state.voxPopuli.finalThreeAppeal = action.payload
+      state.voxPopuli.finalThreeAppealUsed = true
+      pushEvent(
+        state,
+        `${human.name} makes one final appeal to the audience before the vote closes.`,
+        'social',
+        { major: 'vox_final_three_appeal', broadcastPriority: 'critical' }
+      )
+    },
+
+    /**
+     * Dismiss the vote results popup after the player has viewed it.
+     * Clears `voteResults`; the eviction cinematic is driven separately
+     * by `pendingEviction` and GameScreen logic.
+     */
+    commitVoxAudienceVote(
+      state,
+      action: PayloadAction<{
+        context: 'eviction' | 'final3'
+        percentages: Record<string, number>
+        rankedIds: string[]
+      }>
+    ) {
+      if (
+        !isVoxPopuliActive(state) ||
+        !state.voxPopuli?.awaitingPublicVote ||
+        state.voxPopuli.publicVoteContext !== action.payload.context
+      ) {
+        return
+      }
+      const rankedIds = action.payload.rankedIds.filter((id) => state.nomineeIds.includes(id))
+      if (rankedIds.length === 0) return
+
+      // Count only players who remain on the final public ballot. Initial
+      // nominations can be cancelled by Safety, so they are not a reliable
+      // source for finale claims about surviving audience votes.
+      state.voxPopuli.audienceVoteDaysByPlayerId ??= {}
+      rankedIds.forEach((id) => {
+        const days = state.voxPopuli!.audienceVoteDaysByPlayerId![id] ?? []
+        if (!days.includes(state.week)) days.push(state.week)
+        state.voxPopuli!.audienceVoteDaysByPlayerId![id] = days
+      })
+
+      state.voxPopuli.awaitingPublicVote = false
+      // Vox does not use the classic Final-LOH ceremony. A stale classic flag
+      // here used to disable Play after the Final 3 public verdict.
+      if (action.payload.context === 'final3') {
+        state.awaitingFinal3Eviction = false
+        state.awaitingFinal3Plea = false
+      }
+      state.voxPopuli.publicVotePercentages = { ...action.payload.percentages }
+      state.voteResultsMode = 'public'
+      state.voteResults = { ...action.payload.percentages }
+      state.votes = {}
+      state.pendingExitContext = {
+        week: state.week,
+        leaderIds: [],
+        nomineeIds: [...state.nomineeIds],
+        votesByVoterId: {},
+        voteCounts: { ...action.payload.percentages },
+      }
+      state.history ??= []
+      state.history.push({
+        type: 'voxAudienceVoteResult',
+        week: state.week,
+        data: {
+          mode: 'vox_populi',
+          context: action.payload.context,
+          nomineeIds: [...state.nomineeIds],
+          rankedIds: [...rankedIds],
+          percentages: { ...action.payload.percentages },
+          playerNamesById: Object.fromEntries(
+            state.players.map((player) => [player.id, player.name])
+          ),
+          visibility: 'public_result',
+        },
+        timestamp: Date.now(),
+      })
+
+      const firstId = rankedIds[0]
+      const first = state.players.find((player) => player.id === firstId)
+      if (!first) return
+      const firstPercent = action.payload.percentages[firstId] ?? 0
+      const percentagePrecision = getVotePercentagePrecision(
+        Object.values(action.payload.percentages)
+      )
+      state.pendingEviction = {
+        evicteeId: firstId,
+        evictionMessage:
+          action.payload.context === 'final3'
+            ? `${first.name} receives ${formatVotePercentage(firstPercent, percentagePrecision)} of the audience vote to eliminate and finishes in 3rd place.`
+            : `${first.name} receives the highest audience vote to eliminate at ${formatVotePercentage(firstPercent, percentagePrecision)} and leaves the Hub.`,
+      }
+
+      if (
+        action.payload.context === 'eviction' &&
+        state.doubleEviction?.weekActive &&
+        state.nomineeIds.length >= 3 &&
+        rankedIds.length >= 3
+      ) {
+        const secondId = rankedIds[1]
+        const second = state.players.find((player) => player.id === secondId)
+        if (second) {
+          const secondPercent = action.payload.percentages[secondId] ?? 0
+          state.doubleEviction.pendingSecondEviction = {
+            evicteeId: secondId,
+            evictionMessage: `${second.name} receives the second-highest audience vote to eliminate at ${formatVotePercentage(secondPercent, percentagePrecision)} and also leaves in tonight's Double Elimination.`,
+          }
+        }
+      }
+      if (action.payload.context === 'eviction') {
+        state.phase = 'eviction_results'
+      }
+      pushEvent(state, `The audience vote is closed. The result is final.`, 'vote', {
+        major: 'vox_populi_public_vote_closed',
+      })
+    },
+
+    commitVoxAudiencePreview(
+      state,
+      action: PayloadAction<{
+        week: number
+        nomineeIds: string[]
+        percentages: Record<string, number>
+      }>
+    ) {
+      if (!isVoxPopuliActive(state) || !state.voxPopuli) return
+      if (state.voxPopuli.audiencePreviewWeek === action.payload.week) return
+      const eligibleIds = action.payload.nomineeIds.filter((id) => state.nomineeIds.includes(id))
+      if (eligibleIds.length < 2) return
+      state.voxPopuli.audiencePreviewWeek = action.payload.week
+      state.voxPopuli.audiencePreviewNomineeIds = [...eligibleIds]
+      state.voxPopuli.audiencePreviewPercentages = Object.fromEntries(
+        eligibleIds.map((id) => [id, action.payload.percentages[id] ?? 0])
+      )
+    },
+
+    dismissVoteResults(state) {
+      state.voteResults = null
+    },
+
+    /**
+     * Dismiss the eviction splash animation after the player has viewed it.
+     * Clears the eviction splash ID.
+     */
+    dismissEvictionSplash(state) {
+      state.evictionSplashId = null
+    },
+
+    continueSurvivorAfterAd(state, action: PayloadAction<{ recoveryKey: string } | undefined>) {
+      const recoveryKey = getSurvivalRecoveryKey(state)
+      if (!recoveryKey || getSurvivalAdRecoveriesRemaining(state) === 0) return
+      if (action.payload && action.payload.recoveryKey !== recoveryKey) return
+      applySurvivalRecovery(state, 'ad')
+    },
+
+    /** Only dispatch after the paid recovery service has reserved a durable credit. */
+    continueSurvivorAfterPaidRecovery(state, action: PayloadAction<{ recoveryKey: string }>) {
+      if (getSurvivalRecoveryKey(state) !== action.payload.recoveryKey) return
+      applySurvivalRecovery(state, 'paid')
+    },
+
+    /**
+     * Set or clear the player currently shown in a fullscreen eviction overlay.
+     * Pass the player's id to mark overlay active; pass null to clear.
+     * Used by SpotlightEvictionOverlay (on mount/unmount) and Final3Ceremony
+     * (on eviction_splash enter/exit) so AvatarTile can hide itself (isEvicting)
+     * during the match-cut, preventing the duplicated fullscreen avatar start.
+     */
+    chooseTribunalInvitation(state, action: PayloadAction<'agree' | 'exit'>) {
+      if (
+        state.tribunalInvitationAcknowledged ||
+        state.battleBack?.active ||
+        state.battleBack?.returnAnimationPending ||
+        !state.players.some((player) => player.isUser && player.status === 'jury')
+      )
+        return
+      state.tribunalInvitationAcknowledged = true
+      state.tribunalInvitationTransition = action.payload === 'agree' ? 'sequester' : 'exit'
+    },
+
+    completeTribunalArrival(state) {
+      if (state.tribunalInvitationTransition === 'sequester') {
+        state.tribunalInvitationTransition = null
+      }
+    },
+
+    setEvictionOverlay(state, action: PayloadAction<string | null>) {
+      state.evictionOverlayPlayerId = action.payload
+    },
+
+    /**
+     * Clear the eviction overlay flag only if it still refers to the given player.
+     * Safe to call from unmount cleanup: if a new overlay has already mounted for
+     * a different player, this action is a no-op and does not disturb that overlay.
+     */
+    clearEvictionOverlay(state, action: PayloadAction<string>) {
+      if (state.evictionOverlayPlayerId === action.payload) {
+        state.evictionOverlayPlayerId = null
+      }
+    },
+
+    /**
+     * Commit the deferred eviction after the cinematic overlay completes.
+     *
+     * Sets the evictee's status to 'evicted' or 'jury', removes them from
+     * nomineeIds, pushes the eviction event, and clears pendingEviction.
+     * For Final-4 evictions (phase === 'final4_eviction') also transitions
+     * the phase to 'final3' and pushes the "Final 3!" event.
+     * For Double Eviction weeks, promotes the pending second eviction to
+     * `pendingEviction` after the first resolves; clears `doubleEviction.weekActive`
+     * once both evictions have been committed.
+     */
+    finalizePendingEviction(state, action: PayloadAction<string>) {
+      const evicteeId = action.payload
+      if (!state.pendingEviction || state.pendingEviction.evicteeId !== evicteeId) return
+
+      const evictee = state.players.find((p) => p.id === evicteeId)
+      if (!evictee) return
+
+      const msg = state.pendingEviction.evictionMessage
+      const isFinal4 = state.phase === 'final4_eviction'
+      const isVoxFinal3 =
+        isVoxPopuliActive(state) &&
+        state.voxPopuli?.publicVoteContext === 'final3' &&
+        state.phase === 'final3_decision'
+      const wasCupidPartnerFollowup =
+        isCupidArrowActive(state) && state.cupidArrow?.pendingPartnerEvictionId === evicteeId
+      const cupidPartnerId =
+        isCupidArrowActive(state) && !wasCupidPartnerFollowup
+          ? getCupidPartnerId(state, evicteeId)
+          : null
+      const cupidPartner = cupidPartnerId
+        ? state.players.find((player) => player.id === cupidPartnerId)
+        : null
+
+      assignSeasonPlacementOnExit(state, evicteeId)
+      evictee.status = evictedStatus(state, evictee)
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== evicteeId)
+      state.pendingEviction = null
+      state.dayStartShock = null
+      expireBellaWillAtEndgame(state)
+
+      if (evicteeId === BELLA_ID && state.bellaWill?.active && !state.bellaWill.inherited) {
+        const sameDoubleEvicteeId = state.doubleEviction?.pendingSecondEviction?.evicteeId ?? null
+        const unresolvedDoubleBoundaryIds =
+          state.doubleEviction?.weekActive && state.awaitingTieBreak
+            ? (state.tiedNomineeIds ?? [])
+            : []
+        const excludedHeirIds = [
+          ...(sameDoubleEvicteeId ? [sameDoubleEvicteeId] : []),
+          ...unresolvedDoubleBoundaryIds,
+        ]
+        publishBellaWillOnEviction(state, evicteeId, excludedHeirIds)
+      }
+
+      const cupidEvictionTemplateId = msg.includes(
+        "Cupid's Arrow means you are eliminated together"
+      )
+        ? msg.includes(' breaks the tie. ')
+          ? 'cupid.pair-tiebreak-eviction'
+          : 'cupid.pair-eviction'
+        : wasCupidPartnerFollowup
+          ? 'cupid.partner-eviction'
+          : undefined
+      pushEvent(
+        state,
+        msg,
+        'game',
+        cupidEvictionTemplateId
+          ? { broadcastTemplateId: cupidEvictionTemplateId, phase: 'eviction_results' }
+          : undefined
+      )
+
+      if (
+        cupidPartner &&
+        cupidPartner.status !== 'evicted' &&
+        cupidPartner.status !== 'jury' &&
+        state.cupidArrow
+      ) {
+        state.cupidArrow.pendingPartnerEvictionId = cupidPartner.id
+        state.pendingEviction = {
+          evicteeId: cupidPartner.id,
+          evictionMessage: `${cupidPartner.name} is bound to ${evictee.name} by Cupid's Arrow and is eliminated too. 💔`,
+        }
+      } else if (wasCupidPartnerFollowup && state.cupidArrow) {
+        state.cupidArrow.pendingPartnerEvictionId = null
+        state.cupidArrow.eliminatedPairCount += 1
+        if (state.cupidArrow.eliminatedPairCount >= CUPID_ARROW_BREAK_AFTER_PAIRS) {
+          breakCupidArrowSpell(state)
+        }
+      } else if (isVoxFinal3 && state.voxPopuli) {
+        completeFinalThreeController(state, evicteeId)
+        state.voxPopuli.publicVoteContext = null
+        state.voxPopuli.finalistIds = getAlivePlayers(state).map((player) => player.id)
+        state.phase = 'week_end'
+        pushEvent(
+          state,
+          `The Final 2 is set. One last audience vote will crown the winner; the complete season story will follow.`,
+          'game',
+          { major: 'vox_populi_final_two', broadcastPriority: 'critical' }
+        )
+      } else if (isFinal4) {
+        const activePlayers = activeHousemateCount(state)
+        const human = getHumanPlayer(state)
+        if (
+          state.weekendsEnabledForSeason === true &&
+          !state.finaleWeekendCompleted &&
+          activePlayers === 3 &&
+          Boolean(human) &&
+          state.mode !== 'survival'
+        ) {
+          // Keep the Final 4 phase mounted until the interlude ends. The weekend
+          // owns the pause; completing it hands the same run into the Final 3.
+          state.weekendInterlude = createWeekendInterlude(state, state.week, false, 3, true)
+          pushEvent(
+            state,
+            'One last weekend before the Final Three. Take a breath, make your plans, and get ready for the fight ahead.',
+            'game',
+            {
+              major: 'weekend_3',
+              weekendDay: 1,
+              weekendEpisode: 'season_so_far',
+              forceOnTv: true,
+            }
+          )
+        } else {
+          state.phase = 'final3'
+        }
+      } else if (state.doubleEviction?.pendingSecondEviction) {
+        // Double Eviction: promote the second eviction to the main pending slot.
+        state.pendingEviction = state.doubleEviction.pendingSecondEviction
+        state.doubleEviction.pendingSecondEviction = null
+      } else if (state.doubleEviction?.weekActive) {
+        // Both double eviction evictions are done — reset the weekly flag.
+        state.doubleEviction.weekActive = false
+        state.twistActive = false
+        // Mark all surviving players so buildSummaries can set survivedDoubleEviction.
+        state.players.forEach((p) => {
+          if (p.status !== 'evicted' && p.status !== 'jury') {
+            ensurePlayerStats(p).survivedDoubleEviction = true
+          }
+        })
+      }
+
+      if (!state.pendingEviction) {
+        if (state.phase === 'eviction_results') {
+          pushVoxPostEvictionReaction(state, evictee)
+        }
+        state.pendingExitContext = null
+        clearResolvedEvictionRoles(state)
+        if (
+          isVoxPopuliActive(state) &&
+          state.phase === 'eviction_results' &&
+          getAlivePlayers(state).length === 3
+        ) {
+          state.phase = 'final3'
+          pushEvent(
+            state,
+            `Final 3! The remaining hubmates will compete for immunity before the audience decides third place.`,
+            'game',
+            { major: 'vox_populi_final_three' }
+          )
+        }
+      }
+    },
+
+    /**
+     * Player voluntarily self-evicts from the Diary Room.
+     * Always sets the player's status to 'evicted' (never jury, regardless of jury
+     * threshold — self-eviction is not a normal eviction path).
+     * Clears any authoritative fields that reference the self-evicting player and
+     * resets all human-decision blocking flags so the store is in a clean state
+     * if the user navigates back (e.g., via the browser history).
+     * The caller should navigate to /self-evicted after dispatching this action.
+     */
+    selfEvict(state, action: PayloadAction<string>) {
+      const playerId = action.payload
+      const player = state.players.find((p) => p.id === playerId)
+      if (!player) return
+
+      // Always 'evicted', never 'jury', for self-evictions. Cupid's active
+      // contract applies here too: voluntarily leaving takes the partner out.
+      const cupidWasActive = isCupidArrowActive(state)
+      const selfEvictionIds = expandCupidIds(state, [playerId]).filter((id) => {
+        const candidate = state.players.find((entry) => entry.id === id)
+        return candidate?.status !== 'evicted' && candidate?.status !== 'jury'
+      })
+      const selfEvictionSet = new Set(selfEvictionIds)
+      selfEvictionIds.forEach((id) => {
+        const exitingPlayer = state.players.find((candidate) => candidate.id === id)
+        if (!exitingPlayer) return
+        archiveSeasonExitContext(state, id, id === playerId ? 'selfEviction' : 'linkedExit')
+        assignSeasonPlacementOnExit(state, id)
+        exitingPlayer.status = 'evicted'
+      })
+      state.nomineeIds = state.nomineeIds.filter((id) => !selfEvictionSet.has(id))
+
+      // Clear fields that directly reference this player to avoid dangling IDs.
+      if (state.lohId && selfEvictionSet.has(state.lohId)) state.lohId = null
+      if (state.posWinnerId && selfEvictionSet.has(state.posWinnerId)) state.posWinnerId = null
+      if (state.povSavedId && selfEvictionSet.has(state.povSavedId)) state.povSavedId = null
+      if (state.povProtectedIds?.some((id) => selfEvictionSet.has(id))) {
+        state.povProtectedIds = state.povProtectedIds.filter((id) => !selfEvictionSet.has(id))
+      }
+      if (state.pendingNominee1Id && selfEvictionSet.has(state.pendingNominee1Id)) {
+        state.pendingNominee1Id = null
+      }
+      if (state.pendingEviction && selfEvictionSet.has(state.pendingEviction.evicteeId)) {
+        state.pendingEviction = null
+      }
+
+      // Clear human-decision blocking flags so advance() can run cleanly.
+      state.replacementNeeded = false
+      state.awaitingNominations = false
+      state.awaitingPovDecision = false
+      state.awaitingPovSaveTarget = false
+      state.awaitingHumanVote = false
+      state.awaitingTieBreak = false
+      state.awaitingMissionImmunityOffer = false
+      state.tiedNomineeIds = null
+      state.awaitingFinal3Eviction = false
+      state.awaitingFinal3Plea = false
+      state.evictionSplashId = null
+      state.votes = {}
+      state.voteResults = null
+
+      if (cupidWasActive && selfEvictionIds.length > 1 && state.cupidArrow) {
+        state.cupidArrow.eliminatedPairCount += 1
+        if (state.cupidArrow.eliminatedPairCount >= CUPID_ARROW_BREAK_AFTER_PAIRS) {
+          breakCupidArrowSpell(state)
+        }
+      }
+
+      const partner = selfEvictionIds
+        .filter((id) => id !== playerId)
+        .map((id) => state.players.find((candidate) => candidate.id === id)?.name)
+        .filter(Boolean)
+        .join(' and ')
+      pushEvent(
+        state,
+        partner
+          ? `${player.name} has chosen to leave the Hub. Cupid's Arrow also eliminates ${partner}. 🚪💔`
+          : `${player.name} has chosen to self-eliminate from The Hub. 🚪`,
+        'game',
+        partner
+          ? { broadcastTemplateId: 'cupid.self-eviction-pair', phase: 'eviction_results' }
+          : undefined
+      )
+    },
+
+    /**
+     * Called by the UI when it starts rendering the step-1 "LOH must name a
+     * replacement nominee" announcement during the AI replacement ceremony.
+     * Clears the aiReplacementWaiting flag so advance() can proceed to step 2.
+     */
+    aiReplacementRendered(state) {
+      state.aiReplacementWaiting = false
+    },
+
+    /**
+     * Finalize the Final 4 eviction — used when the human POS holder casts their vote.
+     * For AI, advance() handles the eviction automatically.
+     * Validates that the evictee is a current nominee before proceeding.
+     */
+    finalizeFinal4Eviction(state, action: PayloadAction<string>) {
+      const evicteeId = action.payload
+      // Validate the evictee is a current nominee
+      if (!state.nomineeIds.includes(evicteeId)) return
+      const evictee = state.players.find((p) => p.id === evicteeId)
+      const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+      if (!evictee || !povHolder) return
+
+      // Defer the eviction commit until the cinematic overlay completes.
+      // finalizePendingEviction will set evictee.status and transition to final3.
+      state.awaitingPovDecision = false
+      state.pendingEviction = {
+        evicteeId,
+        evictionMessage: `${povHolder.name} has chosen to eliminate ${evictee.name}. ${evictee.name} has been eliminated from the Hub. 🚪`,
+      }
+    },
+
+    /**
+     * Finalize the Final 3 eviction — used when the human Final LOH directly evicts
+     * one of the 2 remaining houseguests in the `final3_decision` phase.
+     * For AI Final LOH, advance() handles the eviction automatically.
+     * Validates that the evictee is a current nominee before proceeding.
+     */
+    finalizeFinal3Eviction(state, action: PayloadAction<string>) {
+      const evicteeId = action.payload
+      // Validate the evictee is a current nominee
+      if (!state.nomineeIds.includes(evicteeId)) return
+      const evictee = state.players.find((p) => p.id === evicteeId)
+      const finalHoh = state.players.find((p) => p.id === state.lohId)
+      if (!evictee || !finalHoh) return
+
+      assignSeasonPlacementOnExit(state, evicteeId)
+      evictee.status = evictedStatus(state, evictee)
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== evicteeId)
+      state.awaitingFinal3Eviction = false
+      completeFinalThreeController(state, evicteeId)
+      pushEvent(
+        state,
+        `${finalHoh.name} has chosen to eliminate ${evictee.name}. ${evictee.name} finishes in 3rd place. 🥉`,
+        'game'
+      )
+      publishBellaWillOnEviction(state, evicteeId)
+      state.phase = 'week_end'
+      pushEvent(
+        state,
+        `The Final 2 is set! The Tribunal will now vote for the winner of The Big Eye. 🏆`,
+        'game'
+      )
+    },
+
+    // ─── Battle Back / Jury Return twist actions ──────────────────────────────
+
+    /**
+     * Activate the Battle Back twist after an eligible eviction.
+     * Sets `battleBack.active = true` (blocks advance()) and pushes a TV event
+     * with `major: 'battle_back'` so the TV filler shows an announcement.
+     * The full-screen competition overlay is NOT shown yet — it only opens after
+     * `openBattleBackCompetition` is dispatched (triggered by GameScreen once the
+     * TV announcement has been seen, ~5 s after activation).
+     * Called by the `tryActivateBattleBack` thunk when the probability roll passes.
+     */
+    activateBattleBack(
+      state,
+      action: PayloadAction<{
+        candidates: string[]
+        week: number
+        humanReturn?: boolean
+        source?: BattleBackActivationSource
+      }>
+    ) {
+      if (isVoxPopuliTwistLocked(state)) return
+      const candidates = sanitizeBattleBackCandidateIds(state.players, action.payload.candidates)
+      if (candidates.length === 0) return
+      const activationSource =
+        action.payload.source ?? (action.payload.humanReturn ? 'human-guarantee' : 'manual')
+      const bb: BattleBackState = {
+        used: false,
+        active: true,
+        competitionActive: false,
+        weekDecided: action.payload.week,
+        candidates,
+        activationSource,
+        attemptIndex: 0,
+        retryCount: 0,
+        retryLimit: BATTLE_BACK_RETRY_LIMIT,
+        pendingRetryWinnerId: null,
+        winnerId: null,
+        returnAnimationPending: false,
+      }
+      state.battleBack = bb
+      state.twistActive = true
+      state.twistActivatedThisWeek = true
+      if (action.payload.humanReturn || activationSource === 'human-guarantee') {
+        state.seasonDirectorHumanReturnUsed = true
+      }
+      if (activationSource === 'ai-director') state.seasonDirectorAiBattleBackUsed = true
+      if (state.seasonDirectorPlan) state.seasonDirectorLastSpotlightDay = state.week
+      // Push event WITH major: 'battle_back' so TvZone shows the TvAnnouncementOverlay.
+      pushEvent(
+        state,
+        `🔥 SHOCK: Back 2 the Game is here! Tribunal members will compete for a chance to return! 🏆`,
+        'twist',
+        { major: 'battle_back' }
+      )
+    },
+
+    /**
+     * Open the full-screen Battle Back competition overlay.
+     * Called by GameScreen after the TV announcement has been acknowledged.
+     */
+    openBattleBackCompetition(state) {
+      if (state.battleBack && state.battleBack.active) {
+        if (!state.battleBack.competitionActive && !state.battleBack.aiRuntime) {
+          state.battleBack.aiRuntime = captureSeasonAiRuntime(
+            state,
+            state.players.filter((player) => state.battleBack?.candidates.includes(player.id))
+          )
+        }
+        state.battleBack.competitionActive = true
+      }
+    },
+
+    offerBattleBackRetry(state, action: PayloadAction<string>) {
+      const bb = state.battleBack
+      if (!bb?.active) return
+      const winnerId = action.payload
+      if (!bb.candidates.includes(winnerId)) return
+      const retryCount = bb.retryCount ?? 0
+      const retryLimit = bb.retryLimit ?? BATTLE_BACK_RETRY_LIMIT
+      if (retryCount >= retryLimit) return
+      bb.pendingRetryWinnerId = winnerId
+    },
+
+    acceptBattleBackRetry(state) {
+      const bb = state.battleBack
+      if (!bb?.active || !bb.pendingRetryWinnerId) return
+      const retryCount = bb.retryCount ?? 0
+      const retryLimit = bb.retryLimit ?? BATTLE_BACK_RETRY_LIMIT
+      if (retryCount >= retryLimit) return
+      bb.retryCount = retryCount + 1
+      bb.attemptIndex = (bb.attemptIndex ?? 0) + 1
+      bb.pendingRetryWinnerId = null
+    },
+
+    clearBattleBackRetryOffer(state) {
+      if (state.battleBack) state.battleBack.pendingRetryWinnerId = null
+    },
+
+    /**
+     * Complete the Battle Back twist — the winning juror returns to the house.
+     * Changes their status from 'jury' to 'active', pushes a TV event,
+     * marks the twist as used, and clears the active overlay flag.
+     */
+    completeBattleBack(state, action: PayloadAction<string>) {
+      const winnerId = action.payload
+      const bb = state.battleBack
+
+      // Validate that the Battle Back is active and the winnerId is a valid jury candidate.
+      if (!bb || !bb.active) {
+        return
+      }
+
+      const winner = getStoredBattleBackCandidates(state.players, bb.candidates).find(
+        (player) => player.id === winnerId
+      )
+      if (!winner) return
+
+      // Preserve the first exit as history, but clear the canonical placement so
+      // a second eviction after re-entry can stamp the contestant's true finish.
+      if (winner.firstEvictedAtWeek == null && winner.evictedAtWeek != null) {
+        winner.firstEvictedAtWeek = winner.evictedAtWeek
+      }
+      if (winner.firstExitPlacement == null && winner.seasonPlacement != null) {
+        winner.firstExitPlacement = winner.seasonPlacement
+      }
+      winner.status = 'active'
+      winner.evictedAtWeek = undefined
+      winner.seasonPlacement = undefined
+      ensurePlayerStats(winner).battleBackWins = (winner.stats!.battleBackWins ?? 0) + 1
+      pushEvent(
+        state,
+        `🔥 ${winner.name} has survived Back 2 the Game and RETURNS to the Hub! 🏠✨`,
+        'twist'
+      )
+
+      bb.active = false
+      bb.used = true
+      bb.winnerId = winnerId
+      bb.pendingRetryWinnerId = null
+      bb.returnAnimationPending = true
+      state.twistActive = false
+    },
+
+    /** Consume the persisted return marker after the reverse animation settles. */
+    consumeBattleBackReturn(state) {
+      if (state.battleBack) state.battleBack.returnAnimationPending = false
+    },
+
+    /**
+     * Dismiss the Battle Back overlay without a winner (e.g., cancelled or
+     * all candidates were eliminated with no result). Marks the twist as used
+     * so it does not fire again this season.
+     */
+    dismissBattleBack(state) {
+      if (state.battleBack) {
+        state.battleBack.active = false
+        state.battleBack.used = true
+        state.battleBack.pendingRetryWinnerId = null
+        state.battleBack.returnAnimationPending = false
+      }
+      state.twistActive = false
+    },
+
+    // ─── Double Eviction twist actions ───────────────────────────────────────
+
+    /**
+     * Activate the Double Eviction twist for the current week.
+     * Sets `doubleEviction.weekActive = true`, increments `usedCount`, sets
+     * `twistActive`. The manager-controlled nominations card is the single
+     * announcement source for this branch.
+     * Called by the `tryActivateDoubleEviction` thunk when the probability roll passes.
+     */
+    activateDoubleEviction(state) {
+      if (!state.doubleEviction) {
+        state.doubleEviction = { usedCount: 0, weekActive: false, pendingSecondEviction: null }
+      }
+      state.doubleEviction.weekActive = true
+      state.doubleEviction.usedCount += 1
+      state.doubleEviction.pendingSecondEviction = null
+      state.twistActive = true
+      state.twistActivatedThisWeek = true
+      if (state.seasonDirectorPlan) state.seasonDirectorLastSpotlightDay = state.week
+    },
+
+    /**
+     * Activate a special veto twist for the current week.
+     * Called by the `tryActivateSpecialVeto` thunk when the probability roll passes.
+     */
+    activateSpecialVeto(state, action: PayloadAction<{ type: SpecialVetoType; week: number }>) {
+      if (isVoxPopuliTwistLocked(state)) return
+      const { type, week } = action.payload
+      if (!state.specialVeto) {
+        state.specialVeto = {
+          seasonUsed: false,
+          activeType: null,
+          activatedWeek: null,
+          vipUseStage: 0,
+          awaitingHolderReplacement: false,
+          awaitingCoupReplacement1: false,
+          awaitingCoupReplacement2: false,
+          coupReplacement1Id: null,
+          awaitingVipSecondUseDecision: false,
+          awaitingVipSecondSaveTarget: false,
+        }
+      }
+      state.specialVeto.seasonUsed = true
+      state.specialVeto.activeType = type
+      state.specialVeto.activatedWeek = week
+      state.specialVeto.vipUseStage = 0
+      state.twistActive = true
+      state.twistActivatedThisWeek = true
+      if (state.seasonDirectorPlan) state.seasonDirectorLastSpotlightDay = state.week
+
+      const typeLabels: Record<SpecialVetoType, string> = {
+        vip: 'DOUBLE TROUBLE! This week, the holder may use the power TWICE! 👑',
+        diamond: 'HALO EXCHANGE! This week, the holder may name the backup nominee. 😇',
+        coup: 'DETOX! This week, the holder may clear both nominees and name two replacements! ⚡',
+        spotlight: 'FORCE MAJEURE! This week, the holder is forced to use the power. ✨',
+      }
+      const majorKeys: Record<SpecialVetoType, string> = {
+        vip: 'vip_veto',
+        diamond: 'diamond_pov',
+        coup: 'coup_detat',
+        spotlight: 'spotlight_veto',
+      }
+      pushEvent(state, typeLabels[type], 'twist', {
+        major: majorKeys[type],
+        week,
+      })
+    },
+
+    setCupidArrowSchedule(state, action: PayloadAction<number | null>) {
+      if (state.mode === 'survival') return
+      const scheduledSeason = action.payload
+      state.cupidArrow ??= {
+        scheduledSeason,
+        status: 'inactive',
+        activatedSeason: null,
+        activatedWeek: null,
+        pairs: [],
+        eliminatedPairCount: 0,
+        pendingPartnerEvictionId: null,
+        visualsRevealed: false,
+      }
+      state.cupidArrow.scheduledSeason = scheduledSeason
+      if (state.cupidArrow.status === 'active' || state.cupidArrow.status === 'broken') return
+      state.cupidArrow.status =
+        scheduledSeason === state.season && state.week === 1 && state.phase === 'week_start'
+          ? 'scheduled'
+          : 'inactive'
+    },
+
+    activateCupidArrowNow(state) {
+      if (state.mode === 'survival') return
+      state.cupidArrow ??= {
+        scheduledSeason: state.season,
+        status: 'scheduled',
+        activatedSeason: null,
+        activatedWeek: null,
+        pairs: [],
+        eliminatedPairCount: 0,
+        pendingPartnerEvictionId: null,
+        visualsRevealed: false,
+      }
+      state.cupidArrow.scheduledSeason = state.season
+      state.cupidArrow.status = 'scheduled'
+      activateCupidArrowForSeason(state)
+    },
+
+    breakCupidArrowNow(state) {
+      breakCupidArrowSpell(state)
+    },
+
+    revealCupidArrowVisuals(state) {
+      if (state.cupidArrow?.status === 'active') state.cupidArrow.visualsRevealed = true
+    },
+
+    finishCupidArrowVisualReturn(state) {
+      if (state.cupidArrow?.status === 'broken') state.cupidArrow.visualsRevealed = false
+    },
+
+    setVoxPopuliSchedule(state, action: PayloadAction<number | null>) {
+      if (state.mode === 'survival') return
+      const scheduledSeason = action.payload
+      state.voxPopuli ??= createInitialVoxPopuliState(scheduledSeason)
+      state.voxPopuli.scheduledSeason = scheduledSeason
+      if (state.voxPopuli.status === 'active' || state.voxPopuli.status === 'complete') return
+      state.voxPopuli.status =
+        scheduledSeason === state.season && state.week === 1 && state.phase === 'week_start'
+          ? 'scheduled'
+          : 'inactive'
+    },
+
+    activateVoxPopuliNow(state) {
+      if (state.mode === 'survival') return
+      if (isCupidArrowTwistLocked(state)) return
+      state.voxPopuli ??= createInitialVoxPopuliState(state.season)
+      state.voxPopuli.scheduledSeason = state.season
+      state.voxPopuli.status = 'scheduled'
+      activateVoxPopuliForSeason(state)
+    },
+
+    setSeasonExpansion(state, action: PayloadAction<'cupidArrow' | 'voxPopuli' | null>) {
+      if (state.mode === 'survival') {
+        state.expansionMode = null
+        return
+      }
+      state.expansionMode = action.payload
+    },
+
+    queueForcedShock(state, action: PayloadAction<ForcedShockType>) {
+      const type = action.payload
+      if (isCupidArrowTwistLocked(state)) {
+        pushEvent(
+          state,
+          `[DEBUG] ${formatForcedShockLabel(type)} is unavailable while Cupid's Arrow controls the season.`,
+          'game'
+        )
+        return
+      }
+      if (isVoxPopuliActive(state) && !FORCED_SHOCK_CRITICAL_RULES[type].voxCompatible) {
+        pushEvent(
+          state,
+          `[DEBUG] ${formatForcedShockLabel(type)} is unavailable during Vox Populi.`,
+          'game'
+        )
+        return
+      }
+      const earliestWeek = Math.max(
+        type === 'depressionShock' ? DEPRESSION_SHOCK_MIN_WEEK : 0,
+        getForcedShockActivationWeek(state, getForcedShockSafePhase(type))
+      )
+      state.pendingForcedShock = {
+        type,
+        requestedWeek: state.week,
+        earliestWeek,
+      }
+      pushEvent(
+        state,
+        `[DEBUG] ${formatForcedShockLabel(type)} queued for the next safe shock window (earliest Day ${earliestWeek}). ⚡`,
+        'game'
+      )
+    },
+
+    clearForcedShock(state) {
+      if (!state.pendingForcedShock) return
+      pushEvent(
+        state,
+        `[DEBUG] Cleared queued ${formatForcedShockLabel(state.pendingForcedShock.type)} shock. ⚡`,
+        'game'
+      )
+      state.pendingForcedShock = null
+    },
+
+    /** Clear a queued debug shock after it has been successfully consumed. */
+    consumeForcedShock(state) {
+      state.pendingForcedShock = null
+    },
+
+    /**
+     * Activate the day-start shock popup.
+     * The popup stays visible until the player confirms the elimination.
+     */
+    activateDayStartShock(state, action: PayloadAction<DayStartShockState>) {
+      state.dayStartShock = action.payload
+      state.dayStartShockUsedThisSeason = true
+      state.twistActivatedThisWeek = true
+    },
+
+    /** Start (or advance) the two-day Depression Shock at a clear day boundary. */
+    activateDepressionShock(state, action: PayloadAction<{ source: 'random' | 'debug' }>) {
+      if (!isDepressionShockEligibleMode(state)) return
+      const shock = state.depressionShock ?? createInitialDepressionShockState()
+      const isSecondDay = shock.activatedWeek !== null && state.week > shock.activatedWeek
+
+      shock.rollResolved = true
+      shock.pendingActivation = false
+      shock.activatedWeek ??= state.week
+      shock.activeDay = isSecondDay ? 2 : 1
+      shock.recoveryWeek = isSecondDay ? state.week + 1 : null
+      state.depressionShock = shock
+      state.twistActivatedThisWeek = true
+      state.twistActive = true
+
+      if (shock.activeDay === 1) {
+        pushEvent(
+          state,
+          'The weather has been bad for so long that the hubmates have slipped into depression. Watch out — they may not act like themselves. 🌧️',
+          'twist',
+          { major: 'depression_shock_start', source: action.payload.source }
+        )
+        pushEvent(
+          state,
+          'A sudden argument breaks out over nothing at all. The storm has everyone on edge. ⚡',
+          'social',
+          { major: 'depression_shock_fight' }
+        )
+      } else {
+        pushEvent(
+          state,
+          'The Hub is still very depressed. Colour drains from the rooms as the storm refuses to lift. 🌫️',
+          'twist',
+          { major: 'depression_shock_day_2' }
+        )
+        // DepressionShockController owns the day-two chocolate broadcast.
+        // Keeping a second legacy event here caused the same live card to be
+        // queued twice on its way into social_1.
+        pushEvent(
+          state,
+          'A harmless kitchen comment turns into another unexpected fight. Nobody seems to know why. ⚡',
+          'social',
+          { major: 'depression_shock_fight' }
+        )
+      }
+    },
+
+    /** Restore the house on the morning after the second storm day. */
+    endDepressionShock(state) {
+      const shock = state.depressionShock
+      if (!shock || shock.activeDay !== 2) return
+      shock.activeDay = 0
+      shock.completed = true
+      shock.recoveryWeek = state.week
+      state.twistActive = false
+      pushEvent(
+        state,
+        'A sunny break tears through the clouds. Light floods the Hub, a rainbow arcs overhead, and the hubmates finally return to themselves. 🌈',
+        'twist',
+        { major: 'depression_shock_recovery' }
+      )
+    },
+
+    /** Persist the one seasonal roll without consuming a blocked day. */
+    setDepressionShockRoll(state, action: PayloadAction<{ passed: boolean }>) {
+      const shock = state.depressionShock ?? createInitialDepressionShockState()
+      shock.rollResolved = true
+      shock.pendingActivation = action.payload.passed
+      shock.completed = !action.payload.passed
+      state.depressionShock = shock
+    },
+
+    /**
+     * Confirm the day-start shock and hand the chosen housemate off to the
+     * standard eviction splash.
+     */
+    confirmDayStartShock(state) {
+      if (!state.dayStartShock) return
+      const { targetId, reason } = state.dayStartShock
+      state.pendingEviction = {
+        evicteeId: targetId,
+        evictionMessage: reason,
+        exitMethod: 'shock',
+      }
+      state.dayStartShock = null
+    },
+
+    /**
+     * Human Halo Exchange holder picks the replacement nominee.
+     */
+    submitDiamondReplacement(state, action: PayloadAction<string>) {
+      if (!state.specialVeto?.awaitingHolderReplacement) return
+      if (state.specialVeto.activeType !== 'diamond') return
+      const id = action.payload
+      if (
+        id === state.lohId ||
+        id === state.posWinnerId ||
+        state.nomineeIds.includes(id) ||
+        !isEligibleReplacementNominee(state, id)
+      )
+        return
+      const player = state.players.find((p) => p.id === id)
+      const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+      if (!player) return
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+      if (!alive.some((p) => p.id === id)) return
+
+      state.nomineeIds.push(id)
+      if (player.id === state.lohId) player.status = 'loh'
+      else if (player.id === state.posWinnerId) player.status = 'nominated+pos'
+      else player.status = 'nominated'
+      incrementTimesNominated(state, id)
+      state.specialVeto.awaitingHolderReplacement = false
+      pushEvent(
+        state,
+        `${povHolder?.name ?? 'The Halo Exchange holder'} named ${player.name} as the backup nominee. 😇`,
+        'game'
+      )
+    },
+
+    /**
+     * Human Detox holder picks replacement nominees (called twice: first and second pick).
+     */
+    submitCoupReplacement(state, action: PayloadAction<string>) {
+      if (
+        !state.specialVeto?.awaitingCoupReplacement1 &&
+        !state.specialVeto?.awaitingCoupReplacement2
+      )
+        return
+      if (state.specialVeto.activeType !== 'coup') return
+      const id = action.payload
+      const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+
+      if (state.specialVeto.awaitingCoupReplacement1) {
+        if (id === state.posWinnerId || state.nomineeIds.includes(id)) return
+        if (
+          !isEligibleReplacementNominee(state, id, 2, {
+            allowLoh: true,
+            actorId: povHolder?.id,
+          })
+        )
+          return
+        state.specialVeto.coupReplacement1Id = id
+        state.specialVeto.awaitingCoupReplacement1 = false
+        state.specialVeto.awaitingCoupReplacement2 = true
+        const player = state.players.find((p) => p.id === id)
+        pushDetoxEvent(
+          state,
+          `${povHolder?.name ?? 'The Detox holder'} selects ${player?.name ?? id} as the first replacement. Choose a second. ⚡`
+        )
+      } else if (state.specialVeto.awaitingCoupReplacement2) {
+        const rep1Id = state.specialVeto.coupReplacement1Id
+        if (id === state.posWinnerId || id === rep1Id || state.nomineeIds.includes(id)) return
+        if (!alive.some((p) => p.id === id)) return
+        const availableSecondChoices = getReplacementEligiblePlayers(state, alive, 2, {
+          allowLoh: true,
+          actorId: povHolder?.id,
+        }).filter((player) => player.id !== rep1Id)
+        if (!availableSecondChoices.some((player) => player.id === id)) return
+
+        const rep1 = state.players.find((p) => p.id === rep1Id)
+        const rep2 = state.players.find((p) => p.id === id)
+        if (!rep1 || !rep2) return
+
+        appendNominee(state, rep1.id)
+        appendNominee(state, rep2.id)
+        state.specialVeto.awaitingCoupReplacement2 = false
+        state.specialVeto.coupReplacement1Id = null
+        pushDetoxEvent(
+          state,
+          `${povHolder?.name ?? 'The Detox holder'} named ${rep1.name} and ${rep2.name} as the new nominees. ⚡`
+        )
+      }
+    },
+
+    /**
+     * Human Double Trouble holder decides whether to use the power a second time.
+     */
+    submitVipSecondUseDecision(state, action: PayloadAction<boolean>) {
+      if (!state.specialVeto?.awaitingVipSecondUseDecision) return
+      state.specialVeto.awaitingVipSecondUseDecision = false
+      const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+      const nominees = state.players.filter((player) => state.nomineeIds.includes(player.id))
+      const willUseSecond = action.payload || shouldUseSafetyForTwin(state, povHolder?.id, nominees)
+      if (willUseSecond) {
+        state.specialVeto.awaitingVipSecondSaveTarget = true
+        pushEvent(
+          state,
+          `${povHolder?.name ?? 'The Double Trouble holder'} will use Double Trouble a second time! Choose a nominee to save. 👑`,
+          'game'
+        )
+      } else {
+        state.specialVeto.vipUseStage = -1
+        pushEvent(
+          state,
+          `${povHolder?.name ?? 'The Double Trouble holder'} chose not to use Double Trouble a second time. 👑`,
+          'game'
+        )
+      }
+    },
+
+    /**
+     * Human Double Trouble holder picks which nominee to save on the second use.
+     */
+    submitVipSecondSaveTarget(state, action: PayloadAction<string>) {
+      if (!state.specialVeto?.awaitingVipSecondSaveTarget) return
+      if (state.specialVeto.activeType !== 'vip') return
+      const saveId = action.payload
+      if (!state.nomineeIds.includes(saveId)) return
+
+      const savedPlayer = state.players.find((p) => p.id === saveId)
+      const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+      const lohPlayer = state.players.find((p) => p.id === state.lohId)
+      if (!savedPlayer || !povHolder) return
+      const twinSaveTarget = getTwinNomineeToSave(state, povHolder.id)
+      if (twinSaveTarget && twinSaveTarget.id !== saveId) return
+
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== saveId)
+      savedPlayer.status = 'active'
+      state.specialVeto.awaitingVipSecondSaveTarget = false
+      state.specialVeto.vipUseStage = 3
+      state.povSavedId = saveId
+      addPovProtectedId(state, saveId)
+      pushEvent(
+        state,
+        `${povHolder.name} used Double Trouble a second time, saving ${savedPlayer.name}! 👑`,
+        'game'
+      )
+      if (lohPlayer?.isUser) {
+        state.replacementNeeded = true
+        pushEvent(state, `${lohPlayer.name} must now name another backup nominee. 🎯`, 'game')
+      } else {
+        const aliveNow = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        const eligible = getReplacementEligiblePlayers(state, aliveNow)
+        if (eligible.length > 0) {
+          const rng = mulberry32(state.seed)
+          const replacement = pickStrategicReplacementNominee(state, lohPlayer?.id, eligible, rng, {
+            reason: 'selected Double Trouble replacement from the canonical strategic resolver',
+          })
+          if (!replacement) return
+          state.nomineeIds.push(replacement.id)
+          const rp = state.players.find((pl) => pl.id === replacement.id)
+          if (rp) rp.status = 'nominated'
+          incrementTimesNominated(state, replacement.id)
+          pushEvent(
+            state,
+            `${lohPlayer?.name ?? 'The LOH'} named ${replacement.name} as the backup nominee. 🎯`,
+            'game'
+          )
+          state.specialVeto.vipUseStage = -1
+        } else {
+          state.specialVeto.vipUseStage = -1
+        }
+      }
+    },
+
+    // ─── Public's Favorite Player twist actions ───────────────────────────────
+
+    /**
+     * Begin the Public's Favorite Player voting phase.
+     * Shows full-screen voting overlay after the finale winner reveal.
+     * Feature-gated via settings.sim.enableFavoritePlayer.
+     */
+    startFavoritePlayerPhase(
+      state,
+      action: PayloadAction<{ candidates: string[]; awardAmount: number }>
+    ) {
+      state.favoritePlayer = {
+        active: true,
+        votingStarted: false,
+        candidates: action.payload.candidates,
+        eliminated: [],
+        votes: {},
+        winnerId: null,
+        awardAmount: action.payload.awardAmount,
+      }
+      state.twistActive = true
+      // Retain the announcement in the TV log. The host introduction hands
+      // directly to the full-screen vote; it no longer waits on a TV filler.
+      pushEvent(
+        state,
+        `⭐ THE PUBLIC DECIDES: Vote for your Public's Favorite Player! 🏆`,
+        'twist',
+        { major: 'twist' }
+      )
+      // Append a start event to game history
+      if (!state.history) state.history = []
+      state.history.push({
+        type: 'favoritePlayer:start',
+        week: state.week,
+        data: { candidates: action.payload.candidates, awardAmount: action.payload.awardAmount },
+        timestamp: Date.now(),
+      })
+    },
+
+    /**
+     * Open the full-screen Public's Favorite voting overlay.
+     * Called immediately by GameScreen when the vote becomes active, including
+     * restored saves that still have votingStarted set to false.
+     */
+    openFavoritePlayerVoting(state) {
+      if (state.favoritePlayer && state.favoritePlayer.active) {
+        state.favoritePlayer.votingStarted = true
+      }
+    },
+
+    /**
+     * Eliminate a candidate from the Public's Favorite voting.
+     * Called each time the lowest-voted candidate is removed.
+     */
+    eliminateFavoriteCandidate(state, action: PayloadAction<string>) {
+      const fp = state.favoritePlayer
+      if (!fp || !fp.active) return
+      const elimId = action.payload
+      if (!fp.eliminated.includes(elimId)) {
+        fp.eliminated.push(elimId)
+      }
+    },
+
+    /**
+     * Resolve the Public's Favorite Player vote with a winner.
+     * Closes the overlay and records the winner in state and history.
+     */
+    resolveFavoritePlayerWinner(state, action: PayloadAction<string>) {
+      const fp = state.favoritePlayer
+      if (!fp || !fp.active) return
+      fp.winnerId = action.payload
+      fp.active = false
+      state.twistActive = false
+      // Append a winner event to game history (append-only — do not mutate existing entry)
+      if (!state.history) state.history = []
+      state.history.push({
+        type: 'favoritePlayer:winner',
+        week: state.week,
+        data: {
+          winnerId: action.payload,
+          awardAmount: fp.awardAmount,
+          votes: { ...fp.votes },
+          candidates: [...fp.candidates],
+          playerNamesById: Object.fromEntries(
+            state.players.map((player) => [player.id, player.name])
+          ),
+          visibility: 'public_result',
+        },
+        timestamp: Date.now(),
+      })
+    },
+
+    /**
+     * Award hook for the Public's Favorite Player prize.
+     * Currently a no-op that records intent in history.
+     * Future integrations can attach to this action to update player balances.
+     */
+    awardFavoritePrize(state) {
+      const fp = state.favoritePlayer
+      if (!fp || !fp.winnerId) return
+      // Append an award event to game history (balance update is left to future integration)
+      if (!state.history) state.history = []
+      state.history.push({
+        type: 'favoritePlayer:award',
+        week: state.week,
+        data: { winnerId: fp.winnerId, awardAmount: fp.awardAmount },
+        timestamp: Date.now(),
+      })
+    },
+
+    // ─── Spectator overlay ────────────────────────────────────────────────────
+
+    /**
+     * Open the SpectatorView overlay.  Sets spectatorActive with metadata so
+     * advance() blocks until closeSpectator is dispatched.
+     * No-op if spectatorActive is already set (deduplication guard).
+     */
+    openSpectator(state, action: PayloadAction<SpectatorActiveState>) {
+      if (state.spectatorActive) {
+        // Already open — prevent duplicate overlays and race conditions.
+        if (import.meta.env.DEV) {
+          console.log('[gameSlice] openSpectator: no-op (already active)', state.spectatorActive)
+        }
+        return
+      }
+      if (import.meta.env.DEV) {
+        console.log('[gameSlice] openSpectator', action.payload)
+      }
+      state.spectatorActive = action.payload
+    },
+
+    /**
+     * Close the SpectatorView overlay.  Clears spectatorActive so advance()
+     * can proceed again.
+     */
+    closeSpectator(state) {
+      if (import.meta.env.DEV) {
+        console.log('[gameSlice] closeSpectator')
+      }
+      state.spectatorActive = null
+    },
+
+    /**
+     * Set or clear the awaitingFinal3Plea flag.
+     * When true, the Final-3 ceremony overlay is shown (coronation → pleas →
+     * LOH decision → eviction).  advance() blocks while this is true.
+     */
+    setAwaitingFinal3Plea(state, action: PayloadAction<boolean>) {
+      state.awaitingFinal3Plea = action.payload
+      if (import.meta.env.DEV) {
+        console.log('[gameSlice] awaitingFinal3Plea set to', action.payload)
+      }
+    },
+
+    /**
+     * Finalize the Final-3 ceremony: evict the chosen player, crown the Final
+     * LOH, clear awaitingFinal3Plea, and advance to week_end.
+     * Called by Final3Ceremony when the ceremony completes.
+     */
+    finalizeFinal3Decision(
+      state,
+      action: PayloadAction<{ hohWinnerId: string; evicteeId: string }>
+    ) {
+      const { hohWinnerId, evicteeId } = action.payload
+
+      // Validate evictee is a current nominee.
+      if (!state.nomineeIds.includes(evicteeId)) return
+
+      const hoh = state.players.find((p) => p.id === hohWinnerId)
+      const evictee = state.players.find((p) => p.id === evicteeId)
+      if (!evictee) return
+
+      // Crown LOH (may already be set from advance(); idempotent).
+      if (hoh && state.lohId !== hohWinnerId) {
+        if (import.meta.env.DEV) {
+          console.log('[applyLohWinner]', {
+            source: '[finalizeFinal3Decision]',
+            previousHohId: state.lohId,
+            nextHohId: hohWinnerId,
+            currentPhase: state.phase,
+          })
+        }
+        state.lohId = hohWinnerId
+        state.players.forEach((p) => {
+          if (p.status === 'loh') p.status = 'active'
+        })
+        hoh.status = 'loh'
+      }
+
+      // Evict the chosen player.
+      assignSeasonPlacementOnExit(state, evicteeId)
+      evictee.status = evictedStatus(state, evictee)
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== evicteeId)
+      completeFinalThreeController(state, evicteeId)
+
+      pushEvent(
+        state,
+        `${hoh?.name ?? hohWinnerId} has chosen to eliminate ${evictee.name}. ${evictee.name} finishes in 3rd place. 🥉`,
+        'game'
+      )
+      publishBellaWillOnEviction(state, evicteeId)
+      pushEvent(
+        state,
+        `The Final 2 is set! The Tribunal will now vote for the winner of The Big Eye. 🏆`,
+        'game'
+      )
+
+      state.awaitingFinal3Plea = false
+      state.phase = 'week_end'
+
+      if (import.meta.env.DEV) {
+        console.log('[gameSlice] finalizeFinal3Decision: eliminated', evicteeId, 'loh', hohWinnerId)
+      }
+    },
+
+    // ─── Debug-only actions ───────────────────────────────────────────────────
+    /** Force a specific player to be LOH (debug only). */
+    forceHoH(state, action: PayloadAction<string>) {
+      const id = action.payload
+      state.players.forEach((p) => {
+        if (p.status === 'loh') p.status = 'active'
+        if (p.status === 'loh+pos') p.status = 'pos'
+      })
+      state.lohId = id
+      const player = state.players.find((p) => p.id === id)
+      if (player) {
+        player.status = player.status === 'pos' ? 'loh+pos' : 'loh'
+        syncCupidRoleStatuses(state)
+        pushEvent(state, `[DEBUG] ${player.name} forced as Leader of the Hub. 👑`, 'game')
+      }
+    },
+    /** Force specific players as nominees (debug only). */
+    forceNominees(state, action: PayloadAction<string[]>) {
+      const ids = action.payload
+      state.players.forEach((p) => {
+        if (p.status === 'nominated') p.status = 'active'
+        if (p.status === 'nominated+pos') p.status = 'pos'
+      })
+      state.nomineeIds = expandCupidIds(state, ids)
+      const names: string[] = []
+      ids.forEach((id) => {
+        const p = state.players.find((pl) => pl.id === id)
+        if (p) {
+          p.status = p.status === 'pos' ? 'nominated+pos' : 'nominated'
+          names.push(p.name)
+        }
+      })
+      syncCupidRoleStatuses(state)
+      pushEvent(state, `[DEBUG] ${names.join(' and ')} forced as nominees. 🎯`, 'game')
+    },
+    /** Force a specific player as POS winner (debug only). */
+    forcePovWinner(state, action: PayloadAction<string>) {
+      const id = action.payload
+      state.players.forEach((p) => {
+        if (p.status === 'pos') p.status = 'active'
+        if (p.status === 'loh+pos') p.status = 'loh'
+        if (p.status === 'nominated+pos') p.status = 'nominated'
+      })
+      state.posWinnerId = id
+      const player = state.players.find((p) => p.id === id)
+      if (player) {
+        if (player.status === 'loh') player.status = 'loh+pos'
+        else if (player.status === 'nominated') player.status = 'nominated+pos'
+        else player.status = 'pos'
+        const partnerId = getCupidPartnerId(state, id)
+        if (partnerId) addPovProtectedId(state, partnerId)
+        syncCupidRoleStatuses(state)
+        pushEvent(state, `[DEBUG] ${player.name} forced as POS winner. 🎭`, 'game')
+      }
+    },
+    /**
+     * Prepare a deterministic post-elimination QA scene for the production
+     * Tribunal invitation. The optional Back 2 the Game variant leaves a real
+     * competition active so the invitation's normal suppression can be checked.
+     */
+    prepareTribunalInvitationTest(
+      state,
+      action: PayloadAction<{
+        gameId: string
+        mode: 'invitation' | 'first_arrival' | 'second_arrival' | 'battle_back'
+      }>
+    ) {
+      if (!import.meta.env.DEV) return
+
+      const human = state.players.find((player) => player.isUser)
+      const otherPlayers = state.players.filter((player) => !player.isUser)
+      if (!human || otherPlayers.length < (action.payload.mode === 'battle_back' ? 3 : 1)) return
+
+      // Give legacy QA profiles a visible sample body; preserve selected looks
+      // and uploaded portraits so the same fixture can review both presentations.
+      if (human.appearance?.kind !== 'catalog' && !human.avatar?.startsWith('profile-photo:')) {
+        human.appearance = { kind: 'catalog', lookId: 'pc-001', revision: 1 }
+      }
+
+      // Keep enough Tribunal members available for a playable return challenge
+      // on small test casts while showing three remaining contestants normally.
+      const activeCount = Math.min(3, Math.max(1, otherPlayers.length - 2))
+      const activeIds = new Set(otherPlayers.slice(0, activeCount).map((player) => player.id))
+      const juryIds = otherPlayers
+        .filter((player) => !activeIds.has(player.id))
+        .slice(-Math.max(2, (state.cfg?.tribunalSize ?? 9) - 1))
+      const juryMemberIds = new Set(juryIds.map((player) => player.id))
+      const candidateIds =
+        action.payload.mode === 'battle_back'
+          ? [human.id, ...juryIds.slice(0, 2).map((player) => player.id)]
+          : []
+
+      state.gameId = action.payload.gameId
+      state.mode = 'classic'
+      state.expansionMode = null
+      state.status = 'active'
+      state.week = 9
+      state.seed = 1617
+      state.phase = 'week_end'
+      state.isLive = false
+      state.lohId = null
+      state.prevHohId = null
+      state.nomineeIds = []
+      state.posWinnerId = null
+      state.replacementNeeded = false
+      state.povSavedId = null
+      state.replacementNomineeIds = []
+      state.povProtectedIds = []
+      state.awaitingNominations = false
+      state.pendingNominee1Id = null
+      state.awaitingPovDecision = false
+      state.awaitingPovSaveTarget = false
+      state.lastHohCompFinisherId = null
+      state.lastHohCompFinisherType = null
+      state.publicSavedNomineeId = null
+      state.nominationContext = null
+      state.awaitingPublicSave = false
+      state.votes = {}
+      state.batteryLowVoteEffects = {}
+      state.awaitingHumanVote = false
+      state.awaitingTieBreak = false
+      state.tiedNomineeIds = null
+      state.awaitingMissionImmunityOffer = false
+      state.awaitingFinal3Eviction = false
+      state.awaitingFinal3Plea = false
+      state.aiReplacementStep = 0
+      state.aiReplacementWaiting = false
+      state.f3Part1WinnerId = null
+      state.f3Part2WinnerId = null
+      state.finalThree = null
+      state.pendingMinigame = null
+      state.minigameResult = null
+      state.minigameContext = null
+      state.voteResults = null
+      state.evictionSplashId = null
+      state.pendingEviction = null
+      state.pendingExitContext = null
+      state.evictionOverlayPlayerId = null
+      state.seasonFinale = null
+      state.weekendInterlude = null
+      state.dayStartShock = null
+      state.pendingForcedShock = null
+      state.spectatorActive = null
+      state.publicModeEnabled = false
+      state.pendingPublicModeEnabled = null
+      state.twistActive = action.payload.mode === 'battle_back'
+      state.tribunalInvitationAcknowledged = false
+      state.tribunalInvitationTransition = null
+      state.tribunalPhaseAnnounced = false
+      state.seasonDirectorHumanReturnUsed = false
+      state.doubleEviction = {
+        usedCount: state.doubleEviction?.usedCount ?? 0,
+        weekActive: false,
+        pendingSecondEviction: null,
+      }
+      state.battleBack = {
+        used: false,
+        active: action.payload.mode === 'battle_back',
+        competitionActive: action.payload.mode === 'battle_back',
+        weekDecided: 8,
+        candidates: candidateIds,
+        activationSource: 'forced-debug',
+        attemptIndex: 0,
+        retryCount: 0,
+        retryLimit: 3,
+        pendingRetryWinnerId: null,
+        winnerId: null,
+      }
+      state.tvFeed = []
+      state.broadcastQueue = []
+      state.activeBroadcastEventId = null
+      state.presentationEventClaims = []
+      state.lastPlainBroadcastEventId = null
+      state.democracia = undefined
+      state.depressionShock = undefined
+      state.cupidArrow = undefined
+      state.voxPopuli = undefined
+      state.coLohIds = []
+      state.coLohNomineeByCoLohId = {}
+      state.favoritePlayer = {
+        active: false,
+        votingStarted: false,
+        candidates: [],
+        eliminated: [],
+        votes: {},
+        winnerId: null,
+        awardAmount: 0,
+      }
+
+      state.players.forEach((player) => {
+        const isActiveContestant = activeIds.has(player.id)
+        player.status =
+          player.isUser || juryMemberIds.has(player.id)
+            ? 'jury'
+            : isActiveContestant
+              ? 'active'
+              : 'evicted'
+        if (action.payload.mode === 'first_arrival' && !player.isUser && !isActiveContestant) {
+          player.status = 'evicted'
+        }
+        if (
+          action.payload.mode === 'second_arrival' &&
+          !player.isUser &&
+          !isActiveContestant &&
+          player.id !== juryIds.at(-1)?.id
+        ) {
+          player.status = 'evicted'
+        }
+        player.finalRank = undefined
+        player.seasonPlacement = undefined
+        player.isWinner = false
+        player.evictedAtWeek = player.status === 'jury' ? 8 : undefined
+      })
+      // A real chronological exit log makes the production arrival's latest
+      // two jurors reviewable independently of roster order.
+      const departures = [
+        ...state.players.filter((player) => !player.isUser && !activeIds.has(player.id)),
+        human,
+      ]
+      state.history = departures.map((player, index) => {
+        const week = Math.max(1, state.week - (departures.length - index - 1))
+        player.evictedAtWeek = week
+        player.seasonPlacement = activeCount + departures.length - index
+        return { type: 'seasonExit', week, data: { playerId: player.id }, timestamp: 1617 + index }
+      })
+    },
+    /**
+     * Load a deterministic, debug-only LOH backdoor scenario.
+     *
+     * This intentionally starts immediately before the Safety Ceremony so QA
+     * can inspect the real user flow (save a pawn, let the AI LOH name the
+     * replacement, then consume the Ambush reveal) without changing normal
+     * nomination probabilities or persisted campaign state.
+     */
+    prepareLohBackdoorTest(state) {
+      const human = state.players.find((player) => player.isUser)
+      const alive = state.players.filter(
+        (player) => player.status !== 'evicted' && player.status !== 'jury' && !player.isUser
+      )
+      const loh = alive[0]
+      const pawns = alive.slice(1, 3)
+      const target = alive[3]
+      if (!human || !loh || pawns.length < 2 || !target) return
+
+      state.week = Math.max(2, state.week)
+      state.phase = 'pos_ceremony'
+      state.publicModeEnabled = false
+      state.pendingPublicModeEnabled = null
+      state.doubleEviction = {
+        usedCount: state.doubleEviction?.usedCount ?? 0,
+        weekActive: false,
+        pendingSecondEviction: null,
+      }
+      state.democracia = undefined
+      state.depressionShock = undefined
+      state.cupidArrow = undefined
+      state.voxPopuli = undefined
+      state.coLohIds = []
+      state.coLohNomineeByCoLohId = {}
+      state.lohId = loh.id
+      state.posWinnerId = human.id
+      state.nomineeIds = pawns.map((player) => player.id)
+      state.replacementNeeded = false
+      state.povSavedId = null
+      state.replacementNomineeIds = []
+      state.povProtectedIds = []
+      state.awaitingPovDecision = false
+      state.awaitingPovSaveTarget = false
+      state.aiReplacementStep = 0
+      state.aiReplacementWaiting = false
+      state.specialVeto = {
+        seasonUsed: false,
+        activeType: null,
+        activatedWeek: null,
+        vipUseStage: 0,
+        awaitingHolderReplacement: false,
+        awaitingCoupReplacement1: false,
+        awaitingCoupReplacement2: false,
+        coupReplacement1Id: null,
+        awaitingVipSecondUseDecision: false,
+        awaitingVipSecondSaveTarget: false,
+      }
+
+      state.players.forEach((player) => {
+        if (player.status === 'evicted' || player.status === 'jury') return
+        player.status = 'active'
+      })
+      human.status = 'pos'
+      loh.status = 'loh'
+      pawns.forEach((player) => {
+        player.status = 'nominated'
+      })
+
+      state.currentWeekNominationRecord = {
+        week: state.week,
+        lohId: loh.id,
+        nomineeIds: pawns.map((player) => player.id),
+      }
+      const plan: LohNominationPlan = {
+        week: state.week,
+        lohId: loh.id,
+        targetId: target.id,
+        backupTargetId: null,
+        pawnIds: pawns.map((player) => player.id),
+        initialNomineeIds: pawns.map((player) => player.id),
+        strategy: 'backdoor',
+        status: 'planned',
+        selectionBasis: 'strategy',
+        targetScore: 90,
+        backdoorChance: 1,
+        safetyParticipantIds: state.players
+          .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+          .map((player) => player.id),
+      }
+      state.lohNominationPlan = plan
+      state.lohSocialPlan = {
+        week: state.week,
+        lohId: loh.id,
+        currentTargetId: pawns[0].id,
+        backupTargetId: target.id,
+        askCountsByPlayerId: {},
+        disclosedTargetByPlayerId: {},
+      }
+      pushEvent(
+        state,
+        `[DEBUG] LOH Ambush scenario loaded. Save a pawn, then advance to inspect the hidden-target reveal.`,
+        'game'
+      )
+    },
+    /** Force a player's house status without leaving stale competition roles (debug only). */
+    forcePlayerStatus(
+      state,
+      action: PayloadAction<{ playerId: string; status: 'active' | 'jury' | 'evicted' }>
+    ) {
+      const { playerId, status } = action.payload
+      const player = state.players.find((candidate) => candidate.id === playerId)
+      if (!player) return
+      if (status !== 'active') {
+        state.nomineeIds = state.nomineeIds.filter((id) => id !== playerId)
+        state.povProtectedIds = (state.povProtectedIds ?? []).filter((id) => id !== playerId)
+        if (state.lohId === playerId) state.lohId = null
+        if (state.posWinnerId === playerId) state.posWinnerId = null
+        player.evictedAtWeek = player.evictedAtWeek ?? state.week
+      } else {
+        player.evictedAtWeek = undefined
+        player.finalRank = undefined
+        player.seasonPlacement = undefined
+        player.isWinner = false
+      }
+      player.status = status
+      pushEvent(state, `[DEBUG] ${player.name} forced to ${status} status.`, 'game')
+    },
+    /**
+     * Debug-only, fully valid Vox Populi Final Three entry point. Unlike
+     * forcing a phase, it clears every preceding ceremony role and creates the
+     * same clean state produced after a real Final Four eviction.
+     */
+    prepareVoxFinalThreeTest(state) {
+      if (!isVoxPopuliActive(state) || !state.voxPopuli) return
+      const human = state.players.find((player) => player.isUser)
+      const finalists = [
+        ...(human ? [human] : []),
+        ...state.players.filter((player) => !player.isUser).slice(0, human ? 2 : 3),
+      ].slice(0, 3)
+      if (finalists.length !== 3) return
+
+      const finalistIds = new Set(finalists.map((player) => player.id))
+      state.players.forEach((player) => {
+        player.status = finalistIds.has(player.id) ? 'active' : 'evicted'
+        if (!finalistIds.has(player.id)) player.evictedAtWeek = player.evictedAtWeek ?? state.week
+      })
+      resetVoxFinalThreeRound(state)
+      state.voxPopuli.finalistIds = []
+      state.voxPopuli.finaleStage = null
+      state.voxPopuli.winnerId = null
+      state.tvFeed = []
+      state.phase = 'final3'
+      pushEvent(
+        state,
+        `Final 3! ${formatNameList(finalists.map((player) => player.name))} remain. The final immunity journey begins now.`,
+        'game',
+        { major: 'vox_final3', broadcastPriority: 'critical' }
+      )
+    },
+    /**
+     * Debug-only Classic Final Three entry point. Keeps the human plus two
+     * active AI players, moves everybody else to the Tribunal, and clears all
+     * ceremony/minigame state so the normal three-part Classic finale can run.
+     */
+    prepareClassicFinalThreeTest(state) {
+      if (isVoxPopuliActive(state)) return
+      const human = state.players.find((player) => player.isUser)
+      if (!human) return
+      const activeAi = state.players.filter(
+        (player) => !player.isUser && player.status !== 'evicted' && player.status !== 'jury'
+      )
+      const fallbackAi = state.players.filter(
+        (player) => !player.isUser && !activeAi.some((candidate) => candidate.id === player.id)
+      )
+      const finalists = [human, ...activeAi, ...fallbackAi].slice(0, 3)
+      if (finalists.length !== 3) return
+
+      resetVoxFinalThreeRound(state)
+      const finalistIds = new Set(finalists.map((player) => player.id))
+      state.players.forEach((player) => {
+        player.isWinner = false
+        player.finalRank = undefined
+        player.seasonPlacement = undefined
+        if (finalistIds.has(player.id)) {
+          player.status = 'active'
+          player.evictedAtWeek = undefined
+        } else {
+          player.status = 'jury'
+          player.evictedAtWeek ??= state.week
+        }
+      })
+      state.tvFeed = []
+      state.broadcastQueue = []
+      state.activeBroadcastEventId = null
+      state.evictionSplashId = null
+      state.evictionOverlayPlayerId = null
+      state.phase = 'final3'
+      // TvZone's phase broadcast is the single, prominent Final Three
+      // announcement. Do not append a near-identical feed event underneath
+      // it, which otherwise reads as the same news twice.
+    },
+    /**
+     * Debug-only Classic Final Four entry point. Keeps the human plus three
+     * active AI players and seeds the sole-vote setup so the real Final Four
+     * pleas and eviction flow can be tested directly.
+     */
+    prepareClassicFinalFourTest(state) {
+      if (isVoxPopuliActive(state)) return
+      const human = state.players.find((player) => player.isUser)
+      if (!human) return
+      const activeAi = state.players.filter(
+        (player) => !player.isUser && player.status !== 'evicted' && player.status !== 'jury'
+      )
+      const fallbackAi = state.players.filter(
+        (player) => !player.isUser && !activeAi.some((candidate) => candidate.id === player.id)
+      )
+      const finalists = [human, ...activeAi, ...fallbackAi].slice(0, 4)
+      if (finalists.length !== 4) return
+
+      resetVoxFinalThreeRound(state)
+      const finalistIds = new Set(finalists.map((player) => player.id))
+      state.players.forEach((player) => {
+        player.isWinner = false
+        player.finalRank = undefined
+        player.seasonPlacement = undefined
+        if (finalistIds.has(player.id)) {
+          player.status = 'active'
+          player.evictedAtWeek = undefined
+        } else {
+          player.status = 'jury'
+          player.evictedAtWeek ??= state.week
+        }
+      })
+
+      state.lohId = null
+      state.posWinnerId = human.id
+      state.nomineeIds = finalists.slice(1, 3).map((player) => player.id)
+      human.status = 'pos'
+      state.nomineeIds.forEach((nomineeId) => {
+        const nominee = state.players.find((player) => player.id === nomineeId)
+        if (nominee) nominee.status = 'nominated'
+      })
+      state.tvFeed = []
+      state.broadcastQueue = []
+      state.activeBroadcastEventId = null
+      state.evictionSplashId = null
+      state.evictionOverlayPlayerId = null
+      state.weekendInterlude = null
+      state.finaleWeekendCompleted = false
+      state.phase = 'final4_eviction'
+    },
+    /** Force entry into Final 4 eviction phase (debug only). */
+    forcePhase(state, action: PayloadAction<Phase>) {
+      state.phase = action.payload
+      pushEvent(state, `[DEBUG] Phase forced to ${action.payload}. 🔧`, 'game')
+    },
+    /**
+     * Mark the winner and runner-up in player data after the finale.
+     * Called by the FinalFaceoff component once the winner is declared.
+     */
+    finalizeGame(state, action: PayloadAction<{ winnerId: string; runnerUpId: string }>) {
+      const { winnerId, runnerUpId } = action.payload
+      state.players.forEach((p) => {
+        if (p.id === winnerId) {
+          p.isWinner = true
+          p.finalRank = 1
+        } else if (p.id === runnerUpId) {
+          p.finalRank = 2
+        }
+      })
+      pushEvent(
+        state,
+        `🏆 ${state.players.find((p) => p.id === winnerId)?.name ?? 'The winner'} has won The Big Eye – AI Edition! Congratulations! 🎉`,
+        'game'
+      )
+    },
+    completeVoxFinalistShowcase(state) {
+      if (!isVoxPopuliActive(state) || state.voxPopuli?.finaleStage !== 'showcase') return
+      state.voxPopuli.finaleStage = 'ready'
+      pushEvent(state, `Ready for the Finale? Make your move.`, 'game', {
+        major: 'vox_populi_finale_ready',
+        broadcastPriority: 'critical',
+      })
+    },
+    startVoxFinalVote(state) {
+      if (!isVoxPopuliActive(state) || !state.voxPopuli || state.voxPopuli.winnerId) return
+
+      // Play the season recap before the final public ballot so the actual
+      // verdict leads immediately to the champion's cinematic coronation.
+      if (state.voxPopuli.finaleStage === 'ready') {
+        state.voxPopuli.finaleStage = 'recap'
+        return
+      }
+      if (state.voxPopuli.finaleStage !== 'recap') return
+
+      state.voxPopuli.finaleStage = 'final_vote'
+      pushEvent(
+        state,
+        `The final audience vote is open. The public is choosing the winner of the season.`,
+        'vote',
+        { major: 'vox_populi_final_vote' }
+      )
+    },
+    resolveVoxSeasonWinner(state, action: PayloadAction<string>) {
+      if (!isVoxPopuliActive(state) || state.voxPopuli?.finaleStage !== 'final_vote') return
+      const winnerId = action.payload
+      const finalistIds = state.voxPopuli.finalistIds
+      if (!finalistIds.includes(winnerId)) return
+      const runnerUpId = finalistIds.find((id) => id !== winnerId)
+      state.players.forEach((player) => {
+        if (player.id === winnerId) {
+          player.isWinner = true
+          player.finalRank = 1
+          player.seasonPlacement = 1
+        } else if (player.id === runnerUpId) {
+          player.finalRank = 2
+          player.seasonPlacement = 2
+        }
+      })
+      state.voxPopuli.winnerId = winnerId
+      // The recap has already aired; the audience verdict now hands off to
+      // the shared coronation instead of replaying the season recap.
+      state.voxPopuli.finaleStage = null
+      state.voxPopuli.status = 'complete'
+      state.twistActive = false
+      state.seasonFinale = {
+        phase: 'winnerCinematic',
+        winnerId,
+        interviewIndex: state.seed % FINALE_INTERVIEW_VARIANT_COUNT,
+        goodbyeIndex: 0,
+        isChatOpen: false,
+        isLightsOffAnimating: false,
+        publicFavoriteEnabled: false,
+      }
+      state.history = [
+        ...(state.history ?? []),
+        {
+          type: 'voxPopuli:winner',
+          week: state.week,
+          data: { winnerId, runnerUpId, decidedBy: 'audience' },
+          timestamp: Date.now(),
+        },
+      ]
+      pushEvent(
+        state,
+        `${state.players.find((player) => player.id === winnerId)?.name ?? 'The winner'} receives the most public support and wins The Big Eye!`,
+        'game',
+        { major: 'vox_populi_winner' }
+      )
+    },
+    completeVoxSeasonRecap(state) {
+      if (
+        !state.voxPopuli ||
+        state.voxPopuli.finaleStage !== 'recap' ||
+        !state.voxPopuli.winnerId
+      ) {
+        return
+      }
+      state.voxPopuli.finaleStage = null
+      state.voxPopuli.status = 'complete'
+      state.twistActive = false
+      state.seasonFinale = {
+        phase: 'winnerCinematic',
+        winnerId: state.voxPopuli.winnerId,
+        interviewIndex: state.seed % FINALE_INTERVIEW_VARIANT_COUNT,
+        goodbyeIndex: 0,
+        isChatOpen: false,
+        isLightsOffAnimating: false,
+        publicFavoriteEnabled: false,
+      }
+    },
+    startWinnerCinematic(
+      state,
+      action: PayloadAction<{
+        winnerId: string
+        seed: number
+        publicFavoriteEnabled: boolean
+      }>
+    ) {
+      const { winnerId, seed, publicFavoriteEnabled } = action.payload
+      const interviewIndex = seed % FINALE_INTERVIEW_VARIANT_COUNT
+      const nextFinaleState: SeasonFinaleState = {
+        phase: 'winnerCinematic',
+        winnerId,
+        interviewIndex,
+        goodbyeIndex: 0,
+        isChatOpen: false,
+        isLightsOffAnimating: false,
+        publicFavoriteEnabled,
+      }
+      state.seasonFinale = nextFinaleState
+    },
+    startWinnerInterview(state) {
+      if (state.seasonFinale?.phase !== 'winnerCinematic') return
+      state.seasonFinale.phase = 'winnerInterview'
+      state.seasonFinale.isChatOpen = true
+    },
+    advanceInterview(state) {
+      if (state.seasonFinale?.phase !== 'winnerInterview') return
+      if (state.seasonFinale.publicFavoriteEnabled) {
+        state.seasonFinale.phase = 'publicFavoriteSetup'
+        state.seasonFinale.isChatOpen = true
+        return
+      }
+      state.seasonFinale.phase = 'goodbyeSequence'
+      state.seasonFinale.goodbyeIndex = 0
+      state.seasonFinale.isChatOpen = true
+    },
+    startPublicFavorite(state) {
+      if (state.seasonFinale?.phase !== 'publicFavoriteSetup') return
+      state.seasonFinale.phase = 'publicFavoriteFlow'
+      state.seasonFinale.isChatOpen = false
+    },
+    resumeAfterPublicFavorite(state, action: PayloadAction<{ winnerId?: string }>) {
+      if (state.seasonFinale?.phase !== 'publicFavoriteFlow') return
+      state.seasonFinale.phase = 'goodbyeSequence'
+      state.seasonFinale.publicFavoriteWinnerId = action.payload.winnerId
+      state.seasonFinale.goodbyeIndex = 0
+      state.seasonFinale.isChatOpen = true
+    },
+    startGoodbyeSequence(state) {
+      if (
+        state.seasonFinale?.phase !== 'winnerInterview' &&
+        state.seasonFinale?.phase !== 'publicFavoriteFlow' &&
+        state.seasonFinale?.phase !== 'publicFavoriteSetup'
+      ) {
+        return
+      }
+      state.seasonFinale.phase = 'goodbyeSequence'
+      state.seasonFinale.goodbyeIndex = 0
+      state.seasonFinale.isChatOpen = true
+    },
+    advanceGoodbyeSequence(state, action: PayloadAction<number>) {
+      if (state.seasonFinale?.phase !== 'goodbyeSequence') return
+      state.seasonFinale.goodbyeIndex = Math.max(state.seasonFinale.goodbyeIndex, action.payload)
+    },
+    startLightsOff(state) {
+      if (state.seasonFinale?.phase !== 'goodbyeSequence') return
+      state.seasonFinale.phase = 'lightsOffTransition'
+      state.seasonFinale.isChatOpen = false
+      state.seasonFinale.isLightsOffAnimating = true
+    },
+    completeFinale(state) {
+      if (state.seasonFinale?.phase !== 'lightsOffTransition') return
+      state.seasonFinale.phase = 'seasonComplete'
+      state.seasonFinale.isLightsOffAnimating = false
+      state.seasonFinale.isChatOpen = false
+    },
+
+    /** Clear any blocking human-decision flags (replacementNeeded, awaitingFinal3Eviction, etc.)
+     * that could prevent the Continue button from appearing (debug only).
+     */
+    clearBlockingFlags(state) {
+      state.replacementNeeded = false
+      state.awaitingNominations = false
+      state.pendingNominee1Id = null
+      state.awaitingPublicSave = false
+      state.awaitingPovDecision = false
+      state.awaitingPovSaveTarget = false
+      state.awaitingHumanVote = false
+      state.awaitingTieBreak = false
+      state.tiedNomineeIds = null
+      state.awaitingFinal3Eviction = false
+      state.awaitingFinal3Plea = false
+      state.votes = {}
+      state.voteResults = null
+      state.evictionSplashId = null
+      state.pendingEviction = null
+      state.dayStartShock = null
+      pushEvent(state, `[DEBUG] Blocking flags cleared — Continue button restored. 🔧`, 'game')
+    },
+    submitTwinShockAnswer(state, action: PayloadAction<string>) {
+      const twinShock = state.twinShock
+      if (!twinShock) return
+      const canProcessUnpromptedFollowUpGuess =
+        twinShock.promptStage == null && twinShock.status === 'day4_asked_no_correct_guess'
+      if (!twinShock.promptStage && !canProcessUnpromptedFollowUpGuess) return
+      const human = getHumanPlayer(state)
+      if (!human || human.status === 'evicted' || human.status === 'jury') {
+        twinShock.promptStage = null
+        twinShock.queuedDay = null
+        return
+      }
+      const result = resolveTwinShockTurn(twinShock, action.payload, {
+        playerName: human.name,
+        liaActive: isPlayerActiveInHouse(state, TWIN_SHOCK_LIA_ID),
+      })
+      applyTwinShockTurnResult(state, result)
+    },
+
+    completeTwinShockRevealAnimation(state) {
+      if (!state.twinShock) return
+      state.twinShock.pendingRevealAnimation = null
+    },
+
+    /**
+     * Archive the completed season.  Prepends the archive entry and caps the
+     * list at MAX_SEASON_ARCHIVES entries to bound memory usage.
+     */
+    archiveSeason(state, action: PayloadAction<SeasonArchive>) {
+      if (!state.seasonArchives) state.seasonArchives = []
+      state.seasonArchives.unshift(action.payload)
+      if (state.seasonArchives.length > MAX_SEASON_ARCHIVES) {
+        state.seasonArchives = state.seasonArchives.slice(0, MAX_SEASON_ARCHIVES)
+      }
+    },
+    /**
+     * Replace the entire player list.  Used by the start-new-season flow to
+     * inject a normalized roster (no stale evicted/jury/grayscale flags).
+     */
+    replacePlayers(state, action: PayloadAction<Player[]>) {
+      state.players = action.payload
+      state.competitionSeasonStateByPlayerId = buildInitialCompetitionSeasonState(action.payload)
+    },
+    applyFirstSeasonAppearance(
+      state,
+      action: PayloadAction<{
+        gameId: string
+        appearance: import('../appearance/catalog').AppearanceSelection
+      }>
+    ) {
+      if (state.gameId !== action.payload.gameId) return
+      return withInitialSeasonAppearance(state, action.payload.appearance)
+    },
+    updateUserPlayerIdentity(
+      state,
+      action: PayloadAction<{
+        name: string
+        avatar: string
+        photoId?: string
+        age?: number | string | null
+        sex?: string | null
+        reproductiveProfile?: Player['reproductiveProfile'] | null
+      }>
+    ) {
+      if (state.seasonContestant) return
+      const human = state.players.find((player) => player.isUser)
+      if (!human) return
+      human.name = action.payload.name.trim() || human.name
+      human.avatar = action.payload.photoId
+        ? profilePhotoAvatar(action.payload.photoId)
+        : action.payload.avatar
+      if ('age' in action.payload) {
+        const age =
+          typeof action.payload.age === 'number'
+            ? action.payload.age
+            : resolveProfileAge(action.payload.age ?? undefined)
+        if (age === undefined) delete human.age
+        else human.age = age
+      }
+      if ('sex' in action.payload) {
+        const sex = action.payload.sex?.trim()
+        if (!sex) delete human.sex
+        else human.sex = sex
+      }
+      if ('reproductiveProfile' in action.payload) {
+        if (!action.payload.reproductiveProfile) delete human.reproductiveProfile
+        else human.reproductiveProfile = action.payload.reproductiveProfile
+      }
+    },
+    debugForceBellaIntoCast(state) {
+      if (state.players.some((player) => player.id === BELLA_ID)) {
+        if (!state.bellaWill?.active) {
+          state.bellaWill = createBellaWillState({
+            active: true,
+            seed: state.seed,
+            season: state.season,
+          })
+        }
+        return
+      }
+
+      const replaceIndex = state.players.findIndex(
+        (player) =>
+          !player.isUser &&
+          player.id !== TWIN_SHOCK_LIA_ID &&
+          player.id !== TWIN_SHOCK_ALI_ID &&
+          player.id !== 'lia_ali' &&
+          player.status !== 'evicted' &&
+          player.status !== 'jury'
+      )
+      if (replaceIndex < 0) return
+
+      const replaced = state.players[replaceIndex]
+      const bella = buildBellaPoolEntry() as Player
+      state.players[replaceIndex] = bella
+      if (state.competitionSeasonStateByPlayerId) {
+        delete state.competitionSeasonStateByPlayerId[replaced.id]
+        state.competitionSeasonStateByPlayerId[BELLA_ID] = getDefaultCompetitionSeasonState()
+      }
+      state.bellaWill = createBellaWillState({
+        active: true,
+        seed: state.seed,
+        season: state.season,
+      })
+      state.bellaWill.debugCastForced = true
+      pushEvent(
+        state,
+        `[DEBUG] Bella replaced ${replaced.name} in the active cast. Bella's Will is ready for testing. 🔧`,
+        'game'
+      )
+    },
+    debugSetBellaHeir(state, action: PayloadAction<string | null>) {
+      if (!state.bellaWill?.active) return
+      const heirId = action.payload
+      if (
+        heirId != null &&
+        !state.players.some(
+          (player) =>
+            player.id === heirId &&
+            player.id !== BELLA_ID &&
+            player.status !== 'evicted' &&
+            player.status !== 'jury'
+        )
+      ) {
+        return
+      }
+      state.bellaWill.heirId = heirId
+      state.bellaWill.lastHeirUpdateWeek = state.week
+      state.bellaWill.debugForced = true
+    },
+    debugSetBellaWillReward(state, action: PayloadAction<BellaWillReward>) {
+      if (!state.bellaWill?.active) return
+      const wasInherited = state.bellaWill.inherited
+      state.bellaWill.reward = action.payload
+      state.bellaWill.immunityDaysRemaining = 0
+      state.bellaWill.immunityStartWeek = null
+      state.bellaWill.immunityEndWeek = null
+      state.bellaWill.extraVotePending = false
+      state.bellaWill.extraVoteChoiceActive = false
+      state.bellaWill.voteRemovalPending = false
+      state.bellaWill.lastVoteRemovalAdjustment = null
+      state.bellaWill.expiredAtEndgame = false
+      state.bellaWill.inherited = false
+      if (wasInherited && state.bellaWill.heirId) {
+        activateBellaInheritance(state)
+      }
+      state.bellaWill.debugForced = true
+    },
+    debugActivateBellaInheritance(state) {
+      if (!state.bellaWill?.active) return
+      if (!state.bellaWill.heirId) state.bellaWill.heirId = chooseBellaHeir(state)
+      activateBellaInheritance(state)
+      state.bellaWill.debugForced = true
+    },
+    /**
+     * Attach the latest remote Director policy to a season that has not begun yet.
+     * Used after the first asynchronous live-config fetch on a fresh install.
+     */
+    refreshSeasonDirectorPlan(state) {
+      if (state.phase !== 'season_start' || state.isLive || state.seasonDirectorPlan) return
+      state.seasonDirectorPlan = buildSeasonDirectorPlan(state.season, state.seed)
+      state.seasonDirectorLastSpotlightDay = null
+    },
+    /** Reset game state with a fresh random roster. */
+    resetGame(state, action: PayloadAction<SeasonArchive[] | undefined>) {
+      // Mix Math.random() with Date.now() to derive a fresh 32-bit game seed.
+      // This seed drives in-game RNG (LOH/POS/vote outcomes); it is independent
+      // of the Math.random() seed used in pickHouseguests() for roster selection.
+      const seed =
+        getE2ENewSeasonFixture()?.seasonSeed ??
+        (Math.floor(Math.random() * 0x100000000) ^ (Date.now() & 0xffffffff)) >>> 0
+      // When an explicit archives array is provided (e.g. on profile switch) use it;
+      // otherwise preserve the current in-memory archives so a regular game restart
+      // does not lose season history.
+      const existingArchives = state.seasonArchives ?? []
+      const inferredTwinShockSeason = getTwinShockActivationSeason(
+        existingArchives,
+        state.twinShockActivatedSeason
+      )
+      const seasonArchives =
+        action.payload !== undefined
+          ? action.payload
+          : inferredTwinShockSeason === null
+            ? existingArchives
+            : existingArchives.map((archive) => ({
+                ...archive,
+                // Older builds copied the save-wide flag into later seasons.
+                // The Twin Shock can be consumed once, so keep only its known
+                // activation season when normalizing a legacy save.
+                twinShockConsumed: archive.seasonIndex === inferredTwinShockSeason,
+              }))
+      // Derive the next season number from the maximum archived seasonIndex so the
+      // result is stable even after the 1000-entry archive cap or non-contiguous entries.
+      const season = nextSeasonNumber(seasonArchives)
+      const twinShockConsumed =
+        state.twinShockConsumed === true ||
+        seasonArchives.some((archive) => archive.twinShockConsumed === true)
+      // Use the factory to build a fully fresh initial state from the latest
+      // persisted settings/profile, then override seed, seasonArchives, and season.
+      const fresh = {
+        ...createInitialGameState({ twinShockConsumed, seed, seasonArchives }),
+        seasonArchives,
+        season,
+        status: 'active' as const,
+        broadcastOverrides: state.broadcastOverrides ?? {},
+        customBroadcasts: state.customBroadcasts ?? [],
+      }
+      fresh.seasonDirectorPlan = buildSeasonDirectorPlan(season, seed)
+      fresh.seasonDirectorLastSpotlightDay = null
+      fresh.seasonDirectorHumanReturnUsed = false
+      fresh.twinShockConsumed = twinShockConsumed
+      fresh.twinShockActivatedSeason = state.twinShockActivatedSeason ?? null
+      fresh.twinShockResolution = state.twinShockResolution ?? null
+      fresh.twinShockResolvedDay = state.twinShockResolvedDay ?? null
+      fresh.twinShockDiscoveredByUser = state.twinShockDiscoveredByUser ?? false
+      fresh.liaForcedUntilTwinShockResolved = !twinShockConsumed
+      if (fresh.cupidArrow) {
+        fresh.cupidArrow.status =
+          fresh.cupidArrow.scheduledSeason === season ? 'scheduled' : 'inactive'
+      }
+      if (fresh.voxPopuli) {
+        fresh.voxPopuli.status =
+          fresh.voxPopuli.scheduledSeason === season ? 'scheduled' : 'inactive'
+      }
+      if (fresh.cupidArrow?.status === 'scheduled') {
+        activateCupidArrowForSeason(fresh)
+      }
+      // Preserve the manager-built Season Start sequence. Only refresh the
+      // dynamic season placeholder after the archive-derived season is known.
+      fresh.tvFeed = fresh.tvFeed.map((event) =>
+        event.meta?.broadcastTemplateId === 'season.welcome' ||
+        event.meta?.broadcastTemplateId === 'season.welcome-cupid'
+          ? {
+              ...event,
+              text: renderBroadcastTemplate(
+                fresh.broadcastOverrides?.[event.meta.broadcastTemplateId]?.text ??
+                  getBroadcastTemplate(event.meta.broadcastTemplateId)?.text ??
+                  event.text,
+                [String(season)]
+              ),
+            }
+          : event
+      )
+      beginPhaseBroadcastSequence(fresh, 'season_start')
+      finishPhaseBroadcastSequence(fresh)
+      fresh.tvFeed.forEach((event) => refreshManagedBroadcastDefinition(fresh, event))
+      rebuildManagedBroadcastQueue(fresh, 'season_start')
+      return fresh
+    },
+    /**
+     * Restore a previously saved in-progress game state (manual save/resume).
+     * Replaces the entire game slice with the snapshot.
+     * seasonFinale field is always preserved as-is from the snapshot.
+     */
+    hydrateGame(state, action: PayloadAction<GameState>) {
+      const human = action.payload.players.find((player) => player.isUser)
+      const seasonContestant =
+        action.payload.seasonContestant ?? (human ? contestantFromPlayer(human) : undefined)
+      const hydrated: GameState = {
+        ...action.payload,
+        seasonContestant,
+        players: action.payload.players,
+        gameId: action.payload.gameId ?? crypto.randomUUID(),
+        // A restored Final Three round remounts its broadcast from durable
+        // phase/cast data. Its former view lease cannot survive a reload.
+        spectatorActive: isFinalThreePhase(action.payload.phase)
+          ? null
+          : action.payload.spectatorActive,
+        hasSeenConfessionalSpotlight: action.payload.hasSeenConfessionalSpotlight ?? false,
+        status: action.payload.status ?? 'active',
+        // Saves created before weekends existed keep the original uninterrupted calendar.
+        weekendsEnabledForSeason: action.payload.weekendsEnabledForSeason ?? false,
+        weekendsEnabledAtSeasonStart: action.payload.weekendsEnabledAtSeasonStart,
+        firstRealWeekendStarted:
+          action.payload.firstRealWeekendStarted ??
+          Boolean(
+            action.payload.week >= 6 ||
+            (action.payload.weekendInterlude?.active && !action.payload.weekendInterlude.debug) ||
+            action.payload.completedWeekendDays?.length
+          ),
+        completedWeekendDays: action.payload.completedWeekendDays ?? [],
+        finaleWeekendCompleted: action.payload.finaleWeekendCompleted ?? false,
+        weekendInterlude: action.payload.weekendInterlude ?? null,
+        // Season archives are persisted independently from in-progress runs.
+        // New snapshots omit them to stay small, so retain the active profile's
+        // already-loaded archive history while hydrating a campaign.
+        seasonArchives: state.seasonArchives ?? [],
+        // Broadcast Manager configuration is permanent authoring data, not a
+        // campaign snapshot. Never let an older saved run overwrite it.
+        broadcastOverrides: state.broadcastOverrides ?? {},
+        customBroadcasts: state.customBroadcasts ?? [],
+        tvFeed: (action.payload.tvFeed ?? []).map((event) =>
+          normalizeGuestSaveReminderEvent({
+            ...event,
+            meta: event.meta ? { ...event.meta } : undefined,
+          })
+        ),
+        broadcastQueue: action.payload.broadcastQueue ?? [],
+        activeBroadcastEventId: action.payload.activeBroadcastEventId ?? null,
+        presentationEventClaims:
+          action.payload.presentationEventClaims ??
+          (() => {
+            const weekend = action.payload.weekendInterlude
+            if (
+              !weekend ||
+              (weekend.wallet.energy >= 30 &&
+                ['intro', 'instructions', 'hub_says', 'party', 'season_so_far'].includes(
+                  weekend.stage
+                ))
+            )
+              return []
+            const key = `${action.payload.gameId ?? action.payload.season}:${weekend.weekendNumber ?? weekend.afterDay}:${weekend.afterDay}`
+            return [{ gameId: action.payload.gameId, runId: key, eventId: `weekend-energy:${key}` }]
+          })(),
+        lastPlainBroadcastEventId: action.payload.lastPlainBroadcastEventId ?? null,
+        twinShock: action.payload.twinShock ?? createInitialTwinShockState(),
+        pregnancyStory: normalizePregnancyStoryState(action.payload.pregnancyStory),
+        lohSafetyAdvice: action.payload.lohSafetyAdvice ?? null,
+        currentWeekNominationRecord: action.payload.currentWeekNominationRecord ?? null,
+        lastWeekNominationRecord: action.payload.lastWeekNominationRecord ?? null,
+        twinShockConsumed: action.payload.twinShockConsumed ?? false,
+        twinShockActivatedSeason: action.payload.twinShockActivatedSeason ?? null,
+        twinShockResolution: action.payload.twinShockResolution ?? null,
+        twinShockResolvedDay: action.payload.twinShockResolvedDay ?? null,
+        twinShockDiscoveredByUser: action.payload.twinShockDiscoveredByUser ?? false,
+        bellaWill: action.payload.bellaWill
+          ? {
+              ...createBellaWillState({
+                active: action.payload.bellaWill.active,
+                seed: action.payload.seed,
+                season: action.payload.season,
+                reward: action.payload.bellaWill.reward,
+              }),
+              ...action.payload.bellaWill,
+              extraVoteChoiceActive: action.payload.bellaWill.extraVoteChoiceActive ?? false,
+              lastVoteRemovalAdjustment: action.payload.bellaWill.lastVoteRemovalAdjustment ?? null,
+              expiredAtEndgame: action.payload.bellaWill.expiredAtEndgame ?? false,
+            }
+          : createBellaWillState({
+              active: action.payload.players.some((player) => player.id === BELLA_ID),
+              seed: action.payload.seed,
+              season: action.payload.season,
+            }),
+        // Saved Cupid seasons from before the visual-reveal handoff already
+        // completed their announcement. Preserve their established look; only
+        // a newly activated Cupid season explicitly starts at `false`.
+        cupidArrow: action.payload.cupidArrow
+          ? {
+              ...action.payload.cupidArrow,
+              visualsRevealed:
+                action.payload.cupidArrow.visualsRevealed ??
+                action.payload.cupidArrow.status === 'active',
+            }
+          : undefined,
+        voxPopuli: action.payload.voxPopuli
+          ? {
+              ...createInitialVoxPopuliState(action.payload.voxPopuli.scheduledSeason),
+              ...action.payload.voxPopuli,
+              lastReplacementNomineeIds: action.payload.voxPopuli.lastReplacementNomineeIds ?? [],
+            }
+          : createInitialVoxPopuliState(null),
+        voteResultsMode: action.payload.voteResultsMode ?? 'house',
+        liaForcedUntilTwinShockResolved:
+          action.payload.liaForcedUntilTwinShockResolved ??
+          !(action.payload.twinShockConsumed ?? false),
+      }
+      ensureFinalThreeController(hydrated)
+      if (hydrated.secretMission) {
+        hydrated.secretMission = {
+          ...hydrated.secretMission,
+          tasks: repairLegacyMissionTasks(hydrated.secretMission.tasks),
+        }
+      }
+      if (import.meta.env.DEV && import.meta.env.VITE_FORCE_CLASSIC === 'true') {
+        hydrated.expansionMode = null
+        hydrated.twistActive = false
+        if (hydrated.cupidArrow) {
+          hydrated.cupidArrow = {
+            ...hydrated.cupidArrow,
+            scheduledSeason: null,
+            status: 'inactive',
+            activatedSeason: null,
+            activatedWeek: null,
+            pairs: [],
+            eliminatedPairCount: 0,
+            pendingPartnerEvictionId: null,
+            visualsRevealed: false,
+          }
+        }
+        if (hydrated.voxPopuli) {
+          hydrated.voxPopuli = {
+            ...hydrated.voxPopuli,
+            scheduledSeason: null,
+            status: 'inactive',
+            activatedSeason: null,
+            activatedWeek: null,
+            awaitingPublicVote: false,
+            publicVoteContext: null,
+            finaleStage: null,
+          }
+        }
+      }
+      hydrated.tvFeed.forEach((event) => refreshManagedBroadcastDefinition(hydrated, event))
+      rebuildManagedBroadcastQueue(hydrated, hydrated.phase)
+      return removeObsoleteGameData(hydrated)
+    },
+
+    clearSurvivorReplacementTransition(state) {
+      if (state.modeSpecific?.kind !== 'survival') return
+      state.modeSpecific.replacementTransition = null
+    },
+
+    revealSurvivorReplacement(state) {
+      if (state.modeSpecific?.kind !== 'survival') return
+      const pending = state.modeSpecific.replacementPending
+      if (!pending) return
+      const playerIndex = state.players.findIndex(
+        (player) =>
+          player.survivorSlot === pending.slot || player.id === pending.outgoingPlayerSnapshot.id
+      )
+      if (playerIndex < 0) return
+      state.players[playerIndex] = pending.incomingPlayer
+      state.modeSpecific.totalRoboContestantsEvicted += 1
+      state.modeSpecific.replacementPending = null
+      state.modeSpecific.replacementTransition = {
+        mode: 'survival',
+        outgoingPlayerSnapshot: pending.outgoingPlayerSnapshot,
+        incomingPlayerId: pending.incomingPlayer.id,
+        slot: pending.slot,
+        startedAt: Date.now(),
+        durationMs: 2000,
+      }
+      pushEvent(
+        state,
+        `${pending.incomingPlayer.name} enters as a replacement synthetic contestant.`,
+        'game',
+        { broadcastTemplateId: 'survival.replacement-enters', phase: state.phase, week: state.week }
+      )
+    },
+
+    setHasSeenConfessionalSpotlight(state, action: PayloadAction<boolean>) {
+      state.hasSeenConfessionalSpotlight = action.payload
+    },
+
+    /** Resolve one Weekend 1 house-poll question. Only the winner is player-facing. */
+    chooseHubSaysPlayer(state, action: PayloadAction<string>) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.episode !== 'hub_says' || weekend.stage !== 'hub_says') return
+      const hub = weekend.hubSays
+      if (!hub || !['question', 'choice'].includes(hub.beat ?? 'question')) return
+      const currentQuestionId = hub.questionIds[hub.currentQuestionIndex]
+      if (
+        !currentQuestionId ||
+        hub.results.some((result) => result.questionId === currentQuestionId)
+      )
+        return
+      const candidate = state.players.find(
+        (player) =>
+          player.id === action.payload &&
+          !player.isUser &&
+          player.status !== 'evicted' &&
+          player.status !== 'jury'
+      )
+      if (candidate) {
+        hub.selectedPlayerId = candidate.id
+        hub.beat = 'choice'
+      }
+    },
+
+    /** Resolve one Weekend 1 Hub Says question. Only the winner is player-facing. */
+    submitHubSaysVote(state, action: PayloadAction<{ questionId: string; targetId: string }>) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.episode !== 'hub_says' || weekend.stage !== 'hub_says') return
+      const hub = weekend.hubSays
+      if (!hub) return
+      const expectedQuestionId = hub.questionIds[hub.currentQuestionIndex]
+      if (!expectedQuestionId || expectedQuestionId !== action.payload.questionId) return
+      if (hub.results.some((result) => result.questionId === expectedQuestionId)) return
+      const resolved = resolveHubSaysQuestion(state, expectedQuestionId, action.payload.targetId)
+      if (!resolved) return
+      hub.results.push({
+        questionId: expectedQuestionId,
+        humanVoteTargetId: action.payload.targetId,
+        winnerId: resolved.winnerId,
+        voteCounts: resolved.voteCounts,
+      })
+      hub.beat = 'result'
+      hub.selectedPlayerId = null
+      const question = getHubSaysQuestion(expectedQuestionId)
+      const winner = state.players.find((player) => player.id === resolved.winnerId)
+      if (question && winner && !weekend.debug) {
+        pushEvent(state, `THE HUB SAYS… ${question.prompt} — ${winner.name}`, 'social', {
+          weekend: true,
+          weekendDay: weekend.weekendDay,
+          weekendEpisode: 'hub_says',
+          questionId: expectedQuestionId,
+          winnerId: resolved.winnerId,
+          suppressTv: true,
+        })
+        state.history = [
+          ...(state.history ?? []),
+          {
+            type: 'hub_says_result',
+            week: state.week,
+            data: {
+              questionId: expectedQuestionId,
+              prompt: question.prompt,
+              winnerId: resolved.winnerId,
+            },
+            timestamp: Date.now(),
+          },
+        ].slice(-MAX_GAME_HISTORY_EVENTS)
+      }
+    },
+
+    continueHubSays(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.episode !== 'hub_says' || weekend.stage !== 'hub_says') return
+      const hub = weekend.hubSays
+      if (!hub) return
+      if ((hub.beat ?? 'question') === 'question') {
+        hub.beat = 'choice'
+        return
+      }
+      if ((hub.beat ?? 'question') === 'choice') return
+      const currentQuestionId = hub.questionIds[hub.currentQuestionIndex]
+      if (
+        !currentQuestionId ||
+        !hub.results.some((result) => result.questionId === currentQuestionId)
+      )
+        return
+      if (hub.currentQuestionIndex >= hub.questionIds.length - 1) {
+        weekend.stage = 'social'
+        return
+      }
+      hub.currentQuestionIndex += 1
+      hub.beat = 'question'
+      hub.selectedPlayerId = null
+    },
+
+    continueWeekendFeature(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active) return
+      if (weekend.stage === 'intro') {
+        weekend.stage = 'instructions'
+        return
+      }
+      if (weekend.stage === 'instructions') {
+        weekend.stage =
+          weekend.episode === 'hub_says'
+            ? 'hub_says'
+            : weekend.episode === 'party'
+              ? 'party'
+              : 'season_so_far'
+        return
+      }
+      if (weekend.stage === 'day_two_intro') {
+        weekend.stage = weekend.episode === 'party' ? 'party' : 'social'
+        return
+      }
+      if (weekend.episode === 'party' && weekend.stage === 'party') {
+        weekend.stage = 'social'
+      }
+    },
+
+    /** Reveal one player-sized Season So Far card on the Faux TV. */
+    advanceWeekendSeasonFact(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        weekend.episode !== 'season_so_far' ||
+        weekend.stage !== 'season_so_far'
+      )
+        return
+      const seasonSoFar = weekend.seasonSoFar
+      if (!seasonSoFar || seasonSoFar.facts.length === 0) {
+        weekend.stage = 'social'
+        return
+      }
+      const currentFactIndex = seasonSoFar.currentFactIndex ?? 0
+      if (currentFactIndex >= seasonSoFar.facts.length - 1) {
+        weekend.stage = 'social'
+        return
+      }
+      seasonSoFar.currentFactIndex = currentFactIndex + 1
+    },
+
+    recordWeekendPartyBeat(state, action: PayloadAction<WeekendPartyBeat>) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        weekend.episode !== 'party' ||
+        weekend.stage !== 'party' ||
+        !weekend.party ||
+        action.payload.weekendDay !== weekend.weekendDay ||
+        weekend.party.beats.some((beat) => beat.weekendDay === action.payload.weekendDay)
+      ) {
+        return
+      }
+      weekend.party.beats.push(action.payload)
+      if (weekend.debug) return
+      pushEvent(state, `THE HUB PARTY — ${action.payload.text}`, 'social', {
+        weekend: true,
+        weekendDay: action.payload.weekendDay,
+        weekendEpisode: 'party',
+        partyBeatKind: action.payload.kind,
+        partyBeatVisibility: action.payload.visibility,
+        suppressTv: true,
+      })
+      state.history = [
+        ...(state.history ?? []),
+        {
+          type: 'weekend_party_beat',
+          week: state.week,
+          data: {
+            beatId: action.payload.id,
+            kind: action.payload.kind,
+            visibility: action.payload.visibility,
+            speakerId: action.payload.speakerId ?? null,
+            subjectIds: action.payload.subjectIds,
+          },
+          timestamp: Date.now(),
+        },
+      ].slice(-MAX_GAME_HISTORY_EVENTS)
+    },
+
+    /** Show the reused weather-card handoff before Weekend Day 2 begins. */
+    beginWeekendDayTransition(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.stage !== 'social' || weekend.weekendDay !== 1) return
+      weekend.stage = 'day_transition'
+    },
+
+    advanceWeekendDay(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.stage !== 'day_transition' || weekend.weekendDay !== 1) return
+      if (state.pregnancyStory && !weekend.debug) {
+        state.pregnancyStory = advancePregnancyStoryWeekendDay(state.pregnancyStory)
+      }
+      weekend.weekendDay = 2
+      if (weekend.finaleWeekend) {
+        // Sunday opens with the reunion first. Tribunal remarks are generated
+        // only after the returning players have had their chance to talk.
+        weekend.tribunalGlimpse = undefined
+        weekend.stage = 'tribunal_invitation'
+      } else {
+        weekend.stage = weekend.episode === 'party' ? 'party' : 'social'
+      }
+    },
+
+    beginWeekendTribunalGlimpse(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        weekend.weekendDay !== 2 ||
+        (weekend.stage !== 'social' && weekend.stage !== 'finale_reunion_social')
+      ) {
+        return
+      }
+      weekend.tribunalGlimpse = {
+        speeches: createFinaleTribunalSpeeches(state),
+        opened: false,
+      }
+      weekend.stage = 'finale_sequester_announcement'
+    },
+
+    /** Show the returned players on the roster and deliver their reunion messages. */
+    beginFinaleReunionSocial(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        weekend.weekendDay !== 2 ||
+        !['tribunal_invitation', 'tribunal_glimpse'].includes(weekend.stage) ||
+        weekend.tribunalGlimpse?.opened === true ||
+        weekend.reunionDeparted
+      ) {
+        return
+      }
+      weekend.stage = 'finale_reunion_social'
+    },
+
+    beginWeekendReunionDeparture(state) {
+      const weekend = state.weekendInterlude
+      const isDebugReunionPreview =
+        weekend?.debug === true &&
+        weekend.reunionPreview !== undefined &&
+        weekend.stage === 'finale_reunion'
+      const isLiveFarewell =
+        weekend?.debug !== true &&
+        weekend?.stage === 'finale_battle_ready' &&
+        weekend.tribunalGlimpse !== undefined
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        weekend.weekendDay !== 2 ||
+        (!isLiveFarewell && !isDebugReunionPreview) ||
+        weekend.reunionDeparted
+      ) {
+        return
+      }
+      weekend.reunionDepartureActive = true
+    },
+
+    finishWeekendReunionDeparture(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || !weekend.reunionDepartureActive) return
+      weekend.reunionDepartureActive = undefined
+      weekend.reunionDeparted = true
+    },
+
+    /** Skip the optional Tribunal footage and continue to the finale farewell. */
+    skipWeekendTribunalStream(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        weekend.stage !== 'finale_sequester_announcement' ||
+        !weekend.tribunalGlimpse ||
+        weekend.tribunalGlimpse.opened
+      ) {
+        return
+      }
+      weekend.stage = 'finale_battle_ready'
+    },
+
+    openWeekendTribunalStream(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        ![
+          'finale_sequester_announcement',
+          'finale_battle_ready',
+          'tribunal_invitation',
+          'tribunal_glimpse',
+        ].includes(weekend.stage) ||
+        !weekend.tribunalGlimpse
+      ) {
+        return
+      }
+      weekend.stage = 'tribunal_invitation'
+      weekend.tribunalGlimpse.opened = true
+    },
+
+    returnFromWeekendTribunalStream(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.finaleWeekend ||
+        !['tribunal_invitation', 'tribunal_glimpse'].includes(weekend.stage) ||
+        !weekend.tribunalGlimpse?.opened
+      ) {
+        return
+      }
+      weekend.stage = 'finale_battle_ready'
+    },
+
+    spendWeekendSocialResources(
+      state,
+      action: PayloadAction<{ energy: number; influence: number; info: number }>
+    ) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active) return
+      const costs = {
+        energy: Math.max(0, action.payload.energy),
+        influence: Math.max(0, action.payload.influence),
+        info: Math.max(0, action.payload.info),
+      }
+      if (
+        weekend.wallet.energy < costs.energy ||
+        weekend.wallet.influence < costs.influence ||
+        weekend.wallet.info < costs.info
+      )
+        return
+      weekend.wallet.energy -= costs.energy
+      weekend.wallet.influence -= costs.influence
+      weekend.wallet.info -= costs.info
+    },
+
+    adjustWeekendSocialResources(
+      state,
+      action: PayloadAction<{ influence?: number; info?: number; energy?: number }>
+    ) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active) return
+      weekend.wallet.energy = Math.max(
+        0,
+        Math.min(30, weekend.wallet.energy + (action.payload.energy ?? 0))
+      )
+      weekend.wallet.influence = Math.max(
+        0,
+        Math.min(999, weekend.wallet.influence + (action.payload.influence ?? 0))
+      )
+      weekend.wallet.info = Math.max(
+        0,
+        Math.min(999, weekend.wallet.info + (action.payload.info ?? 0))
+      )
+    },
+
+    completeWeekendInterlude(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || weekend.weekendDay !== 2) return
+      if (
+        weekend.finaleWeekend
+          ? !['tribunal_invitation', 'tribunal_glimpse', 'finale_battle_ready'].includes(
+              weekend.stage
+            ) || !weekend.tribunalGlimpse
+          : weekend.stage !== 'social'
+      ) {
+        return
+      }
+      if (state.pregnancyStory && !weekend.debug) {
+        state.pregnancyStory = advancePregnancyStoryWeekendDay(state.pregnancyStory)
+      }
+      if (!weekend.debug) {
+        if (weekend.finaleWeekend) {
+          state.finaleWeekendCompleted = true
+          state.phase = 'final3'
+        } else if (weekend.afterDay === 5 || weekend.afterDay === 10) {
+          state.completedWeekendDays = Array.from(
+            new Set([...(state.completedWeekendDays ?? []), weekend.afterDay])
+          ).sort((left, right) => left - right)
+        }
+      } else if (weekend.debugOriginalHumanStatus) {
+        const human = getHumanPlayer(state)
+        if (human) human.status = weekend.debugOriginalHumanStatus
+      }
+      state.weekendInterlude = null
+    },
+
+    setWeekendsEnabledForSeason(state, action: PayloadAction<boolean>) {
+      if (
+        (state.firstRealWeekendStarted || state.week >= 6) &&
+        state.weekendsEnabledForSeason !== action.payload &&
+        !state.weekendInterlude?.debug
+      )
+        return
+      state.weekendsEnabledForSeason = action.payload
+      if (state.phase === 'season_start') state.weekendsEnabledAtSeasonStart = action.payload
+      if (!action.payload && state.weekendInterlude?.active) {
+        const weekend = state.weekendInterlude
+        if (!weekend.debug) {
+          if (weekend.finaleWeekend) {
+            state.finaleWeekendCompleted = true
+            state.phase = 'final3'
+          } else if (weekend.afterDay === 5 || weekend.afterDay === 10) {
+            state.completedWeekendDays = Array.from(
+              new Set([...(state.completedWeekendDays ?? []), weekend.afterDay])
+            ).sort((left, right) => left - right)
+          }
+        } else if (weekend.debugOriginalHumanStatus) {
+          const human = getHumanPlayer(state)
+          if (human) human.status = weekend.debugOriginalHumanStatus
+        }
+        state.weekendInterlude = null
+      }
+    },
+
+    /** QA-only override: queue a selected reserve for the next numbered day. */
+    forceWildcardEntryForQa(state, action: PayloadAction<string>) {
+      const eligibility = getWildcardQaQueueEligibility(state, action.payload)
+      if (!eligibility.eligible) return
+      state.wildcardOpportunity = {
+        status: 'pending',
+        playerId: action.payload,
+        triggerType: 'qa',
+        triggerDay: state.week,
+        arrivalDay: state.week + 1,
+        qaForced: true,
+      }
+    },
+
+    /** Open a self-contained weekend preview from Settings without changing the season calendar. */
+    debugActivateWeekendInterlude(
+      state,
+      action: PayloadAction<5 | 10 | 15 | 'finale' | 'tribunal'>
+    ) {
+      if (
+        state.weekendsEnabledForSeason === false ||
+        state.weekendInterlude?.active ||
+        state.mode === 'survival'
+      ) {
+        return
+      }
+
+      const isTribunalVisit = action.payload === 'tribunal'
+      const isFinaleWeekend = action.payload === 'finale' || isTribunalVisit
+      const afterDay = typeof action.payload === 'number' ? action.payload : state.week
+      state.weekendInterlude = createWeekendInterlude(
+        state,
+        afterDay,
+        true,
+        isFinaleWeekend ? 3 : afterDay === 5 ? 1 : afterDay === 10 ? 2 : 3,
+        isFinaleWeekend
+      )
+      if (isTribunalVisit && state.weekendInterlude) {
+        state.weekendInterlude.weekendDay = 2
+        state.weekendInterlude.stage = 'tribunal_invitation'
+        state.weekendInterlude.tribunalGlimpse = {
+          speeches: createFinaleTribunalSpeeches(state),
+          opened: false,
+        }
+      }
+      const human = getHumanPlayer(state)
+      if (human && (human.status === 'evicted' || human.status === 'jury')) {
+        state.weekendInterlude.debugOriginalHumanStatus = human.status
+        human.status = 'active'
+      }
+    },
+
+    debugRestartWeekendInterlude(
+      state,
+      action: PayloadAction<5 | 10 | 15 | 'finale' | 'tribunal'>
+    ) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || !weekend.debug) return
+      const originalHumanStatus = weekend.debugOriginalHumanStatus
+      const isTribunalVisit = action.payload === 'tribunal'
+      const isFinaleWeekend = action.payload === 'finale' || isTribunalVisit
+      const afterDay = typeof action.payload === 'number' ? action.payload : state.week
+      state.weekendInterlude = createWeekendInterlude(
+        state,
+        afterDay,
+        true,
+        isFinaleWeekend ? 3 : afterDay === 5 ? 1 : afterDay === 10 ? 2 : 3,
+        isFinaleWeekend
+      )
+      if (isTribunalVisit && state.weekendInterlude) {
+        state.weekendInterlude.weekendDay = 2
+        state.weekendInterlude.stage = 'tribunal_invitation'
+        state.weekendInterlude.tribunalGlimpse = {
+          speeches: createFinaleTribunalSpeeches(state),
+          opened: false,
+        }
+      }
+      if (originalHumanStatus) {
+        state.weekendInterlude.debugOriginalHumanStatus = originalHumanStatus
+      }
+    },
+
+    debugSkipToWeekendDayTwo(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || !weekend.debug) return
+      weekend.weekendDay = 2
+      if (weekend.finaleWeekend) {
+        weekend.tribunalGlimpse = {
+          speeches: createFinaleTribunalSpeeches(state),
+          opened: false,
+        }
+        weekend.stage = 'tribunal_invitation'
+      } else {
+        weekend.stage = weekend.episode === 'party' ? 'party' : 'social'
+      }
+    },
+
+    /** Prepare an isolated Sunday reunion scene for the reversible QA preview. */
+    debugPrepareFinaleReunionPreview(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || !weekend.debug || !weekend.finaleWeekend) return
+
+      const human = state.players.find((player) => player.isUser)
+      if (human && weekend.debugOriginalHumanStatus) {
+        human.status = weekend.debugOriginalHumanStatus
+        weekend.debugOriginalHumanStatus = undefined
+      }
+      const currentFinalists = state.players.filter(
+        (player) => player.status !== 'evicted' && player.status !== 'jury'
+      )
+      const finalists = Array.from(
+        new Map(
+          [...currentFinalists, ...state.players].map((player) => [player.id, player])
+        ).values()
+      ).slice(0, 3)
+      if (finalists.length < 3) return
+
+      const finalistIds = new Set(finalists.map((player) => player.id))
+      weekend.weekendDay = 2
+      weekend.stage = 'finale_reunion'
+      weekend.tribunalGlimpse = undefined
+      weekend.reunionPreviewEnded = undefined
+      weekend.reunionDeparted = undefined
+      weekend.reunionPreview = {
+        finalistIds: [...finalistIds],
+        guestIds: state.players
+          .filter((player) => !finalistIds.has(player.id))
+          .map((player) => player.id),
+      }
+    },
+
+    /** Leave the QA-only visit and continue to the existing Tribunal invitation. */
+    debugEndFinaleReunionPreview(state) {
+      const weekend = state.weekendInterlude
+      if (
+        !weekend?.active ||
+        !weekend.debug ||
+        !weekend.finaleWeekend ||
+        weekend.weekendDay !== 2 ||
+        weekend.stage !== 'finale_reunion'
+      ) {
+        return
+      }
+      weekend.reunionPreview = undefined
+      weekend.reunionPreviewEnded = true
+      weekend.reunionDeparted = true
+      weekend.tribunalGlimpse = {
+        speeches: createFinaleTribunalSpeeches(state),
+        opened: false,
+      }
+      weekend.stage = 'tribunal_invitation'
+    },
+
+    debugExitWeekendInterlude(state) {
+      const weekend = state.weekendInterlude
+      if (!weekend?.active || !weekend.debug) return
+      if (weekend.debugOriginalHumanStatus) {
+        const human = getHumanPlayer(state)
+        if (human) human.status = weekend.debugOriginalHumanStatus
+      }
+      state.weekendInterlude = null
+    },
+
+    /** Generate a new random RNG seed (debug only). */
+    rerollSeed(state) {
+      // Mix Math.random() with the low 32 bits of Date.now() via XOR to derive a 32-bit seed.
+      state.seed = (Math.floor(Math.random() * 0x100000000) ^ (Date.now() & 0xffffffff)) >>> 0
+      pushEvent(state, `[DEBUG] RNG seed rerolled to ${state.seed}. 🎲`, 'game')
+    },
+
+    /** Advance to the next phase, computing outcomes deterministically via RNG. */
+    advance(state) {
+      // Guard: if any human-decision flag is set, advance() must not proceed.
+      // This protects against programmatic dispatches (debug tools, fastForward)
+      // bypassing mandatory decision steps and leaving state inconsistent.
+      if (
+        state.tribunalInvitationTransition ||
+        state.weekendInterlude?.active ||
+        state.missionPowers?.decision ||
+        state.missionPowers?.safetyIntent ||
+        state.replacementNeeded ||
+        state.awaitingNominations ||
+        (state.awaitingPublicSave &&
+          state.phase === 'pre_veto_public_save' &&
+          state.nomineeIds.length === (isCupidArrowActive(state) ? 6 : 3)) ||
+        state.awaitingPovDecision ||
+        state.awaitingPovSaveTarget ||
+        state.awaitingMissionImmunityOffer ||
+        state.awaitingHumanVote ||
+        state.awaitingTieBreak ||
+        state.awaitingFinal3Eviction ||
+        state.awaitingFinal3Plea ||
+        state.dayStartShock != null ||
+        state.specialVeto?.awaitingHolderReplacement ||
+        state.specialVeto?.awaitingCoupReplacement1 ||
+        state.specialVeto?.awaitingCoupReplacement2 ||
+        state.specialVeto?.awaitingVipSecondUseDecision ||
+        state.specialVeto?.awaitingVipSecondSaveTarget ||
+        state.pendingEviction != null ||
+        state.battleBack?.active ||
+        state.favoritePlayer?.active ||
+        (state.seasonFinale != null && state.seasonFinale.phase !== 'seasonComplete') ||
+        state.spectatorActive ||
+        state.democracia?.awaitingHumanVote ||
+        state.democracia?.awaitingPublicBreaker ||
+        state.awaitingCoLohNomination ||
+        state.awaitingPosTieBreak ||
+        state.voxPopuli?.awaitingPublicVote ||
+        state.voxPopuli?.finaleStage != null ||
+        state.twinShock?.promptStage != null ||
+        state.twinShock?.pendingRevealAnimation != null
+      ) {
+        return
+      }
+
+      // Guard: if a minigame is active the human must complete (or skip) it first.
+      // This prevents fastForwardToEviction / debug advance from racing past an
+      // open TapRace overlay and leaving it stuck on screen.
+      if (state.pendingMinigame) {
+        state.lastCompetitionResolution = {
+          runId: `${state.pendingMinigame.key}:${state.pendingMinigame.seed}`,
+          gameKey: state.pendingMinigame.key,
+          week: state.week,
+          participants: [...state.pendingMinigame.participants],
+          status: 'interrupted',
+        }
+        state.pendingMinigame = null // Auto-dismiss; winner falls back to random pick below.
+      }
+
+      // Guard: if a Final 3 minigame is in progress, advance() must not proceed.
+      // The player must complete (or dismiss) the minigame; applyF3MinigameWinner
+      // handles the phase transition after the minigame result is received.
+      if (
+        state.phase === 'final3_comp1_minigame' ||
+        state.phase === 'final3_comp2_minigame' ||
+        state.phase === 'final3_comp3_minigame'
+      ) {
+        return
+      }
+
+      // The first two weekend interludes follow numbered week ends without
+      // incrementing game.week. The finale weekend is opened at the Final Four exit.
+      const weekendMilestone = state.week === 5 ? 5 : state.week === 10 ? 10 : null
+      if (
+        state.phase === 'week_end' &&
+        state.weekendsEnabledForSeason === true &&
+        weekendMilestone != null &&
+        !(state.completedWeekendDays ?? []).includes(weekendMilestone) &&
+        state.mode !== 'survival' &&
+        activeHousemateCount(state) > 3 &&
+        Boolean(getHumanPlayer(state)) &&
+        isPlayerActiveInHouse(state, getHumanPlayer(state)?.id ?? '') &&
+        !state.finalThree
+      ) {
+        state.firstRealWeekendStarted = true
+        state.weekendInterlude = createWeekendInterlude(state, weekendMilestone)
+
+        const intro =
+          weekendMilestone === 5
+            ? 'The weekend has begun. No competitions. No nominations. The Hub has other plans.'
+            : 'The Hub Party is open. No competitions tonight. No nominations. Try not to say anything you will regret tomorrow.'
+        pushEvent(state, intro, 'game', {
+          major: `weekend_${weekendMilestone === 5 ? 1 : 2}`,
+          weekendDay: 1,
+          weekendEpisode: weekendMilestone === 5 ? 'hub_says' : 'party',
+          forceOnTv: true,
+        })
+        return
+      }
+
+      // Pregnancy and paternity drama is strictly pre-Final-3. Positive tests are
+      // private first; due public reveals are emitted here on the next gameplay
+      // continuation so they cannot interrupt Final 3 competition/decision flow.
+      if (!state.phase.startsWith('final3') && state.pregnancyStory) {
+        const processed = processPregnancyStoryDay(state.pregnancyStory, state.week)
+        state.pregnancyStory = processed.story
+        for (const storyEvent of processed.events) {
+          const carrierName =
+            state.players.find((player) => player.id === storyEvent.carrierId)?.name ??
+            storyEvent.carrierId
+          const fatherName =
+            storyEvent.fatherId == null
+              ? null
+              : (state.players.find((player) => player.id === storyEvent.fatherId)?.name ??
+                storyEvent.fatherId)
+          const plausibleNames = storyEvent.plausibleFatherIds.map(
+            (id) => state.players.find((player) => player.id === id)?.name ?? id
+          )
+          const text =
+            storyEvent.kind === 'PATERNITY_PUBLIC'
+              ? `Faux TV: Paternity confirmed — ${fatherName ?? 'the biological father'} is the father of ${carrierName}'s pregnancy.`
+              : fatherName
+                ? `Faux TV: ${carrierName} is pregnant — and ${fatherName} is the father. The Hub has a new story to follow.`
+                : `Faux TV: ${carrierName} is pregnant. Paternity is uncertain${plausibleNames.length > 1 ? ` between ${formatNameList(plausibleNames)}` : ''}.`
+
+          const tvEvent = pushEvent(state, text, 'social', {
+            major:
+              storyEvent.kind === 'PATERNITY_PUBLIC' ? 'pregnancy_paternity' : 'pregnancy_positive',
+            pregnancyAttemptId: storyEvent.attemptId,
+            forceOnTv: true,
+            broadcastPriority: 'critical',
+          })
+          if (tvEvent) {
+            tvEvent.channels = ['tv', 'dr']
+            tvEvent.source = 'system'
+          }
+        }
+      }
+
+      // Bella's Will is never allowed to bleed into the Final 4 / Final 3 / Final 2.
+      expireBellaWillAtEndgame(state)
+
+      // Emit any current-phase message that was authored after the phase had
+      // already been entered. Normally these were emitted during entry and the
+      // ID/day guard makes this a no-op.
+      if (PHASE_ORDER.includes(state.phase)) {
+        beginPhaseBroadcastSequence(state, state.phase)
+        finishPhaseBroadcastSequence(state)
+      } else {
+        // Finale-only phases do not use the weekly destination switch below.
+        beginPhaseBroadcastSequence(state, state.phase)
+        finishPhaseBroadcastSequence(state)
+      }
+
+      // ── Special-phase handling (Final4 / Final3 are outside PHASE_ORDER) ──
+      if (state.phase === 'final4_eviction') {
+        // Guard: Final 4 eviction requires a valid POS holder
+        if (!state.posWinnerId) return
+
+        const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+        const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+
+        // Emit plea sequence: POS holder asks nominees for their pleas
+        pushEvent(
+          state,
+          `${povHolder?.name ?? 'The POS holder'} asks nominees for their pleas. 🎤`,
+          'game'
+        )
+        nominees.forEach((nominee, idx) => {
+          const plea = pickPhrase(NOMINEE_PLEA_TEMPLATES, state.seed, idx)
+          pushEvent(state, `${nominee.name}: "${plea}"`, 'game')
+        })
+
+        // Guard: if the POS holder is the human player, set awaitingPovDecision
+        // so the UI shows the decision modal and advance() is blocked until the
+        // player acts (the general guard at the top of advance() will catch it).
+        if (povHolder?.isUser) {
+          state.awaitingPovDecision = true
+          return
+        }
+
+        // AI POS holder uses the same explainable strategic choice as the
+        // ordinary and double-elimination tie-breaks.
+        const decisionSeed = state.seed
+        const seedRng = mulberry32(state.seed)
+        state.seed = (seedRng() * 0x100000000) >>> 0
+
+        if (nominees.length > 0) {
+          const decision = chooseStrategicEliminationCandidates(
+            state,
+            povHolder?.id ?? state.posWinnerId,
+            nominees.map((nominee) => nominee.id),
+            1,
+            'final_four',
+            decisionSeed
+          )
+          if (povHolder) {
+            traceStrategicEliminationChoice(
+              state,
+              povHolder.id,
+              decision,
+              'final_four',
+              decisionSeed
+            )
+          }
+          const evictee = state.players.find((player) => player.id === decision.selectedIds[0])
+          if (!evictee) return
+          // Defer the eviction commit — overlay (finalizePendingEviction) will
+          // set evictee.status and transition to final3 after the cinematic plays.
+          state.pendingEviction = {
+            evicteeId: evictee.id,
+            evictionMessage: `${povHolder?.name ?? 'The Power of Safety holder'} has chosen to eliminate ${evictee.name}.${decision.publicRationale ? ` ${decision.publicRationale}` : ''} ${evictee.name} has been eliminated from the Hub. 🚪`,
+          }
+        }
+        return
+      }
+
+      if (state.phase === 'final3') {
+        // Final Three begins as a clean ceremony, never as an extension of the
+        // Final Four. This also makes a legitimate Final Three entry safe after
+        // a long safety or eviction presentation has just finished.
+        state.week += 1
+        resetVoxFinalThreeRound(state)
+        beginFinalThreeController(state)
+        if (isVoxPopuliActive(state)) {
+          const seedRng = mulberry32(state.seed)
+          state.seed = (seedRng() * 0x100000000) >>> 0
+          const rng = mulberry32(state.seed)
+          const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+          const hasHuman = alive.some((p) => p.isUser)
+          if (hasHuman) {
+            state.minigameContext = {
+              phaseKey: 'final3_comp1',
+              participants: alive.map((p) => p.id),
+              seed: state.seed,
+            }
+            state.phase = 'final3_comp1_minigame'
+            return
+          }
+          const winner = seededPick(rng, alive)
+          recordFinalThreePartOutcome(
+            state,
+            1,
+            winner.id,
+            alive.map((player) => player.id),
+            state.seed
+          )
+          pushVoxFinalThreeResult(
+            state,
+            'final3_comp2',
+            `PART 1: ${winner.name.toUpperCase()} ADVANCES`,
+            `${winner.name} advances to Part 3. The other two finalists now fight for the remaining place.`
+          )
+          state.phase = 'final3_comp2'
+          return
+        }
+        state.phase = 'final3_comp1'
+        return
+      }
+
+      if (state.phase === 'final3_comp1') {
+        if (
+          !isVoxPopuliActive(state) &&
+          holdVoxFinalThreePrelude(
+            state,
+            'part1',
+            'THE FINAL THREE',
+            `The final three wake to an almost empty Hub. Breakfast is polite, but every pause carries the weight of the last immunity battle. Tonight, one of them can still be placed beyond the audience's reach.`
+          )
+        )
+          return
+        // Part 1: all 3 finalists compete; winner advances to Part 3; 2 losers go to Part 2
+        const seedRng = mulberry32(state.seed)
+        state.seed = (seedRng() * 0x100000000) >>> 0
+        const rng = mulberry32(state.seed)
+
+        const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        if (!isVoxPopuliActive(state)) {
+          pushEvent(
+            state,
+            `Part 1 begins now. All three finalists compete for a direct place in the Final Power Battle. 🏁`,
+            'game'
+          )
+        }
+
+        // If any participant is human, launch interactive minigame instead of deterministic pick.
+        const hasHuman = alive.some((p) => p.isUser)
+        if (hasHuman) {
+          state.minigameContext = {
+            phaseKey: 'final3_comp1',
+            participants: alive.map((p) => p.id),
+            seed: state.seed,
+          }
+          state.phase = 'final3_comp1_minigame'
+          return
+        }
+
+        const winner = seededPick(rng, alive)
+        recordFinalThreePartOutcome(
+          state,
+          1,
+          winner.id,
+          alive.map((player) => player.id),
+          state.seed
+        )
+
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_comp2',
+            `PART 1: ${winner.name.toUpperCase()} ADVANCES`,
+            `${winner.name} advances to Part 3. The other two finalists now fight for the remaining place.`
+          )
+        } else {
+          pushClassicFinalThreePart1Result(state, winner, winner.id)
+        }
+        state.phase = 'final3_comp2'
+        return
+      }
+
+      if (state.phase === 'final3_comp2') {
+        const partOneWinnerName = state.players.find((p) => p.id === state.f3Part1WinnerId)?.name
+        // Part 2: the 2 Part-1 losers compete; winner advances to Part 3
+        const seedRng = mulberry32(state.seed)
+        state.seed = (seedRng() * 0x100000000) >>> 0
+        const rng = mulberry32(state.seed)
+
+        const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        const losers = alive.filter((p) => p.id !== state.f3Part1WinnerId)
+        if (losers.length === 0) {
+          // Defensive: should not happen in normal play; log and skip to Part 3
+          pushEvent(
+            state,
+            `[Warning] No Part-2 competitors found — advancing to Part 3 directly.`,
+            'game'
+          )
+          state.phase = 'final3_comp3'
+          return
+        }
+        if (!isVoxPopuliActive(state)) {
+          pushEvent(
+            state,
+            `Part 2 begins now. The remaining two finalists battle for the last place in the Final Power Battle. 🏁`,
+            'game'
+          )
+        }
+
+        // If any Part-2 competitor is human, launch interactive minigame.
+        const hasHuman = losers.some((p) => p.isUser)
+        if (hasHuman) {
+          state.minigameContext = {
+            phaseKey: 'final3_comp2',
+            participants: losers.map((p) => p.id),
+            seed: state.seed,
+          }
+          state.phase = 'final3_comp2_minigame'
+          return
+        }
+
+        const winner = seededPick(rng, losers)
+        recordFinalThreePartOutcome(
+          state,
+          2,
+          winner.id,
+          losers.map((player) => player.id),
+          state.seed
+        )
+
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_comp3',
+            `PART 2: ${winner.name.toUpperCase()} ADVANCES`,
+            `${winner.name} joins ${partOneWinnerName ?? 'the Part 1 winner'} in Part 3. After the immunity battle, the other two finalists will face the audience vote.`
+          )
+        } else {
+          pushClassicFinalThreePart2Result(state, winner, winner.id)
+        }
+        prepareFinalThreePart3Block(state)
+        state.phase = 'final3_comp3'
+        return
+      }
+
+      if (state.phase === 'final3_comp3') {
+        // Part 3: Part-1 winner vs Part-2 winner → Final LOH crowned
+        const seedRng = mulberry32(state.seed)
+        state.seed = (seedRng() * 0x100000000) >>> 0
+        const rng = mulberry32(state.seed)
+
+        const finalists = state.players.filter(
+          (p) => p.id === state.f3Part1WinnerId || p.id === state.f3Part2WinnerId
+        )
+        const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        // Only Part 1 and Part 2 winners should compete in Part 3.
+        // Fallback to all alive players guards against corrupted state while preserving progress.
+        const pool = finalists.length >= 2 ? finalists : alive
+        if (finalists.length < 2) {
+          pushEvent(
+            state,
+            `[Warning] Part 3 finalists missing — using all alive players as fallback.`,
+            'game'
+          )
+        }
+
+        const f3Part1Name = state.players.find((p) => p.id === state.f3Part1WinnerId)?.name
+        const f3Part2Name = state.players.find((p) => p.id === state.f3Part2WinnerId)?.name
+        if (!isVoxPopuliActive(state) && f3Part1Name && f3Part2Name) {
+          pushEvent(
+            state,
+            `The Final Power Battle begins now. ${f3Part1Name} faces ${f3Part2Name}; the winner controls the Final Two. 🏁`,
+            'game'
+          )
+        }
+
+        // If any Part-3 competitor is human, launch interactive minigame.
+        const hasHuman = pool.some((p) => p.isUser)
+        if (hasHuman) {
+          state.minigameContext = {
+            phaseKey: 'final3_comp3',
+            participants: pool.map((p) => p.id),
+            seed: state.seed,
+          }
+          state.phase = 'final3_comp3_minigame'
+          return
+        }
+
+        const finalHoh = seededPick(rng, pool)
+        recordFinalThreePartOutcome(
+          state,
+          3,
+          finalHoh.id,
+          pool.map((player) => player.id),
+          state.seed
+        )
+
+        // Crown the Final LOH
+        if (import.meta.env.DEV) {
+          console.log('[applyLohWinner]', {
+            source: '[advance/final3_comp3]',
+            previousHohId: state.lohId,
+            nextHohId: finalHoh.id,
+            currentPhase: state.phase,
+          })
+        }
+        state.lohId = finalHoh.id
+        markFinalHohWinner(state, finalHoh.id)
+        state.players.forEach((p) => {
+          if (p.status === 'loh') p.status = 'active'
+        })
+        const lohPlayer = state.players.find((p) => p.id === finalHoh.id)
+        if (lohPlayer) lohPlayer.status = 'loh'
+
+        // The 2 non-Final-LOH players are now nominees (eligible to be evicted)
+        const nominees = alive.filter((p) => p.id !== finalHoh.id)
+        state.nomineeIds = nominees.map((p) => p.id)
+        nominees.forEach((p) => {
+          const np = state.players.find((x) => x.id === p.id)
+          if (np && np.status !== 'nominated') np.status = 'nominated'
+        })
+        recordFinalThreePower(state, finalHoh.id, state.nomineeIds)
+
+        if (isVoxPopuliActive(state)) {
+          pushVoxFinalThreeResult(
+            state,
+            'final3_decision',
+            `FINAL IMMUNITY: ${finalHoh.name.toUpperCase()}`,
+            `${finalHoh.name} has won immunity. The other two finalists now face the audience for the final place in the Final 2.`
+          )
+        } else {
+          pushEvent(
+            state,
+            `Final Power Battle: ${finalHoh.name} wins and takes the final power! 👑`,
+            'game'
+          )
+        }
+
+        if (isVoxPopuliActive(state) && state.voxPopuli) {
+          state.voxPopuli.immunityWinnerId = finalHoh.id
+          state.voxPopuli.awaitingPublicVote = false
+          state.voxPopuli.publicVoteContext = null
+          state.voxPopuli.publicVotePercentages = null
+          state.awaitingFinal3Eviction = false
+          state.awaitingFinal3Plea = false
+          state.phase = 'final3_decision'
+          return
+        }
+
+        // Every Classic route enters the same final ceremony. This keeps a
+        // human Final LOH's choice and a human Part-3 loss equally complete.
+        state.awaitingFinal3Eviction = false
+        state.awaitingFinal3Plea = true
+        if (import.meta.env.DEV) {
+          console.log('[gameSlice] advance() final3_comp3: awaitingFinal3Plea set', {
+            lohId: finalHoh.id,
+          })
+        }
+
+        state.phase = 'final3_decision'
+        return
+      }
+
+      if (state.phase === 'final3_decision') {
+        if (isVoxPopuliActive(state) && state.voxPopuli) {
+          const nomineeNames = formatNameList(
+            state.nomineeIds.map(
+              (id) => state.players.find((player) => player.id === id)?.name ?? id
+            )
+          )
+          if (
+            holdVoxFinalThreePrelude(
+              state,
+              'public_decision',
+              'THE FINAL APPEALS',
+              `${nomineeNames} make their final private appeals, pack their cases, and wait together as the audience prepares to close one journey forever.`
+            )
+          ) {
+            // Arm the public vote before the appeals card is dismissed. This
+            // lets that card's Play press hand directly into the live reveal;
+            // otherwise the listener mounts one render too late and leaves an
+            // empty faux-TV screen that requires a second press.
+            state.voxPopuli.awaitingPublicVote = true
+            state.voxPopuli.publicVoteContext = 'final3'
+            state.voxPopuli.publicVotePercentages = null
+            return
+          }
+          state.voxPopuli.awaitingPublicVote = true
+          state.voxPopuli.publicVoteContext = 'final3'
+          state.voxPopuli.publicVotePercentages = null
+          return
+        }
+        // AI Final LOH evicts (fallback if UI wasn't shown / human didn't act)
+        const seedRng = mulberry32(state.seed)
+        state.seed = (seedRng() * 0x100000000) >>> 0
+        const rng = mulberry32(state.seed)
+
+        const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+        const finalHoh = state.players.find((p) => p.id === state.lohId)
+        if (nominees.length > 0) {
+          const decision = chooseFinalThreeEvictee({
+            holderId: state.lohId,
+            holder: finalHoh,
+            nominees,
+            relationships: state.strategicRelationships,
+            alliances: state.strategicAlliances,
+            threatReads: state.strategicThreatReadsByActorId,
+          })
+          const evictee = decision?.player ?? seededPick(rng, nominees)
+          assignSeasonPlacementOnExit(state, evictee.id)
+          evictee.status = evictedStatus(state, evictee)
+          state.nomineeIds = state.nomineeIds.filter((id) => id !== evictee.id)
+          state.awaitingFinal3Eviction = false
+          completeFinalThreeController(state, evictee.id)
+          pushEvent(
+            state,
+            `${finalHoh?.name ?? 'The Final Power holder'} has chosen to eliminate ${evictee.name}${decision?.reason ? ` — ${decision.reason}` : ''}. ${evictee.name} finishes in 3rd place. 🥉`,
+            'game'
+          )
+          publishBellaWillOnEviction(state, evictee.id)
+          pushEvent(
+            state,
+            `The Final 2 is set! The Tribunal will now vote for the winner of The Big Eye. 🏆`,
+            'game'
+          )
+        }
+        state.phase = 'week_end'
+        return
+      }
+
+      // Guard: jury is a terminal phase — advance() is a no-op once reached.
+      if (state.phase === 'jury') return
+
+      // Guard: jury_announcement → jury_cinematic (user dismissed the modal).
+      if (state.phase === 'jury_announcement') {
+        state.phase = 'jury_cinematic'
+        return
+      }
+
+      // Guard: jury_cinematic → jury (cinematic complete or skipped).
+      if (state.phase === 'jury_cinematic') {
+        state.phase = 'jury'
+        return
+      }
+
+      // Guard: at week_end with ≤2 players alive the Final 2 is set.
+      // Transition to jury_announcement so the UI can show the modal/cinematic
+      // before entering jury voting.
+      if (state.phase === 'week_end') {
+        const aliveAtEnd = state.players.filter(
+          (p) => p.status !== 'evicted' && p.status !== 'jury'
+        )
+        if (aliveAtEnd.length <= 2) {
+          if (isVoxPopuliActive(state) && state.voxPopuli) {
+            state.voxPopuli.finalistIds = aliveAtEnd.map((player) => player.id)
+            state.voxPopuli.finaleStage = 'showcase'
+            return
+          }
+          state.phase = 'jury_announcement'
+          return
+        }
+      }
+
+      // Guard: handle intermediate AI replacement steps (after veto auto-save or human POS use).
+      // Each call to advance() processes one step so the TV shows each message separately.
+      // Each step advances the seed to maintain the deterministic RNG sequence.
+      if (state.aiReplacementStep === 1) {
+        // Step 1: show the "LOH is selecting a replacement" beat; AI will pick on next advance.
+        // Advance seed to keep the RNG sequence consistent with normal advance() calls.
+        const seedRng1 = mulberry32(state.seed)
+        state.seed = (seedRng1() * 0x100000000) >>> 0
+        const lohPlayer = state.players.find((pl) => pl.id === state.lohId)
+        pushEvent(state, `${lohPlayer?.name ?? 'The LOH'} is selecting a backup nominee...`, 'game')
+        state.aiReplacementStep = 2
+        return
+      }
+
+      if (state.aiReplacementStep === 2) {
+        // Guard: wait until the UI has acknowledged the step-1 announcement.
+        if (state.aiReplacementWaiting) return
+        // Step 2: AI LOH picks the replacement nominee.
+        // Advance seed first, then use the new seed for the pick.
+        const seedRng2 = mulberry32(state.seed)
+        state.seed = (seedRng2() * 0x100000000) >>> 0
+        const rng = mulberry32(state.seed)
+        const aliveNow = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+        const lohPlayer = state.players.find((pl) => pl.id === state.lohId)
+        const eligible = getReplacementEligiblePlayers(state, aliveNow)
+        if (eligible.length > 0) {
+          const replacement = pickStrategicReplacementNominee(state, state.lohId, eligible, rng, {
+            reason: 'resolved staged LOH replacement against canonical backup and ambush intent',
+          })
+          if (replacement) appendNominee(state, replacement.id)
+          pushEvent(
+            state,
+            `${lohPlayer?.name ?? 'The LOH'} named ${replacement?.name ?? 'a backup nominee'} as the backup nominee. 🎯`,
+            'game'
+          )
+        }
+        // Keep povSavedId set so the UI can detect "veto was used" and show
+        // the AI replacement animation. Cleared at week_start.
+        state.aiReplacementStep = 0
+        // VIP: after AI replacement completes first use, advance to second-use decision stage
+        if (state.specialVeto?.activeType === 'vip' && state.specialVeto.vipUseStage === 1) {
+          state.specialVeto.vipUseStage = 2
+        }
+        // VIP: after AI replacement completes second use, mark ceremony done
+        if (state.specialVeto?.activeType === 'vip' && state.specialVeto.vipUseStage === 3) {
+          state.specialVeto.vipUseStage = -1
+        }
+        return
+      }
+
+      // ── Double Trouble second-use handling ──────────────────────────────────────
+      if (state.specialVeto?.activeType === 'vip' && state.specialVeto.vipUseStage === 2) {
+        const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+        if (nominees.length === 0) {
+          state.specialVeto.vipUseStage = -1
+          return
+        }
+        const povHolder = state.players.find((p) => p.id === state.posWinnerId)
+        if (povHolder?.isUser) {
+          state.specialVeto.awaitingVipSecondUseDecision = true
+          pushEvent(
+            state,
+            `${povHolder.name}, you may use Double Trouble a second time! Would you like to save another nominee? 👑`,
+            'game'
+          )
+        } else {
+          // AI: seeded decision — tends to use second time (~70%)
+          const seedRng2 = mulberry32(state.seed)
+          state.seed = (seedRng2() * 0x100000000) >>> 0
+          const rng2 = mulberry32(state.seed)
+          const eligible = getReplacementEligiblePlayers(
+            state,
+            state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+          )
+          const useSecond =
+            shouldUseSafetyForTwin(state, povHolder?.id, nominees) ||
+            shouldAiUseTargetedSafetyPower(state, povHolder?.id, nominees, eligible)
+          if (useSecond && nominees.length > 0) {
+            const nominee2 = pickSafetySaveTarget(state, povHolder?.id, nominees, rng2)
+            if (!nominee2) {
+              state.specialVeto.vipUseStage = -1
+              return
+            }
+            state.nomineeIds = state.nomineeIds.filter((id) => id !== nominee2.id)
+            const savedP = state.players.find((p) => p.id === nominee2.id)
+            if (savedP) savedP.status = 'active'
+            state.povSavedId = nominee2.id
+            addPovProtectedId(state, nominee2.id)
+            pushEvent(
+              state,
+              `${povHolder?.name ?? 'The Double Trouble holder'} used Double Trouble a second time, saving ${nominee2.name}! 👑`,
+              'game'
+            )
+            const hohP = state.players.find((p) => p.id === state.lohId)
+            if (hohP?.isUser) {
+              state.specialVeto.vipUseStage = 3
+              state.replacementNeeded = true
+              pushEvent(state, `${hohP.name} must now name another backup nominee. 🎯`, 'game')
+            } else {
+              state.specialVeto.vipUseStage = 3
+              state.aiReplacementStep = 1
+            }
+          } else {
+            state.specialVeto.vipUseStage = -1
+            pushEvent(
+              state,
+              `${povHolder?.name ?? 'The Double Trouble holder'} chose not to use Double Trouble a second time. The nominations stand. 👑`,
+              'game'
+            )
+          }
+        }
+        return
+      }
+
+      // ── Democracia special-phase handlers ──────────────────────────────────────
+      // These phases are outside PHASE_ORDER and must be handled explicitly.
+      if (state.phase === 'democracia_vote') {
+        const dem = state.democracia
+        // Safety: if Democracia state is missing or public-breaker pending, bail.
+        if (!dem || dem.awaitingPublicBreaker) return
+
+        // Advance seed
+        const dSeedRng = mulberry32(state.seed)
+        state.seed = (dSeedRng() * 0x100000000) >>> 0
+        const dRng = mulberry32(state.seed)
+
+        // Tally votes
+        const dVoteCounts: Record<string, number> = {}
+        for (const cId of dem.candidateIds) dVoteCounts[cId] = 0
+        for (const targetId of Object.values(dem.votesByVoterId)) {
+          if (targetId in dVoteCounts) dVoteCounts[targetId]++
+        }
+
+        // Determine top candidates
+        let dMaxVotes = -1
+        for (const cnt of Object.values(dVoteCounts)) {
+          if (cnt > dMaxVotes) dMaxVotes = cnt
+        }
+        const dTopCandidates = dem.candidateIds.filter((id) => (dVoteCounts[id] ?? 0) === dMaxVotes)
+        const dTopNames = formatDemocraciaResultNames(state, dTopCandidates)
+
+        if (dTopCandidates.length === 1) {
+          // Clear winner
+          const winnerId = dTopCandidates[0]
+          const winnerName = state.players.find((p) => p.id === winnerId)?.name ?? winnerId
+          dem.resultDisplay = buildDemocraciaResultDisplay(
+            'winner',
+            [winnerId],
+            dVoteCounts,
+            'DEMOCRACIA WINNER',
+            `${winnerName} wins the vote with ${dVoteCounts[winnerId] ?? 0} vote${(dVoteCounts[winnerId] ?? 0) === 1 ? '' : 's'}.`
+          )
+          pushEvent(
+            state,
+            `🗳️ The votes are in! ${winnerName} has been elected Leader of the Hub! 👑`,
+            'game'
+          )
+          applyLohWinner(state, winnerId, '[advance/democracia_vote]')
+          dem.active = false
+          state.phase = 'democracia_results'
+        } else {
+          // Tie
+          const dAliveNow = state.players.filter(
+            (p) => p.status !== 'evicted' && p.status !== 'jury'
+          )
+          const dBallotageVoters = dAliveNow.filter((p) => !dTopCandidates.includes(p.id))
+
+          if (dem.round >= 2) {
+            // Already had ballotage — still tied → resolve by public or co-LOH
+            if (state.publicModeEnabled) {
+              // Signal UI to pick by approval rating
+              dem.awaitingPublicBreaker = true
+              dem.resultDisplay = buildDemocraciaResultDisplay(
+                dTopCandidates.length > 3 ? 'message' : 'tie',
+                dTopCandidates.length > 3 ? [] : [...dTopCandidates],
+                dVoteCounts,
+                dTopCandidates.length > 3 ? 'DEMOCRACIA TIE' : 'FINAL TIE',
+                dTopCandidates.length > 3
+                  ? `${dTopNames} remain tied. The public will decide the winner by approval rating.`
+                  : `${dTopNames} are still tied. The public will decide the winner by approval rating.`
+              )
+              pushEvent(
+                state,
+                `🗳️ Even after the ballotage, ${dTopNames} are still tied! The public will decide by approval rating! 📊`,
+                'game'
+              )
+            } else {
+              // No public mode → both become co-LOHs
+              state.coLohIds = [...dTopCandidates]
+              for (const id of dTopCandidates) {
+                const cp = state.players.find((pl) => pl.id === id)
+                if (cp) {
+                  cp.status = 'loh'
+                  ensurePlayerStats(cp).lohWins += 1
+                }
+              }
+              // Keep lohId pointing to first co-LOH for compatibility
+              state.lohId = dTopCandidates[0]
+              dem.resultDisplay = buildDemocraciaResultDisplay(
+                dTopCandidates.length > 3 ? 'message' : 'tie',
+                dTopCandidates.length > 3 ? [] : [...dTopCandidates],
+                dVoteCounts,
+                dTopCandidates.length > 3 ? 'DEMOCRACIA TIE' : 'CO-LEADERS ELECTED',
+                dTopCandidates.length > 3
+                  ? `${dTopNames} remain tied after the ballotage and will serve together as co-Leaders of the Hub.`
+                  : `${dTopNames} remain tied and will serve together as co-Leaders of the Hub.`
+              )
+              pushEvent(
+                state,
+                `🗳️ The votes remain tied! ${dTopNames} will BOTH serve as co-Leaders of the Hub! 👑👑`,
+                'game'
+              )
+              dem.active = false
+              state.phase = 'democracia_results'
+            }
+          } else if (dBallotageVoters.length === 0) {
+            // No eligible ballotage voters — deterministic fallback
+            pushEvent(
+              state,
+              `⚠️ No eligible voters available for ballotage. The winner is decided by chance!`,
+              'game'
+            )
+            const dFbRng = mulberry32((state.seed ^ 0xdec0de) >>> 0)
+            const fallbackId = dTopCandidates[Math.floor(dFbRng() * dTopCandidates.length)]
+            const fallbackName = state.players.find((p) => p.id === fallbackId)?.name ?? fallbackId
+            dem.resultDisplay = buildDemocraciaResultDisplay(
+              'winner',
+              [fallbackId],
+              dVoteCounts,
+              'DEMOCRACIA WINNER',
+              `${fallbackName} wins the tiebreak by chance after no eligible ballotage voters remained.`
+            )
+            pushEvent(state, `🗳️ ${fallbackName} has been elected Leader of the Hub! 👑`, 'game')
+            applyLohWinner(state, fallbackId, '[advance/democracia_vote/ballotage_fallback]')
+            dem.active = false
+            state.phase = 'democracia_results'
+          } else {
+            // Go to ballotage round
+            dem.resultDisplay = buildDemocraciaResultDisplay(
+              dTopCandidates.length > 3 ? 'message' : 'tie',
+              dTopCandidates.length > 3 ? [] : [...dTopCandidates],
+              dVoteCounts,
+              dTopCandidates.length > 3 ? 'REVOTE REQUIRED' : 'TIED VOTE',
+              dTopCandidates.length > 3
+                ? `${dTopNames} are tied. The Hub must revote among the tied candidates.`
+                : `${dTopNames} are tied at ${dMaxVotes} vote${dMaxVotes === 1 ? '' : 's'}. The Hub must revote.`
+            )
+            pushEvent(
+              state,
+              `🗳️ It's a tie between ${dTopNames}! We go to BALLOTAGE! All other hubmates must revote between the tied candidates. 🗳️`,
+              'game'
+            )
+            dem.round += 1
+            dem.candidateIds = [...dTopCandidates]
+            dem.eligibleVoterIds = dBallotageVoters.map((p) => p.id)
+            dem.votesByVoterId = {}
+            // Cast AI votes for ballotage
+            for (const voter of dBallotageVoters) {
+              if (!voter.isUser) {
+                // Use per-voter seed for determinism
+                const vSeed =
+                  (state.seed ^
+                    (voter.id.charCodeAt(0) * 31 + voter.id.charCodeAt(voter.id.length - 1))) >>>
+                  0
+                const vRng = mulberry32(vSeed)
+                const voteIdx = Math.floor(vRng() * dTopCandidates.length)
+                dem.votesByVoterId[voter.id] = dTopCandidates[voteIdx]
+              }
+            }
+            // Block if human is a ballotage voter
+            const humanIsVoter = dBallotageVoters.some((p) => p.isUser)
+            if (humanIsVoter) {
+              dem.awaitingHumanVote = true
+            }
+            // Stay at democracia_vote — do NOT call dRng, seed already advanced above
+            void dRng // suppress unused warning
+          }
+        }
+        return
+      }
+
+      if (state.phase === 'democracia_results') {
+        // democracia_results → social_1
+        if (state.coLohIds && state.coLohIds.length > 0) {
+          const coNames = state.coLohIds
+            .map((id) => state.players.find((p) => p.id === id)?.name ?? id)
+            .join(' and ')
+          pushEvent(
+            state,
+            `${coNames} are now co-Leaders of the Hub! 👑👑 Alliances are already forming…`,
+            'social'
+          )
+        } else {
+          const hohName = state.players.find((p) => p.id === state.lohId)?.name ?? 'The new LOH'
+          pushEvent(
+            state,
+            isVoxPopuliActive(state)
+              ? `Hubmates congratulate ${hohName} on winning immunity. The secret nomination conversations begin. 💬`
+              : `Hubmates congratulate ${hohName}. Alliances are already forming… 💬`,
+            'social'
+          )
+        }
+        state.phase = 'social_1'
+        return
+      }
+
+      const currentIdx = PHASE_ORDER.indexOf(state.phase)
+      const nextIdx = (currentIdx + 1) % PHASE_ORDER.length
+      let nextPhase: Phase = state.phase === 'season_start' ? 'week_start' : PHASE_ORDER[nextIdx]
+
+      if (state.phase === 'eviction_results' && nextPhase === 'week_end') {
+        if (shouldQueueTwinShockBeforeDayEnd(state)) return
+      }
+
+      // Advance seed: consume one RNG value so each advance uses a different seed
+      const seedRng = mulberry32(state.seed)
+      state.seed = (seedRng() * 0x100000000) >>> 0
+      const rng = mulberry32(state.seed)
+
+      const alive = state.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+
+      beginPhaseBroadcastSequence(state, nextPhase)
+      switch (nextPhase) {
+        case 'season_start': {
+          // Cupid is a season-opening shock: reveal the bonds as soon as the
+          // season begins, before the first week-start card is shown.
+          activateCupidArrowForSeason(state)
+          break
+        }
+        case 'week_start': {
+          const enteringDayOne = state.phase === 'season_start'
+          applyPendingPublicModeChange(state, 'week_start')
+          activateVoxPopuliForSeason(state)
+          // week_end → week_start: increment week and reset week-level fields.
+          // Save the outgoing LOH so they can be excluded from this week's LOH comp.
+          if (!enteringDayOne) {
+            state.prevHohId = state.lohId ?? null
+            state.lastWeekNominationRecord = state.currentWeekNominationRecord ?? null
+            state.week += 1
+          }
+          settleSecretMissionArrival(state)
+          state.currentWeekNominationRecord = null
+          state.nominationDecisionReasons = {}
+          state.lohId = null
+          state.lohSocialPlan = null
+          state.nomineeIds = []
+          state.lohSafetyAdvice = null
+          state.posWinnerId = null
+          state.replacementNeeded = false
+          state.povSavedId = null
+          state.replacementNomineeIds = []
+          state.povProtectedIds = []
+          state.awaitingNominations = false
+          state.pendingNominee1Id = null
+          state.awaitingPovDecision = false
+          state.awaitingPovSaveTarget = false
+          state.lastHohCompFinisherId = null
+          state.lastHohCompFinisherType = null
+          state.publicSavedNomineeId = null
+          state.nominationContext = null
+          state.awaitingPublicSave = false
+          state.votes = {}
+          state.voteResultsMode = 'house'
+          state.awaitingHumanVote = false
+          state.awaitingTieBreak = false
+          state.tiedNomineeIds = null
+          state.awaitingMissionImmunityOffer = false
+          state.aiReplacementStep = 0
+          state.aiReplacementWaiting = false
+          // Clear per-week special veto ceremony flags (preserve seasonUsed flag)
+          if (state.specialVeto) {
+            state.specialVeto.activeType = null
+            state.specialVeto.activatedWeek = null
+            state.specialVeto.vipUseStage = 0
+            state.specialVeto.awaitingHolderReplacement = false
+            state.specialVeto.awaitingCoupReplacement1 = false
+            state.specialVeto.awaitingCoupReplacement2 = false
+            state.specialVeto.coupReplacement1Id = null
+            state.specialVeto.awaitingVipSecondUseDecision = false
+            state.specialVeto.awaitingVipSecondSaveTarget = false
+            state.twistActive = false
+          }
+          if (isCupidArrowActive(state)) state.twistActive = false
+          if (isVoxPopuliActive(state) && state.voxPopuli) {
+            state.voxPopuli.nominationBallots = {}
+            state.voxPopuli.nominationVoteCounts = {}
+            state.voxPopuli.lastReplacementNomineeIds = []
+            state.voxPopuli.immunityWinnerId = null
+            state.voxPopuli.autoNomineeId = null
+            state.voxPopuli.awaitingPublicVote = false
+            state.voxPopuli.publicVoteContext = null
+            state.voxPopuli.publicVotePercentages = null
+            state.voxPopuli.audiencePreviewWeek = null
+            state.voxPopuli.audiencePreviewNomineeIds = []
+            state.voxPopuli.audiencePreviewPercentages = null
+            state.twistActive = false
+          }
+          state.twistActivatedThisWeek = false
+          state.players.forEach((p) => {
+            if (['loh', 'nominated', 'pos', 'loh+pos', 'nominated+pos'].includes(p.status)) {
+              p.status = 'active'
+            }
+          })
+          // Clear Democracia per-day state (preserve usedThisSeason flag)
+          if (state.democracia) {
+            state.democracia.active = false
+            state.democracia.activatedDay = null
+            state.democracia.round = 0
+            state.democracia.candidateIds = []
+            state.democracia.eligibleVoterIds = []
+            state.democracia.votesByVoterId = {}
+            state.democracia.awaitingHumanVote = false
+            state.democracia.awaitingPublicBreaker = false
+            state.democracia.resultDisplay = null
+          }
+          // Clear co-LOH state
+          state.coLohIds = null
+          state.awaitingCoLohNomination = false
+          state.coLohNomineeByCoLohId = null
+          state.coLohReplacementOwnerId = null
+          state.awaitingPosTieBreak = false
+          const tribunalPhaseBegins =
+            !isVoxPopuliActive(state) &&
+            state.tribunalPhaseAnnounced !== true &&
+            state.players.some((player) => player.status === 'jury')
+          const tribunalEvent = tribunalPhaseBegins
+            ? pushEvent(
+                state,
+                `Congrats all, you've just made it to tribunal. Your voices will crown the winner.`,
+                'game',
+                { major: 'tribunal_phase', broadcastLevel: 'major', phase: 'week_start' }
+              )
+            : null
+          if (tribunalEvent) {
+            state.tribunalPhaseAnnounced = true
+          }
+          pushEvent(state, `Day ${state.week} has begun. Get ready.`, 'game', {
+            key: 'day_start',
+            phase: 'week_start',
+            ...(tribunalEvent ? { announcementPrerollEventId: tribunalEvent.id } : {}),
+          })
+          const bella = state.players.find((player) => player.id === BELLA_ID)
+          if (
+            state.bellaWill?.active &&
+            !state.bellaWill.expiredAtEndgame &&
+            bella &&
+            bella.status !== 'evicted' &&
+            bella.status !== 'jury' &&
+            (state.week === 1 || state.week % 3 === 0)
+          ) {
+            pushEvent(state, getBellaHint(state.seed, state.season, state.week), 'social', {
+              key: `bellas_will_hint_${state.week}`,
+              phase: 'week_start',
+              forceOnTv: true,
+              broadcastDelivery: 'next',
+            })
+          }
+          break
+        }
+        case 'loh_comp_announcement': {
+          activateCupidArrowForSeason(state)
+          break
+        }
+        case 'loh_comp': {
+          // Democracia: redirect to democratic vote instead of LOH competition
+          if (state.democracia?.active && state.democracia.activatedDay === state.week) {
+            const demAlive = state.players.filter(
+              (p) => p.status !== 'evicted' && p.status !== 'jury'
+            )
+            state.democracia.round = 1
+            state.democracia.candidateIds = demAlive.map((p) => p.id)
+            state.democracia.eligibleVoterIds = demAlive.map((p) => p.id)
+            state.democracia.votesByVoterId = {}
+            state.democracia.resultDisplay = null
+            // Cast AI votes (no self-vote)
+            for (const voter of demAlive) {
+              if (!voter.isUser) {
+                const candidates = demAlive.filter(
+                  (c) => c.id !== voter.id && canPlayerTargetPlayer(state, voter.id, c.id)
+                )
+                if (candidates.length > 0) {
+                  const vSeed =
+                    (state.seed ^
+                      (voter.id.charCodeAt(0) * 31 + voter.id.charCodeAt(voter.id.length - 1))) >>>
+                    0
+                  const vRng = mulberry32(vSeed)
+                  const weightedCandidates = candidates.map((candidate) => {
+                    const allianceRead = getStrategicAllianceDecisionRead(
+                      state,
+                      voter.id,
+                      candidate.id
+                    )
+                    const powerHolderPriority = getAlliancePowerHolderPriority(
+                      state.strategicAlliances,
+                      voter.id,
+                      candidate.id
+                    )
+                    const relationship = state.strategicRelationships?.[voter.id]?.[candidate.id]
+                    const rawLoyalty = Math.max(
+                      allianceRead.sharedProtection,
+                      powerHolderPriority,
+                      relationship?.tags?.includes('alliance') ? 0.75 : 0
+                    )
+                    const agendaPressure = Math.min(
+                      0.9,
+                      allianceRead.betrayalPressure + (allianceRead.actorInfiltrator ? 0.35 : 0)
+                    )
+                    const loyalty = rawLoyalty * (1 - agendaPressure)
+                    const hostility =
+                      (relationship?.tags?.some((tag) =>
+                        ['betrayal', 'broken_promise', 'rivalry', 'target'].includes(tag)
+                      )
+                        ? 0.8
+                        : 0) +
+                      Math.max(0, -(relationship?.affinity ?? 0)) / 100
+                    return {
+                      candidate,
+                      // Democracia elects the holder of an office. Prefer a trusted,
+                      // committed pact/alliance member while allowing relationships,
+                      // competing pacts, and individual agendas to shift close votes.
+                      weight: Math.max(
+                        0.2,
+                        1 +
+                          loyalty * 3.2 -
+                          allianceRead.currentTargetPressure * 0.8 -
+                          allianceRead.fallbackTargetPressure * 0.3 -
+                          hostility * 1.7 +
+                          vRng() * 1.2
+                      ),
+                    }
+                  })
+                  const totalWeight = weightedCandidates.reduce(
+                    (total, entry) => total + entry.weight,
+                    0
+                  )
+                  let cursor = vRng() * totalWeight
+                  const selected = weightedCandidates.find((entry) => {
+                    cursor -= entry.weight
+                    return cursor <= 0
+                  })
+                  state.democracia.votesByVoterId[voter.id] = (
+                    selected ?? weightedCandidates[weightedCandidates.length - 1]!
+                  ).candidate.id
+                }
+              }
+            }
+            // Block if human needs to vote
+            const humanIsVoter = demAlive.some((p) => p.isUser)
+            if (humanIsVoter) {
+              state.democracia.awaitingHumanVote = true
+            }
+            pushEvent(
+              state,
+              `🗳️ Today's Leader of the Hub will be chosen by popular vote! Cast your votes now.`,
+              'game'
+            )
+            nextPhase = 'democracia_vote'
+            break
+          }
+          pushEvent(
+            state,
+            `The Leader of the Hub competition has begun! 🏆 Who will win power today?`,
+            'game'
+          )
+          break
+        }
+        case 'loh_results': {
+          // completeMinigame() applies the LOH winner inline and advances the phase
+          // directly, so minigameResult is always null here.  Always pick randomly.
+          // Exclude the outgoing LOH (prevHohId) to respect the ineligibility rule.
+          const outgoingLohIds = new Set(expandCupidIds(state, getMissionOutgoingIds(state)))
+          const hohPool = !isVoxPopuliActive(state)
+            ? alive.filter((p) => !outgoingLohIds.has(p.id))
+            : alive
+          const hohEligible = hohPool.length > 0 ? hohPool : alive
+          const hoh = seededPick(rng, hohEligible)
+          applyLohWinner(state, hoh.id, '[advance/loh_results]')
+          // Track last-place LOH competition finisher for the third-nominee rule.
+          // Use RNG to pick deterministically among non-LOH eligible players.
+          const winningPairIds = new Set(getCupidRoleIds(state, hoh.id))
+          const lastPlacePool = hohEligible.filter((p) => !winningPairIds.has(p.id))
+          if (lastPlacePool.length > 0) {
+            state.lastHohCompFinisherId = seededPick(rng, lastPlacePool).id
+            if (isVoxPopuliActive(state) && state.voxPopuli) {
+              state.voxPopuli.autoNomineeId = state.lastHohCompFinisherId
+            }
+            announceVoxLastPlaceNominee(state)
+          }
+          break
+        }
+        case 'social_1': {
+          maybePushTwinShockClue(state)
+          const democraciaSocialBeatAlreadyShown =
+            state.democracia?.activatedDay === state.week && state.democracia.active === false
+          if (!democraciaSocialBeatAlreadyShown) {
+            const hohName = state.players.find((p) => p.id === state.lohId)?.name ?? 'The new LOH'
+            pushEvent(
+              state,
+              `Hubmates congratulate ${hohName}. Alliances are already forming… 💬`,
+              'social'
+            )
+          }
+          break
+        }
+        case 'nominations': {
+          const hohName = state.players.find((p) => p.id === state.lohId)?.name ?? 'The LOH'
+          pushEvent(
+            state,
+            isVoxPopuliActive(state)
+              ? `Hubmates are being called to the Confessional one by one to nominate in secret. 🗳️`
+              : `${hohName} is preparing the nomination ceremony. 🎯`,
+            'game'
+          )
+          break
+        }
+        case 'nomination_results': {
+          if (isVoxPopuliActive(state) && state.voxPopuli) {
+            state.voxPopuli.nominationBallots = {}
+            castVoxAiNominationBallots(state, rng)
+            const human = alive.find((player) => player.isUser)
+            const immunityWinnerId = getVoxNominationImmunityId(state)
+            const autoNomineeId =
+              state.voxPopuli.autoNomineeId ?? state.lastHohCompFinisherId ?? null
+            const humanEligibleTargets = human
+              ? alive.filter(
+                  (candidate) =>
+                    candidate.id !== human.id &&
+                    candidate.id !== immunityWinnerId &&
+                    candidate.id !== autoNomineeId &&
+                    !isMissionOpeningProtected(state, candidate.id) &&
+                    canPlayerNominatePlayer(state, human.id, candidate.id)
+                )
+              : []
+            // Vox differs from Classic: every active hubmate nominates,
+            // including the automatic Final 4 nominee.
+            const humanCanVote = Boolean(human)
+            if (human && humanCanVote && humanEligibleTargets.length > 0) {
+              state.awaitingNominations = true
+              state.pendingNominee1Id = null
+              const requiredVotes = getVoxHumanBallotSize(state, humanEligibleTargets.length)
+              pushEvent(
+                state,
+                `${human.name}, cast ${
+                  requiredVotes === 1
+                    ? 'your secret nomination vote'
+                    : 'your two secret nomination votes'
+                } in the Confessional.`,
+                'diary',
+                { major: 'vox_populi_ballot' }
+              )
+            } else {
+              finalizeVoxNominations(state)
+            }
+            break
+          }
+          // ── Co-LOH Democracia day path ───────────────────────────────────────
+          // When there are co-LOHs (Democracia tie), each nominates exactly 1 person.
+          // Standard 2-nominee block produced; no public save / no auto-third-nominee.
+          if (state.coLohIds != null && state.coLohIds.length >= 2) {
+            const coLohIds = state.coLohIds
+            const coAlive = state.players.filter(
+              (p) => p.status !== 'evicted' && p.status !== 'jury'
+            )
+            state.coLohNomineeByCoLohId = {}
+            if (
+              state.publicModeEnabled &&
+              state.lastHohCompFinisherId &&
+              !coLohIds.includes(state.lastHohCompFinisherId) &&
+              !isMissionOpeningProtected(state, state.lastHohCompFinisherId)
+            )
+              appendNominee(state, state.lastHohCompFinisherId)
+            // AI co-LOHs nominate first
+            for (const coLohId of coLohIds) {
+              const coLoh = state.players.find((p) => p.id === coLohId)
+              if (coLoh?.isUser) continue // human handled below
+              const coPool = coAlive.filter(
+                (p) =>
+                  p.id !== coLohId &&
+                  !coLohIds.includes(p.id) &&
+                  !state.nomineeIds.includes(p.id) &&
+                  !isMissionOpeningProtected(state, p.id) &&
+                  canPlayerNominatePlayer(state, coLohId, p.id)
+              )
+              if (coPool.length > 0) {
+                const nominee =
+                  pickStrategicAiPlayer(state, coPool, rng, 'highest', { actorId: coLohId }) ??
+                  seededPick(rng, coPool)
+                state.nomineeIds.push(nominee.id)
+                const np = state.players.find((pl) => pl.id === nominee.id)
+                if (np) np.status = 'nominated'
+                incrementTimesNominated(state, nominee.id)
+                state.coLohNomineeByCoLohId[coLohId] = nominee.id
+                pushEvent(state, `${coLoh?.name ?? coLohId} nominates ${nominee.name}. 🎯`, 'game')
+              }
+            }
+            // Human co-LOH must nominate via modal
+            const humanCoLohId = coLohIds.find(
+              (id) => state.players.find((p) => p.id === id)?.isUser
+            )
+            if (humanCoLohId) {
+              const humanCoLoh = state.players.find((p) => p.id === humanCoLohId)
+              state.awaitingCoLohNomination = true
+              pushEvent(
+                state,
+                `${humanCoLoh?.name ?? 'You'}, as co-Leader of the Hub, you must nominate one hubmate for elimination. 🎯`,
+                'game'
+              )
+            } else {
+              // All AI co-LOHs: log final block
+              const coNomNames = state.nomineeIds
+                .map((id) => state.players.find((p) => p.id === id)?.name)
+                .filter(Boolean)
+                .join(' and ')
+              if (coNomNames) {
+                pushEvent(state, `${coNomNames} have been nominated for elimination. 🎯`, 'game')
+              }
+            }
+            break
+          }
+
+          // Double Eviction week: LOH nominates 3; otherwise 2.
+          const isDoubleEviction = state.doubleEviction?.weekActive === true
+          const publicModeEnabled = state.publicModeEnabled === true
+          const canUsePublicNomineeRule = publicModeEnabled && !isDoubleEviction
+          const nomineeCount = isDoubleEviction ? 3 : 2
+          // Guard: need LOH + nomineeCount eligible players.
+          const pool = collapseCupidCandidates(
+            state,
+            alive.filter(
+              (p) =>
+                p.id !== state.lohId &&
+                !isMissionOpeningProtected(state, p.id) &&
+                canPlayerNominatePlayer(state, state.lohId, p.id)
+            )
+          )
+          if (pool.length < nomineeCount) break
+
+          const lohPlayer =
+            getCupidHumanCoholder(state, state.lohId) ??
+            state.players.find((p) => p.id === state.lohId)
+          if (lohPlayer?.isUser) {
+            // Human LOH: block advance() and wait for the multi-select nomination UI.
+            // Human still picks 2; the 3rd auto-nominee is appended by commitNominees.
+            state.awaitingNominations = true
+            state.pendingNominee1Id = null
+            const countWord = isDoubleEviction ? 'three' : 'two'
+            pushEvent(
+              state,
+              `${lohPlayer.name}, it's time to make your nominations. Choose ${countWord} players to nominate. 🎯`,
+              'game'
+            )
+            break
+          }
+
+          // AI LOH: pick randomly (2 for normal weeks, 3 for DE).
+          // In public mode non-DE weeks, exclude the forced auto-nominee from the AI pick
+          // pool so the AI always selects distinct nominees and the auto-nominee is reliably
+          // appended as the third nominee below.
+          const autoNomineeUnitIds =
+            canUsePublicNomineeRule && state.lastHohCompFinisherId
+              ? new Set(expandCupidIds(state, [state.lastHohCompFinisherId]))
+              : null
+          const aiPool = autoNomineeUnitIds
+            ? pool.filter((p) => !autoNomineeUnitIds.has(p.id))
+            : pool
+          // The persisted AI LOH plan is created before nomination_results and is
+          // the strategic source of truth when Public Mode is off. Use that same
+          // opening block here instead of independently selecting a second pair and
+          // asking the outer planning reducer to rewrite it after the fact.
+          //
+          // Keeping selection atomic prevents the ceremony from ever capturing the
+          // base reducer's provisional pair while Faux TV is rewritten to the plan.
+          const nominationPlan = state.lohNominationPlan
+          const planMatchesRules = isDoubleEviction
+            ? nominationPlan?.isDoubleElimination === true
+            : nominationPlan?.isDoubleElimination !== true
+          const plannedNomineeIds =
+            (!publicModeEnabled || isDoubleEviction) &&
+            planMatchesRules &&
+            nominationPlan?.week === state.week &&
+            nominationPlan?.lohId === state.lohId &&
+            nominationPlan?.status === 'planned' &&
+            nominationPlan?.initialNomineeIds.length === nomineeCount
+              ? (nominationPlan?.initialNomineeIds ?? null)
+              : null
+          const plannedNominees = plannedNomineeIds
+            ? plannedNomineeIds
+                .map((id) => aiPool.find((candidate) => candidate.id === id))
+                .filter((candidate): candidate is Player => Boolean(candidate))
+            : []
+          const canUsePlannedBlock =
+            plannedNomineeIds != null &&
+            plannedNominees.length === nomineeCount &&
+            new Set(plannedNominees.map((candidate) => candidate.id)).size === nomineeCount
+          let nominees = canUsePlannedBlock
+            ? plannedNominees
+            : pickStrategicNominationTargets(state, state.lohId!, aiPool, nomineeCount, rng)
+          if ((state.depressionShock?.activeDay ?? 0) > 0 && rng() < 0.35) {
+            const alternatives = aiPool.filter(
+              (candidate) => !nominees.some((nominee) => nominee.id === candidate.id)
+            )
+            const unexpected = alternatives.length > 0 ? seededPick(rng, alternatives) : null
+            if (unexpected) {
+              nominees = [unexpected, ...nominees.slice(1)]
+              pushEvent(
+                state,
+                `${lohPlayer?.name ?? 'The LOH'} makes an unexpectedly emotional nomination as the storm hangs over the Hub. 🌧️`,
+                'social',
+                { major: 'depression_shock_surprise_nomination' }
+              )
+            }
+          }
+          state.nomineeIds = nominees.map((n) => n.id)
+          if (canUsePlannedBlock) {
+            const decisionCandidates = aiPool.map((candidate) => ({
+              player: candidate,
+              ...getNominationTargetBreakdown(state, state.lohId!, candidate),
+            }))
+            for (const nominee of nominees) {
+              const selected = decisionCandidates.find((entry) => entry.player.id === nominee.id)
+              if (selected) {
+                recordNominationDecisionReason(
+                  state,
+                  state.lohId!,
+                  nominee,
+                  'INITIAL',
+                  selected,
+                  decisionCandidates
+                )
+              }
+            }
+          }
+          nominees.forEach((n) => {
+            const p = state.players.find((pl) => pl.id === n.id)
+            if (p) p.status = 'nominated'
+            incrementTimesNominated(state, n.id)
+          })
+          expandCupidNominees(state)
+
+          // In public mode on non-Double Eviction weeks, auto-append the last-place LOH comp finisher.
+          if (canUsePublicNomineeRule && state.lastHohCompFinisherId) {
+            const autoId = state.lastHohCompFinisherId
+            let autoNomineeId: string | null = null
+            const autoPairAlreadyNominated = expandCupidIds(state, [autoId]).some((id) =>
+              state.nomineeIds.includes(id)
+            )
+            if (!autoPairAlreadyNominated) {
+              const autoPlayer = pool.find((p) => p.id === autoId)
+              if (autoPlayer) {
+                appendNominee(state, autoId)
+                autoNomineeId = autoId
+              }
+            }
+            state.nominationContext = {
+              hohNomineeIds: expandCupidIds(
+                state,
+                nominees.map((nominee) => nominee.id)
+              ),
+              autoNomineeId,
+              publicSaveApplied: false,
+            }
+          }
+
+          rememberOriginalNominations(state)
+          const allNominees = state.nomineeIds.map((id) => state.players.find((p) => p.id === id))
+          const names = allNominees.filter(Boolean).map((n) => n!.name)
+          const nameList = isDoubleEviction ? names.join(', ') : formatNameList(names)
+          pushEvent(state, `${nameList} have been nominated for elimination. 🎯`, 'game')
+          break
+        }
+        case 'pre_veto_public_save': {
+          // Skip this phase unless Public mode is on, this is not a Double Eviction,
+          // and there is a valid 3-nominee block to reduce back to 2 before veto.
+          const expectedPublicNominees = isCupidArrowActive(state) ? 6 : 3
+          if (
+            isVoxPopuliActive(state) ||
+            state.publicModeEnabled !== true ||
+            state.doubleEviction?.weekActive ||
+            state.nomineeIds.length !== expectedPublicNominees
+          ) {
+            if (import.meta.env.DEV && state.publicModeEnabled === true) {
+              const reason = state.doubleEviction?.weekActive
+                ? 'double elimination active'
+                : `nomineeIds.length is ${state.nomineeIds.length} (expected ${expectedPublicNominees})`
+              console.warn(
+                `[publicMode] pre_veto_public_save skipped even though publicModeEnabled=true — reason: ${reason}`,
+                { week: state.week, nomineeCount: state.nomineeIds.length }
+              )
+            }
+            nextPhase = 'pos_comp_announcement'
+            break
+          }
+          // Normal weeks: block advance() and let the UI resolve which nominee is saved.
+          state.awaitingPublicSave = true
+          pushEvent(
+            state,
+            `The final list of nominees today will be decided with the public's help.`,
+            'game'
+          )
+          break
+        }
+        case 'pos_comp_announcement':
+          break
+        case 'pos_comp': {
+          pushEvent(state, `The Power of Safety competition is underway! 🎭`, 'game')
+          break
+        }
+        case 'pos_results': {
+          // completeMinigame() applies the POS winner inline and advances the phase
+          // directly, so minigameResult is always null here.  Always pick randomly.
+          const posWinnerId = seededPick(rng, alive).id
+          nextPhase = applyPosWinner(state, posWinnerId, alive)
+          break
+        }
+        case 'pos_ceremony': {
+          const povName =
+            state.players.find((p) => p.id === state.posWinnerId)?.name ?? 'The safety holder'
+          pushEvent(state, `${povName} is holding the Safety Ceremony. ⚡`, 'game')
+          break
+        }
+        case 'pos_ceremony_results': {
+          const svType = state.specialVeto?.activeType ?? null
+
+          // VIP: if already processed (stage not 0), this is a second pass – skip to advance phase.
+          if (svType === 'vip' && state.specialVeto!.vipUseStage !== 0) {
+            break
+          }
+
+          const posWinner = state.posWinnerId
+            ? (state.players.find((p) => p.id === state.posWinnerId) ?? null)
+            : null
+          const posDecisionPlayer = getCupidHumanCoholder(state, state.posWinnerId) ?? posWinner
+          if (!posWinner) break
+          const isNominee = posWinner !== null && state.nomineeIds.includes(posWinner.id)
+
+          const missionImmunityCheck = {
+            phase: nextPhase as string,
+            week: state.week,
+            secretMission: state.secretMission,
+            nomineeIds: state.nomineeIds,
+            lohId: state.lohId,
+            posWinnerId: state.posWinnerId,
+            players: state.players,
+            doubleEviction: state.doubleEviction,
+            voteResults: state.voteResults,
+            awaitingTieBreak: state.awaitingTieBreak,
+          }
+          if (canOfferMissionImmunity(missionImmunityCheck)) {
+            state.awaitingMissionImmunityOffer = true
+            const humanPlayer = state.players.find((player) => player.isUser)
+            const rewardDays = state.secretMission?.reward?.durationDays ?? 1
+            pushEvent(
+              state,
+              `${humanPlayer?.name ?? 'You'} may use a secret ${rewardDays}-day immunity right now to escape the block before the Safety Ceremony concludes. 🛡️`,
+              'game'
+            )
+            break
+          }
+
+          // ── Force Majeure: mandatory use (no choice) ──────────────────────────
+          if (svType === 'spotlight') {
+            if (isNominee && posWinner !== null) {
+              // Nominee auto-saves self
+              const savedName = posWinner.name
+              const autoSavedId = posWinner.id
+              state.nomineeIds = state.nomineeIds.filter((id) => id !== posWinner.id)
+              posWinner.status = 'pos'
+              state.povSavedId = autoSavedId
+              addPovProtectedId(state, autoSavedId)
+              pushEvent(state, `${savedName} used Force Majeure and saved themselves! ✨`, 'game')
+              const lohPlayer =
+                getCupidHumanCoholder(state, state.lohId) ??
+                state.players.find((pl) => pl.id === state.lohId)
+              if (lohPlayer?.isUser) {
+                state.replacementNeeded = true
+                pushEvent(state, `${lohPlayer.name} must now name a backup nominee. 🎯`, 'game')
+              } else {
+                const eligible = getReplacementEligiblePlayers(state, alive)
+                if (eligible.length > 0) {
+                  const replacement = pickStrategicReplacementNominee(
+                    state,
+                    lohPlayer?.id ?? state.lohId,
+                    eligible,
+                    rng,
+                    {
+                      reason:
+                        'selected Force Majeure replacement from the canonical strategic resolver',
+                    }
+                  )
+                  if (replacement) {
+                    appendNominee(state, replacement.id)
+                    pushEvent(
+                      state,
+                      `${lohPlayer?.name ?? 'The LOH'} named ${replacement.name} as the backup nominee. 🎯`,
+                      'game'
+                    )
+                  }
+                }
+              }
+            } else if (posDecisionPlayer?.isUser) {
+              // Human must use — directly to save target
+              state.awaitingPovSaveTarget = true
+              pushEvent(
+                state,
+                `${posWinner.name}, Force Majeure MUST be used! Choose a nominee to save. ✨`,
+                'game'
+              )
+            } else {
+              // AI: pick one nominee to save
+              const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+              if (nominees.length > 0) {
+                const nomineeToSave = pickSafetySaveTarget(state, posWinner?.id, nominees, rng)
+                if (!nomineeToSave) break
+                const savedName = nomineeToSave.name
+                state.nomineeIds = state.nomineeIds.filter((id) => id !== nomineeToSave.id)
+                const savedP = state.players.find((p) => p.id === nomineeToSave.id)
+                if (savedP) savedP.status = 'active'
+                state.povSavedId = nomineeToSave.id
+                addPovProtectedId(state, nomineeToSave.id)
+                pushEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Force Majeure holder'} used Force Majeure on ${savedName}! ✨`,
+                  'game'
+                )
+                const lohPlayer =
+                  getCupidHumanCoholder(state, state.lohId) ??
+                  state.players.find((pl) => pl.id === state.lohId)
+                if (lohPlayer?.isUser) {
+                  state.replacementNeeded = true
+                  pushEvent(state, `${lohPlayer.name} must now name a backup nominee. 🎯`, 'game')
+                } else {
+                  state.aiReplacementStep = 1
+                }
+              }
+            }
+            break
+          }
+
+          // ── Halo Exchange: holder names the replacement ────────────────────────
+          if (svType === 'diamond') {
+            if (isNominee && posWinner !== null) {
+              const savedName = posWinner.name
+              const autoSavedId = posWinner.id
+              state.nomineeIds = state.nomineeIds.filter((id) => id !== posWinner.id)
+              posWinner.status = 'pos'
+              state.povSavedId = autoSavedId
+              addPovProtectedId(state, autoSavedId)
+              pushEvent(state, `${savedName} used Halo Exchange and saved themselves! 😇`, 'game')
+              if (posDecisionPlayer?.isUser) {
+                state.specialVeto!.awaitingHolderReplacement = true
+                pushEvent(
+                  state,
+                  `${posWinner.name}, as the Halo Exchange holder, you must name the backup nominee. 😇`,
+                  'game'
+                )
+              } else {
+                const eligible = getReplacementEligiblePlayers(state, alive, 1, {
+                  actorId: posWinner.id,
+                })
+                if (eligible.length > 0) {
+                  const replacement = pickStrategicReplacementNominee(
+                    state,
+                    posWinner.id,
+                    eligible,
+                    rng,
+                    {
+                      reason: 'selected Halo Exchange replacement from the holder strategic read',
+                    }
+                  )
+                  if (replacement) {
+                    appendNominee(state, replacement.id)
+                    pushEvent(
+                      state,
+                      `${posWinner.name} named ${replacement.name} as the Halo Exchange backup nominee. 😇`,
+                      'game'
+                    )
+                  }
+                }
+              }
+            } else if (posDecisionPlayer?.isUser) {
+              state.awaitingPovDecision = true
+              pushEvent(state, `${posWinner.name}, will you use Halo Exchange? 😇`, 'game')
+            } else {
+              const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+              const eligible = getReplacementEligiblePlayers(state, alive, 1, {
+                actorId: posWinner?.id,
+              })
+              const useIt =
+                shouldUseSafetyForTwin(state, posWinner?.id, nominees) ||
+                shouldAiUseTargetedSafetyPower(state, posWinner?.id, nominees, eligible)
+              if (useIt) {
+                if (nominees.length > 0) {
+                  const nomineeToSave = pickSafetySaveTarget(state, posWinner?.id, nominees, rng)
+                  if (!nomineeToSave) break
+                  state.nomineeIds = state.nomineeIds.filter((id) => id !== nomineeToSave.id)
+                  const savedP = state.players.find((p) => p.id === nomineeToSave.id)
+                  if (savedP) savedP.status = 'active'
+                  state.povSavedId = nomineeToSave.id
+                  addPovProtectedId(state, nomineeToSave.id)
+                  pushEvent(
+                    state,
+                    `${posWinner?.name ?? 'The Halo Exchange holder'} used Halo Exchange on ${nomineeToSave.name}! 😇`,
+                    'game'
+                  )
+                  if (eligible.length > 0) {
+                    const replacement = pickStrategicReplacementNominee(
+                      state,
+                      posWinner?.id ?? state.lohId,
+                      eligible,
+                      rng,
+                      {
+                        reason: 'selected Halo Exchange replacement from the holder strategic read',
+                      }
+                    )
+                    if (replacement) {
+                      appendNominee(state, replacement.id)
+                      pushEvent(
+                        state,
+                        `${posWinner?.name ?? 'The Halo Exchange holder'} named ${replacement.name} as the backup nominee. 😇`,
+                        'game'
+                      )
+                    }
+                  }
+                }
+              } else {
+                pushEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Halo Exchange holder'} chose not to use Halo Exchange. 😇`,
+                  'game'
+                )
+              }
+            }
+            break
+          }
+
+          // ── Detox: removes both nominees, holder names both replacements ────────
+          if (svType === 'coup') {
+            // Detox is optional even when the POS holder is on the block. The
+            // human holder must be routed through the Confessional before the
+            // block is cleared; only an AI nominee may resolve it inline.
+            if (isNominee && posWinner !== null && !posDecisionPlayer?.isUser) {
+              const oldNominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+              oldNominees.forEach((n) => {
+                if (n.id === posWinner.id) {
+                  n.status = state.lohId === n.id ? 'loh+pos' : 'pos'
+                } else {
+                  n.status = 'active'
+                }
+              })
+              state.nomineeIds = []
+              state.povSavedId = null
+              state.povProtectedIds = oldNominees.map((nominee) => nominee.id)
+              const removedNames = oldNominees.map((n) => n.name).join(' and ')
+              pushDetoxEvent(
+                state,
+                `${posWinner.name} ${getPlayerBeVerb(posWinner, 'has', 'have')} decided to use Detox. ⚡`
+              )
+
+              pushDetoxEvent(
+                state,
+                `${posWinner.name} used Detox and cleared ${removedNames} from the block! ⚡`
+              )
+              const eligible = getReplacementEligiblePlayers(state, alive, 2, {
+                allowLoh: true,
+                actorId: posWinner.id,
+              })
+              const replacements = pickStrategicAiPlayers(
+                state,
+                eligible,
+                Math.min(2, eligible.length),
+                rng,
+                { preferLoh: true, actorId: posWinner.id }
+              )
+              if (replacements.length > 0) {
+                replacements.forEach((replacement) => appendNominee(state, replacement.id))
+                pushDetoxEvent(
+                  state,
+                  `${posWinner.name} named ${replacements.map((replacement) => replacement.name).join(' and ')} as the new nominees. ⚡`
+                )
+              }
+            } else if (posDecisionPlayer?.isUser) {
+              state.awaitingPovDecision = true
+              pushEvent(
+                state,
+                `${posWinner.name}, will you use Detox? ⚡ Both nominees would be removed and you would name two replacements!`,
+                'game'
+              )
+            } else {
+              const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+              const eligible = getReplacementEligiblePlayers(state, alive, 2, {
+                allowLoh: true,
+                actorId: posWinner?.id,
+              })
+              const useIt =
+                shouldUseSafetyForTwin(state, posWinner?.id, nominees) ||
+                shouldAiUseTargetedSafetyPower(state, posWinner?.id, nominees, eligible, {
+                  replacementCount: Math.min(2, nominees.length),
+                  preferLoh: true,
+                })
+              if (useIt) {
+                const oldNominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+                oldNominees.forEach((n) => {
+                  n.status = 'active'
+                })
+                state.nomineeIds = []
+                state.povSavedId = null
+                state.povProtectedIds = oldNominees.map((nominee) => nominee.id)
+                const removedNames = oldNominees.map((n) => n.name).join(' and ')
+                pushDetoxEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Detox holder'} ${getPlayerBeVerb(posWinner, 'has', 'have')} decided to use Detox. ⚡`
+                )
+                pushDetoxEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Detox holder'} used Detox! ${removedNames} are cleared from the block! ⚡`
+                )
+                if (eligible.length >= 2) {
+                  const replacements = pickStrategicReplacementNominees(
+                    state,
+                    posWinner?.id ?? state.lohId,
+                    eligible,
+                    2,
+                    rng,
+                    { reason: 'selected strategic Detox replacements' }
+                  )
+                  replacements.forEach((r) => {
+                    appendNominee(state, r.id)
+                  })
+                  const repNames = replacements.map((r) => r.name).join(' and ')
+                  pushDetoxEvent(
+                    state,
+                    `${posWinner?.name ?? 'The Detox holder'} named ${repNames} as the new nominees. ⚡`
+                  )
+                } else if (eligible.length === 1) {
+                  const r = eligible[0]
+                  appendNominee(state, r.id)
+                  pushDetoxEvent(
+                    state,
+                    `${posWinner?.name ?? 'The Detox holder'} named ${r.name} as the only available replacement. ⚡`
+                  )
+                }
+              } else {
+                pushEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Detox holder'} chose not to use Detox. ⚡`,
+                  'game'
+                )
+              }
+            }
+            break
+          }
+
+          // ── Double Trouble: like standard but holder may use it twice ───────────
+          if (svType === 'vip') {
+            if (isNominee && posWinner !== null) {
+              const savedName = posWinner.name
+              const autoSavedId = posWinner.id
+              state.nomineeIds = state.nomineeIds.filter((id) => id !== posWinner.id)
+              posWinner.status = 'pos'
+              state.povSavedId = autoSavedId
+              addPovProtectedId(state, autoSavedId)
+              state.specialVeto!.vipUseStage = 1
+              pushEvent(state, `${savedName} used Double Trouble and saved themselves! 👑`, 'game')
+              const lohPlayer = state.players.find((pl) => pl.id === state.lohId)
+              if (lohPlayer?.isUser) {
+                state.replacementNeeded = true
+                pushEvent(state, `${lohPlayer.name} must now name a backup nominee. 🎯`, 'game')
+              } else {
+                state.aiReplacementStep = 1
+              }
+            } else if (posWinner?.isUser) {
+              state.awaitingPovDecision = true
+              pushEvent(
+                state,
+                `${posWinner.name}, will you use Double Trouble? 👑 You may use it TWICE this ceremony!`,
+                'game'
+              )
+            } else {
+              const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+              const eligible = getReplacementEligiblePlayers(state, alive)
+              const useIt =
+                shouldUseSafetyForTwin(state, posWinner?.id, nominees) ||
+                shouldAiUseTargetedSafetyPower(state, posWinner?.id, nominees, eligible)
+              if (useIt) {
+                if (nominees.length > 0) {
+                  const nomineeToSave = pickSafetySaveTarget(state, posWinner?.id, nominees, rng)
+                  if (!nomineeToSave) {
+                    state.specialVeto!.vipUseStage = -1
+                    break
+                  }
+                  state.nomineeIds = state.nomineeIds.filter((id) => id !== nomineeToSave.id)
+                  const savedP = state.players.find((p) => p.id === nomineeToSave.id)
+                  if (savedP) savedP.status = 'active'
+                  state.povSavedId = nomineeToSave.id
+                  addPovProtectedId(state, nomineeToSave.id)
+                  state.specialVeto!.vipUseStage = 1
+                  pushEvent(
+                    state,
+                    `${posWinner?.name ?? 'The Double Trouble holder'} used Double Trouble on ${nomineeToSave.name}! 👑`,
+                    'game'
+                  )
+                  const lohPlayer = state.players.find((pl) => pl.id === state.lohId)
+                  if (lohPlayer?.isUser) {
+                    state.replacementNeeded = true
+                    pushEvent(state, `${lohPlayer.name} must now name a backup nominee. 🎯`, 'game')
+                  } else {
+                    state.aiReplacementStep = 1
+                  }
+                } else {
+                  state.specialVeto!.vipUseStage = -1
+                }
+              } else {
+                state.specialVeto!.vipUseStage = -1
+                pushEvent(
+                  state,
+                  `${posWinner?.name ?? 'The Double Trouble holder'} chose not to use Double Trouble. 👑`,
+                  'game'
+                )
+              }
+            }
+            break
+          }
+
+          // ── Standard (no special veto) ────────────────────────────────────────
+          if (isNominee && posWinner !== null) {
+            // ── POS auto-use rule: nominee who wins POS MUST use it on themselves ──
+            const savedName = posWinner.name
+            const autoSavedId = posWinner.id
+            const savedUnitIds = removeCupidNomineeUnit(state, posWinner.id)
+            // Update status: was 'nominated+pos', now just 'pos' (saved themselves)
+            posWinner.status = 'pos'
+            // Track the self-saved player so they cannot be re-nominated as the replacement
+            state.povSavedId = autoSavedId
+            savedUnitIds.forEach((id) => addPovProtectedId(state, id))
+            if (isVoxPopuliActive(state)) {
+              restoreVoxNomineeMinimum(state)
+              pushVoxSafetyOutcome(state, posWinner.id, autoSavedId)
+              break
+            }
+            pushEvent(
+              state,
+              `${savedName} ${getPlayerBeVerb(posWinner, 'has', 'have')} decided to use the Power of Safety on ${getPlayerReflexive(posWinner)}. ${
+                state.players.find((pl) => pl.id === state.lohId)?.name ?? 'The LOH'
+              } must now name a backup nominee.`,
+              'game'
+            )
+
+            // LOH must name a replacement
+            const lohPlayer =
+              getCupidHumanCoholder(state, state.lohId) ??
+              state.players.find((pl) => pl.id === state.lohId)
+            if (lohPlayer?.isUser) {
+              // Human LOH: set flag; UI will render replacement picker; Continue hidden
+              state.replacementNeeded = true
+              pushEvent(state, `${lohPlayer.name} is selecting a backup nominee...`, 'game')
+            } else {
+              state.aiReplacementStep = 1
+            }
+          } else if (posDecisionPlayer?.isUser) {
+            // Human POS holder who is not a nominee: they must decide whether to use it
+            state.awaitingPovDecision = true
+            pushEvent(
+              state,
+              isCupidArrowActive(state)
+                ? `${posDecisionPlayer.name}, will your pair use the Power of Safety? ⚡`
+                : `${posDecisionPlayer.name}, will you use the Power of Safety? ⚡`,
+              'game'
+            )
+          } else {
+            const nominees = state.players.filter((player) => state.nomineeIds.includes(player.id))
+            const eligible = getReplacementEligiblePlayers(state, alive)
+            const useIt =
+              shouldUseSafetyForTwin(state, posWinner?.id, nominees) ||
+              shouldAiUseTargetedSafetyPower(state, posWinner?.id, nominees, eligible) ||
+              ((state.depressionShock?.activeDay ?? 0) > 0 && rng() < 0.35)
+            const saveTarget = useIt
+              ? pickSafetySaveTarget(state, posWinner?.id, nominees, rng)
+              : null
+
+            if (saveTarget) {
+              const savedUnitIds = removeCupidNomineeUnit(state, saveTarget.id)
+              saveTarget.status = 'active'
+              state.povSavedId = saveTarget.id
+              savedUnitIds.forEach((id) => addPovProtectedId(state, id))
+              if (isVoxPopuliActive(state)) {
+                restoreVoxNomineeMinimum(state)
+                pushVoxSafetyOutcome(state, posWinner?.id ?? null, saveTarget.id)
+                break
+              }
+              pushEvent(
+                state,
+                `${posWinner?.name ?? 'The safety holder'} used the Power of Safety on ${saveTarget.name}. ⚡`,
+                'game'
+              )
+              const lohPlayer =
+                getCupidHumanCoholder(state, state.lohId) ??
+                state.players.find((player) => player.id === state.lohId)
+              if (lohPlayer?.isUser) state.replacementNeeded = true
+              else state.aiReplacementStep = 1
+            } else {
+              const povName = posWinner?.name ?? 'The safety holder'
+              if (isVoxPopuliActive(state)) {
+                pushVoxSafetyStandPat(state, posWinner?.id ?? null)
+              } else {
+                pushEvent(
+                  state,
+                  `${povName} has decided not to use the Power of Safety. ⚡`,
+                  'game'
+                )
+              }
+            }
+          }
+          break
+        }
+        case 'social_2': {
+          clearExpiredSafetyStatuses(state)
+          if (isVoxPopuliActive(state)) {
+            pushEvent(
+              state,
+              `The nominees make their final appeals directly to the audience. Hubmates may offer support, but they do not vote.`,
+              'social',
+              { key: 'vox_populi_audience_appeals' }
+            )
+          } else {
+            pushEvent(state, LIVE_VOTE_PITCHES_TEXT, 'social', {
+              key: LIVE_VOTE_PITCHES_EVENT_KEY,
+            })
+          }
+          break
+        }
+        case 'live_vote': {
+          if (isVoxPopuliActive(state) && state.voxPopuli) {
+            state.votes = {}
+            state.awaitingHumanVote = false
+            state.voxPopuli.awaitingPublicVote = true
+            state.voxPopuli.publicVoteContext = 'eviction'
+            state.voxPopuli.publicVotePercentages = null
+            pushEvent(
+              state,
+              `The audience vote to eliminate is now open. No hubmate will cast an elimination ballot.`,
+              'vote',
+              { major: 'vox_populi_public_vote_open' }
+            )
+            break
+          }
+
+          // Cast AI eligible votes. During Cupid's Arrow each pair deliberates
+          // once, stores the same target for both partners, and therefore counts
+          // as a joint two-vote ballot.
+          state.votes = {}
+          const voteMap = state.votes
+          // Democracia co-leaders share the office: neither co-LOH may cast
+          // an eviction ballot. Keep the legacy single-LOH/Cupid behavior for
+          // every other ceremony.
+          const baseEligibleVoters = alive.filter((player) =>
+            canCastClassicEvictionVote(state, player.id)
+          )
+          const baseEligibleVoterIds = new Set(baseEligibleVoters.map((player) => player.id))
+          const batteryEffectsApply =
+            !isCupidArrowActive(state) && state.doubleEviction?.weekActive !== true
+          const blackoutVoterIds = new Set<string>()
+
+          if (batteryEffectsApply && state.batteryLowVoteEffects) {
+            for (const [playerId, effect] of Object.entries(state.batteryLowVoteEffects)) {
+              const player = state.players.find((candidate) => candidate.id === playerId)
+              if (!player || player.status === 'evicted' || player.status === 'jury') {
+                delete state.batteryLowVoteEffects[playerId]
+                continue
+              }
+              if (baseEligibleVoterIds.has(playerId)) {
+                if (effect.type === 'skipVote') {
+                  blackoutVoterIds.add(playerId)
+                  delete state.batteryLowVoteEffects[playerId]
+                }
+                continue
+              }
+              if (effect.cyclesRemaining <= 1) {
+                delete state.batteryLowVoteEffects[playerId]
+              } else {
+                effect.cyclesRemaining -= 1
+              }
+            }
+          }
+
+          const eligibleVoters = baseEligibleVoters.filter(
+            (player) => !blackoutVoterIds.has(player.id)
+          )
+          const eligibleVoterIds = new Set(eligibleVoters.map((player) => player.id))
+          const processedVoterUnits = new Set<string>()
+          for (const voter of eligibleVoters) {
+            const pair = getCupidPair(state, voter.id)
+            const voterUnitKey = isCupidArrowActive(state) && pair ? pair.id : `solo:${voter.id}`
+            if (processedVoterUnits.has(voterUnitKey)) continue
+            processedVoterUnits.add(voterUnitKey)
+
+            const jointVoterIds = getCupidRoleIds(state, voter.id).filter((id) =>
+              eligibleVoterIds.has(id)
+            )
+            if (
+              jointVoterIds.some((id) => state.players.find((player) => player.id === id)?.isUser)
+            )
+              continue
+
+            const eligibleNomineeIds = state.nomineeIds.filter((nomineeId) =>
+              jointVoterIds.every((voterId) => canPlayerTargetPlayer(state, voterId, nomineeId))
+            )
+            const targetId = isCupidArrowActive(state)
+              ? chooseCupidPairEvictionVote(
+                  state,
+                  jointVoterIds,
+                  eligibleNomineeIds.length > 0 ? eligibleNomineeIds : state.nomineeIds,
+                  state.seed
+                )
+              : chooseAiEvictionVote(
+                  state,
+                  voter.id,
+                  eligibleNomineeIds.length > 0 ? eligibleNomineeIds : state.nomineeIds,
+                  state.seed
+                )
+            jointVoterIds.forEach((voterId) => {
+              voteMap[voterId] = targetId
+              const batteryEffect = state.batteryLowVoteEffects?.[voterId]
+              if (batteryEffectsApply && batteryEffect?.type === 'doubleVote') {
+                voteMap[`${voterId}__dv2`] = targetId
+                delete state.batteryLowVoteEffects?.[voterId]
+              }
+            })
+          }
+
+          // Bella's inherited extra ballot is a real second ballot, not a
+          // duplicate tally modifier. Existing bonus-ballot effects take priority.
+          const bellaExtraVote = state.bellaWill
+          if (
+            bellaExtraVote?.active &&
+            bellaExtraVote.inherited &&
+            bellaExtraVote.extraVotePending &&
+            bellaExtraVote.heirId
+          ) {
+            const heir = state.players.find((player) => player.id === bellaExtraVote.heirId)
+            const heirId = bellaExtraVote.heirId
+            const existingBonusBallot = Object.keys(voteMap).some(
+              (voteKey) => voteKey !== heirId && getCanonicalVoterId(voteKey) === heirId
+            )
+            if (heir && !heir.isUser && eligibleVoterIds.has(heirId) && !existingBonusBallot) {
+              const eligibleTargets = state.nomineeIds.filter((nomineeId) =>
+                canPlayerTargetPlayer(state, heirId, nomineeId)
+              )
+              if (eligibleTargets.length > 0 && voteMap[heirId]) {
+                const inheritedTarget = chooseAiEvictionVote(
+                  state,
+                  heirId,
+                  eligibleTargets,
+                  (state.seed ^ hashString(`bella-will-extra:${state.week}:${heirId}`)) >>> 0
+                )
+                voteMap[`${heirId}__bellaWill`] = inheritedTarget
+                bellaExtraVote.extraVotePending = false
+                pushEvent(
+                  state,
+                  `Bella's Will grants ${heir.name} a separate extra ballot in tonight's elimination.`,
+                  'vote'
+                )
+              }
+            }
+          }
+
+          // Block advance() if the human player is an eligible voter
+          const humanVoter = eligibleVoters.find((p) => p.isUser)
+          if (humanVoter) {
+            state.awaitingHumanVote = true
+
+            // PR 3 — doubleVote offer: if the player has an eligible doubleVote
+            // reward and no conflicting twist is active, prompt them before the
+            // vote modal so they can choose whether to cast two votes.
+            // Note: the switch runs for the phase being ENTERED (nextPhase), so
+            // state.phase still holds the previous phase. Build a check state
+            // that reflects the phase we are entering ('live_vote').
+            const dvCheck = {
+              phase: nextPhase as string,
+              secretMission: state.secretMission,
+              nomineeIds: state.nomineeIds,
+              lohId: state.lohId,
+              players: state.players,
+              doubleEviction: state.doubleEviction,
+              voteResults: state.voteResults,
+              awaitingTieBreak: state.awaitingTieBreak,
+            }
+            if (
+              !isCupidArrowActive(state) &&
+              state.batteryLowVoteEffects?.[humanVoter.id]?.type !== 'doubleVote' &&
+              canUseDoubleVote(dvCheck) &&
+              !state.humanDoubleVoteActive
+            ) {
+              state.awaitingDoubleVoteOffer = true
+            }
+
+            // Bella waits behind any other available bonus-ballot effect. When
+            // none is active, reuse the two-ballot Confessional UI but mark the
+            // second ballot as Bella's inherited vote rather than a generic double vote.
+            const bellaWill = state.bellaWill
+            if (
+              !state.awaitingDoubleVoteOffer &&
+              state.batteryLowVoteEffects?.[humanVoter.id]?.type !== 'doubleVote' &&
+              bellaWill?.active &&
+              bellaWill.inherited &&
+              bellaWill.extraVotePending &&
+              bellaWill.heirId === humanVoter.id &&
+              !bellaWill.expiredAtEndgame &&
+              !state.humanDoubleVoteActive
+            ) {
+              state.humanDoubleVoteActive = true
+              bellaWill.extraVoteChoiceActive = true
+            }
+          }
+          break
+        }
+        case 'eviction_results': {
+          // Guard: never evict when fewer than 2 players remain (should not happen in
+          // normal flow, but prevents infinite loops if endgame guards are bypassed).
+          if (alive.length < 2) break
+          // Guard: if we're already waiting for a human tie-break, do nothing.
+          if (state.awaitingTieBreak) break
+
+          const nominees = state.players.filter((p) => state.nomineeIds.includes(p.id))
+          if (nominees.length === 0) break
+          if (resolveCupidPairEviction(state)) break
+
+          // ── Tally votes ───────────────────────────────────────────────────
+          const voteCounts: Record<string, number> = {}
+          const validVotesByVoterId: Record<string, string> = {}
+          for (const nomineeId of state.nomineeIds) voteCounts[nomineeId] = 0
+          for (const [voteKey, nomineeId] of Object.entries(state.votes ?? {})) {
+            const voterId = getCanonicalVoterId(voteKey)
+            if (!canCastClassicEvictionVote(state, voterId)) continue
+            if (!(nomineeId in voteCounts)) continue
+            validVotesByVoterId[voteKey] = nomineeId
+            voteCounts[nomineeId]++
+          }
+          // From this point onward, the canonical vote map contains only legal
+          // ballots. This keeps the result, Confessional breakdown, and archived
+          // season-exit receipt from preserving a stale/forged ineligible vote.
+          state.votes = validVotesByVoterId
+          // Bella's vote-removal reward is a tally adjustment: raw legal ballots
+          // remain intact for the vote breakdown/audit trail. A usable stored
+          // vote-deduction power takes priority, so Bella waits for a later eviction.
+          const bellaWill = state.bellaWill
+          if (
+            bellaWill?.active &&
+            bellaWill.inherited &&
+            bellaWill.heirId &&
+            bellaWill.voteRemovalPending &&
+            state.nomineeIds.includes(bellaWill.heirId)
+          ) {
+            const rawVotesAgainstHeir = Object.values(validVotesByVoterId).filter(
+              (targetId) => targetId === bellaWill.heirId
+            ).length
+            const heir = state.players.find((player) => player.id === bellaWill.heirId)
+            const competingDeduction =
+              heir?.isUser === true &&
+              canUseVoteDeduction({
+                phase: nextPhase as string,
+                secretMission: state.secretMission,
+                nomineeIds: state.nomineeIds,
+                lohId: state.lohId,
+                players: state.players,
+                doubleEviction: state.doubleEviction,
+                voteResults: { ...voteCounts },
+                awaitingTieBreak: false,
+              })
+            if (rawVotesAgainstHeir > 0 && !competingDeduction) {
+              voteCounts[bellaWill.heirId] = Math.max(0, (voteCounts[bellaWill.heirId] ?? 0) - 1)
+              bellaWill.voteRemovalPending = false
+              bellaWill.lastVoteRemovalAdjustment = {
+                week: state.week,
+                targetId: bellaWill.heirId,
+                amount: 1,
+              }
+              pushEvent(
+                state,
+                `Bella's Will subtracts one vote from ${heir?.name ?? 'the heir'}'s elimination tally.`,
+                'vote'
+              )
+            }
+          }
+
+          state.pendingExitContext = {
+            week: state.week,
+            leaderIds: state.coLohIds?.length
+              ? [...state.coLohIds]
+              : state.lohId
+                ? [state.lohId]
+                : [],
+            nomineeIds: [...state.nomineeIds],
+            votesByVoterId: { ...validVotesByVoterId },
+            voteCounts: { ...voteCounts },
+          }
+          state.history ??= []
+          const voteMode = isVoxPopuliActive(state)
+            ? 'vox_populi'
+            : isCupidArrowActive(state)
+              ? 'cupid'
+              : 'classic'
+          const voteRecordPhase = String(nextPhase)
+          if (
+            !state.history.some(
+              (event) =>
+                event.type === 'houseVoteResult' &&
+                event.week === state.week &&
+                event.data.phase === voteRecordPhase
+            )
+          ) {
+            state.history.push({
+              type: 'houseVoteResult',
+              week: state.week,
+              data: {
+                mode: voteMode,
+                phase: voteRecordPhase,
+                nomineeIds: [...state.nomineeIds],
+                voteCounts: { ...voteCounts },
+                playerNamesById: Object.fromEntries(
+                  state.players.map((player) => [player.id, player.name])
+                ),
+                visibility: 'public_result',
+              },
+              timestamp: Date.now(),
+            })
+          }
+          // ── Double Eviction: evict top 2 nominees ─────────────────────────
+          if (state.doubleEviction?.weekActive && nominees.length >= 2) {
+            // Precompute deterministic tie-break ranks for the current nominee
+            // IDs so the comparator stays transitive/stable for tied vote counts.
+            const aiRng = mulberry32((state.seed ^ 0xdeadbeef) >>> 0)
+            const tieBreakRanks: Record<string, number> = {}
+            for (const nomineeId of state.nomineeIds) {
+              tieBreakRanks[nomineeId] = aiRng()
+            }
+
+            // Sort nominees by vote count descending; use precomputed ranks for ties.
+            const sortedIds = [...state.nomineeIds].sort((a, b) => {
+              const diff = (voteCounts[b] ?? 0) - (voteCounts[a] ?? 0)
+              if (diff !== 0) return diff
+              return (tieBreakRanks[b] ?? 0) - (tieBreakRanks[a] ?? 0)
+            })
+
+            const firstId = sortedIds[0]
+            const secondId = sortedIds[1]
+            const firstEvictee = state.players.find((p) => p.id === firstId)
+            const secondEvictee = state.players.find((p) => p.id === secondId)
+            const boundaryVoteCount = voteCounts[secondId] ?? 0
+            const guaranteedIds = state.nomineeIds.filter(
+              (id) => (voteCounts[id] ?? 0) > boundaryVoteCount
+            )
+            const tiedBoundaryIds = state.nomineeIds.filter(
+              (id) => (voteCounts[id] ?? 0) === boundaryVoteCount
+            )
+            const remainingBoundarySlots = Math.max(0, 2 - guaranteedIds.length)
+            const ambiguousBoundaryTie =
+              tiedBoundaryIds.length > remainingBoundarySlots && remainingBoundarySlots > 0
+
+            if (firstEvictee && secondEvictee) {
+              state.voteResults = { ...voteCounts }
+              state.votes = {}
+              if (guaranteedIds.length > 0) {
+                state.pendingEviction = {
+                  evicteeId: guaranteedIds[0],
+                  evictionMessage: `${firstEvictee.name}, you have been eliminated from the Hub. 🚪`,
+                }
+              } else if (!ambiguousBoundaryTie) {
+                state.pendingEviction = {
+                  evicteeId: firstId,
+                  evictionMessage: `${firstEvictee.name}, you have been eliminated from the Hub. 🚪`,
+                }
+              } else {
+                state.pendingEviction = null
+              }
+              if (ambiguousBoundaryTie) {
+                state.awaitingTieBreak = true
+                state.tiedNomineeIds = tiedBoundaryIds
+                const doubleTieBreakerId = getClassicEvictionTieBreakerId(state)
+                state.awaitingPosTieBreak =
+                  !state.publicModeEnabled &&
+                  doubleTieBreakerId === state.posWinnerId &&
+                  doubleTieBreakerId !== state.lohId
+              } else {
+                state.doubleEviction.pendingSecondEviction = {
+                  evicteeId: secondId,
+                  evictionMessage: `${secondEvictee.name}, you have also been eliminated in tonight's Double Elimination! 🚪`,
+                }
+              }
+            }
+            break
+          }
+
+          // ── Standard single eviction ──────────────────────────────────────
+          // Find the highest vote count
+          let maxVotes = -1
+          for (const count of Object.values(voteCounts)) {
+            if (count > maxVotes) maxVotes = count
+          }
+          const topNominees = state.nomineeIds.filter((id) => (voteCounts[id] ?? 0) === maxVotes)
+
+          if (topNominees.length === 1) {
+            // Clear winner — defer the commit until the cinematic overlay completes
+            const evicted = state.players.find((p) => p.id === topNominees[0])
+            if (evicted) {
+              // Store vote results for popup reveal, then queue the pending eviction.
+              // Intentionally do NOT clear state.votes here — the raw per-voter mapping
+              // is preserved for the confessional vote-breakdown unlock that fires after
+              // the eviction animation. Votes are cleared when the game next enters
+              // the live_vote phase in the normal advance() flow.
+              state.voteResults = { ...voteCounts }
+              state.pendingEviction = {
+                evicteeId: evicted.id,
+                evictionMessage: `${evicted.name}, you have been eliminated from the Hub. 🚪`,
+              }
+
+              // PR 3 — voteDeduction offer: if the human player is on the block
+              // with votes against them and has an eligible voteDeduction reward,
+              // pause the flow so they can decide whether to use the power.
+              // Note: state.phase still holds the previous phase here — pass nextPhase
+              // explicitly so canUseVoteDeduction sees the correct phase ('eviction_results').
+              const vdCheck = {
+                phase: nextPhase as string,
+                secretMission: state.secretMission,
+                nomineeIds: state.nomineeIds,
+                lohId: state.lohId,
+                players: state.players,
+                doubleEviction: state.doubleEviction,
+                voteResults: state.voteResults,
+                awaitingTieBreak: state.awaitingTieBreak,
+              }
+              if (canUseVoteDeduction(vdCheck)) {
+                state.awaitingVoteDeductionPrompt = true
+              }
+            }
+          } else {
+            // Tie — on co-LOH Democracia days, POS holder breaks it; otherwise LOH breaks it.
+            const isCoLohDay = Array.isArray(state.coLohIds) && state.coLohIds.length >= 2
+            const tieBreakerPlayerId = getClassicEvictionTieBreakerId(state)
+            const tieBreakerPlayer = state.players.find((p) => p.id === tieBreakerPlayerId)
+            const usesPosTieBreaker =
+              isCoLohDay ||
+              (tieBreakerPlayerId != null &&
+                tieBreakerPlayerId === state.posWinnerId &&
+                tieBreakerPlayerId !== state.lohId)
+            const tiedNames = topNominees
+              .map((id) => state.players.find((p) => p.id === id)?.name ?? id)
+              .join(' and ')
+            if (tieBreakerPlayer?.isUser) {
+              // Human POS holder (Democracia or LOH-on-block exception) or
+              // human LOH (normal day): show the appropriate tie-break modal.
+              state.voteResults = { ...voteCounts }
+              state.awaitingTieBreak = true
+              if (usesPosTieBreaker) state.awaitingPosTieBreak = true
+              state.tiedNomineeIds = topNominees
+              if (usesPosTieBreaker) {
+                pushEvent(
+                  state,
+                  `It's a tie between ${tiedNames}! ${tieBreakerPlayer.name}, as POS holder, you must break the tie as a special exception. 🗳️`,
+                  'game'
+                )
+              } else {
+                pushEvent(
+                  state,
+                  `It's a tie between ${tiedNames}! ${tieBreakerPlayer.name}, as LOH you must break the tie. 🗳️`,
+                  'game'
+                )
+              }
+            } else if (tieBreakerPlayer) {
+              // AI tiebreaker uses the same relationship-aware model as double
+              // ties and the Final Four sole vote. Seeded choice only separates
+              // nominees whose strategic scores are genuinely close.
+              const decisionSeed = (state.seed ^ 0xdeadbeef) >>> 0
+              const decision = chooseStrategicEliminationCandidates(
+                state,
+                tieBreakerPlayer.id,
+                topNominees,
+                1,
+                'ordinary_tie',
+                decisionSeed
+              )
+              traceStrategicEliminationChoice(
+                state,
+                tieBreakerPlayer.id,
+                decision,
+                'ordinary_tie',
+                decisionSeed
+              )
+              const evicteeId = decision.selectedIds[0]
+              const evicted = state.players.find((p) => p.id === evicteeId)
+              if (evicted) {
+                state.voteResults = { ...voteCounts }
+                const breakerLabel = usesPosTieBreaker ? 'The POS holder' : 'The LOH'
+                state.pendingEviction = {
+                  evicteeId: evicted.id,
+                  evictionMessage: `${tieBreakerPlayer.name ?? breakerLabel} breaks the tie, voting to eliminate ${evicted.name}.${decision.publicRationale ? ` ${decision.publicRationale}` : ''} ${evicted.name} has been eliminated from the Hub. 🗳️`,
+                }
+              }
+            } else {
+              // Fallback: tiebreaker unavailable — deterministic seeded pick to prevent deadlock
+              const aiRng = mulberry32((state.seed ^ 0xdeadbeef) >>> 0)
+              const evicteeId = topNominees[Math.floor(aiRng() * topNominees.length)]
+              const evicted = state.players.find((p) => p.id === evicteeId)
+              if (evicted) {
+                state.voteResults = { ...voteCounts }
+                state.pendingEviction = {
+                  evicteeId: evicted.id,
+                  evictionMessage: `${evicted.name} has been eliminated from the Hub. 🚪`,
+                }
+              }
+            }
+          }
+          break
+        }
+        case 'week_end': {
+          pushEvent(state, `Day ${state.week} has come to an end. A new day begins soon…`, 'game', {
+            key: 'day_end',
+            phase: 'week_end',
+          })
+          break
+        }
+      }
+
+      finishPhaseBroadcastSequence(state)
+      state.phase = nextPhase
+      const wildcardOpportunity = state.wildcardOpportunity
+      if (
+        nextPhase === 'week_start' &&
+        wildcardOpportunity?.status === 'pending' &&
+        wildcardOpportunity.arrivalDay === state.week
+      ) {
+        const wildcardId = wildcardOpportunity.playerId
+        const eligibility = wildcardId
+          ? getWildcardAdmissionEligibility(state, wildcardId)
+          : { eligible: false, reason: 'No reserve contestant was selected.' }
+        if (wildcardId && eligibility.eligible) {
+          applyWildcardAdmission(state, wildcardId)
+        } else {
+          state.wildcardOpportunity = {
+            ...wildcardOpportunity,
+            status: 'cancelled',
+            reason: eligibility.reason,
+          }
+        }
+      }
+    },
+
+    // ── Secret Mission reducers ────────────────────────────────────────────
+
+    /**
+     * Trigger a new secret mission for the current season.
+     * Supports up to two missions per season when the current slot is recyclable.
+     * @param day  The game week / day on which the trigger fires.
+     */
+    triggerSecretMission(
+      state,
+      action: PayloadAction<number | { day: number; maxDaySpan?: number }>
+    ) {
+      if (isCupidArrowTwistLocked(state)) return
+      const missionCount = getSeasonSecretMissionCount(state)
+      if (missionCount >= 2) return
+      if (!canReplaceSecretMissionSlot(state.secretMission)) return
+
+      const day = typeof action.payload === 'number' ? action.payload : action.payload.day
+      const maxDaySpan = typeof action.payload === 'number' ? undefined : action.payload.maxDaySpan
+      const nextMissionNumber = missionCount + 1
+      state.secretMission = createSecretMissionState(day, {
+        maxDaySpan,
+        missionNumber: nextMissionNumber,
+        seed: state.seed,
+        season: state.season,
+        previousTemplateIds: state.secretMissionTemplateHistory ?? [],
+      })
+      state.secretMission.rewardVersion = 2
+      state.secretMissionCount = nextMissionNumber
+      state.secretMissionTemplateHistory = [
+        ...(state.secretMissionTemplateHistory ?? []),
+        state.secretMission.templateId,
+      ].slice(-2)
+      if (nextMissionNumber >= 2) {
+        state.secretMissionSecondChanceResolved = true
+      }
+    },
+
+    markSecondSecretMissionChanceResolved(state) {
+      state.secretMissionSecondChanceResolved = true
+    },
+
+    /**
+     * Mark the mission as offered in the Confessional (status → 'offered').
+     * Records the day of the offer and increments the offer count.
+     * @param day  Current game week / day when the offer is shown.
+     */
+    offerSecretMission(state, action: PayloadAction<number>) {
+      const sm = state.secretMission
+      if (!sm || (sm.status !== 'available' && sm.status !== 'declined')) return
+      // Limit to 2 offers (original + one re-offer after decline)
+      if (sm.offerCount >= 2) return
+      sm.status = 'offered'
+      sm.offeredDay = action.payload
+      sm.offerCount += 1
+    },
+
+    /**
+     * Player accepted the mission (status → 'accepted').
+     * Initialises the task list from the matching template.
+     */
+    acceptSecretMission(state) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'offered') return
+      const remainingDays =
+        state.players.filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+          .length - 5
+      const fittingTemplate =
+        MISSION_TEMPLATES.find(
+          (candidate) => candidate.id === sm.templateId && candidate.daySpan <= remainingDays
+        ) ?? MISSION_TEMPLATES.find((candidate) => candidate.daySpan <= remainingDays)
+      if (state.week > sm.endDay || !fittingTemplate) {
+        sm.status = 'expired'
+        state.secretMissionLastResolvedDay = state.week
+        return
+      }
+      const acceptanceDay = Math.max(state.week, sm.triggeredDay)
+      const nextMission = buildSecretMissionTasksForTemplate(
+        state,
+        fittingTemplate.id,
+        acceptanceDay
+      )
+      const template = MISSION_TEMPLATES.find(
+        (candidate) => candidate.id === nextMission.templateId
+      )!
+      sm.startDay = acceptanceDay
+      sm.endDay = acceptanceDay + template.daySpan
+      sm.survivalWindowEndDay = sm.endDay
+      sm.targetDeadlineDay = sm.endDay
+      sm.status = 'accepted'
+      sm.templateId = nextMission.templateId
+      sm.tasks = nextMission.tasks
+      const signature = getMissionTaskSetSignature(nextMission.tasks)
+      state.secretMissionTaskSetHistory = Array.from(
+        new Set([...(state.secretMissionTaskSetHistory ?? []), signature])
+      )
+    },
+
+    /**
+     * Player declined the mission (status → 'declined').
+     * Records the day of the decline.
+     * @param day  Current game week / day when the player declined.
+     */
+    declineSecretMission(state, action: PayloadAction<number>) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'offered') return
+      sm.status = 'declined'
+      sm.declinedDay = action.payload
+      state.secretMissionLastResolvedDay = action.payload
+    },
+
+    /**
+     * Update progress on a single mission task.
+     * Automatically marks the task completed when current >= target.
+     * If all tasks complete, transitions the mission to 'rewardPending'.
+     */
+    updateMissionTaskProgress(
+      state,
+      action: PayloadAction<{
+        taskId: string
+        current: number
+        lastProgressDay?: number
+        firstSatisfiedDay?: number
+        auditEntry?: string
+        currentStreak?: number
+        maxStreak?: number
+      }>
+    ) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'accepted') return
+      const task = sm.tasks.find((t) => t.id === action.payload.taskId)
+      if (!task) return
+      task.current = action.payload.current
+      if (typeof action.payload.currentStreak === 'number')
+        task.currentStreak = action.payload.currentStreak
+      if (typeof action.payload.maxStreak === 'number') task.maxStreak = action.payload.maxStreak
+      if (typeof action.payload.lastProgressDay === 'number')
+        task.lastProgressDay = action.payload.lastProgressDay
+      task.completed = task.current >= task.target
+      if (task.completed && typeof action.payload.firstSatisfiedDay === 'number') {
+        task.firstSatisfiedDay = action.payload.firstSatisfiedDay
+      }
+      if (action.payload.auditEntry) {
+        task.auditLog = [...(task.auditLog ?? []), action.payload.auditEntry].slice(-12)
+      }
+      refreshSecretMissionCompletion(sm, state.week)
+    },
+
+    /**
+     * Anti-cheese: credit a unique day for a task that requires visits on
+     * separate calendar days (e.g. `confessional_visits`).
+     *
+     * Rules:
+     *  - The day string must NOT already be in `task.uniqueDays`.
+     *  - `task.current` never decreases when `uniqueDays` is introduced for an
+     *    upgraded save; new credits only move progress forward.
+     *  - If `current >= target` the task is marked completed and, if all
+     *    tasks finish, the mission transitions to 'rewardPending'.
+     *
+     * Idempotent: re-crediting a day that was already counted is a no-op.
+     */
+    addUniqueDayToTask(state, action: PayloadAction<{ taskId: string; day: string }>) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'accepted') return
+      const task = sm.tasks.find((t) => t.id === action.payload.taskId)
+      if (!task || task.completed) return
+      const previousCurrent = typeof task.current === 'number' ? task.current : 0
+      if (!task.uniqueDays) task.uniqueDays = []
+      if (task.uniqueDays.includes(action.payload.day)) return // already counted
+      task.uniqueDays.push(action.payload.day)
+      task.current = Math.max(previousCurrent, task.uniqueDays.length)
+      task.completed = task.current >= task.target
+      refreshSecretMissionCompletion(sm, state.week)
+    },
+
+    /**
+     * Explicitly mark the mission as completed (e.g. when the final task
+     * is ticked via a passive update path).
+     * Transitions to rewardPending.
+     */
+    completeMission(state) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'accepted') return
+      sm.tasks.forEach((t) => {
+        t.completed = true
+        t.current = t.target
+      })
+      sm.status = 'rewardPending'
+    },
+
+    syncMissionTask(
+      state,
+      action: PayloadAction<{ taskId: string; updates: Partial<MissionTask> }>
+    ) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'accepted') return
+      const task = sm.tasks.find((candidate) => candidate.id === action.payload.taskId)
+      if (!task) return
+      Object.assign(task, action.payload.updates)
+      task.completed = task.current >= task.target || task.completed === true
+      refreshSecretMissionCompletion(sm, state.week)
+    },
+
+    setMissionTaskBaselineApproval(
+      state,
+      action: PayloadAction<{ taskId: string; approval: number }>
+    ) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'accepted') return
+      const task = sm.tasks.find((candidate) => candidate.id === action.payload.taskId)
+      if (!task) return
+      task.baselineApproval = action.payload.approval
+      // A public-rating task should never ask for points beyond the 100% cap.
+      // Progress may still fall later if approval falls; reaching the ceiling is
+      // simply a valid completion of the remaining achievable increase.
+      const achievableDelta = Math.max(0, 100 - action.payload.approval)
+      if (task.target > achievableDelta) {
+        task.target = achievableDelta
+        task.requiredDelta = achievableDelta
+        task.description =
+          achievableDelta === 0
+            ? 'Your public rating is already at its maximum'
+            : `Improve your public rating by ${achievableDelta} percentage point${
+                achievableDelta === 1 ? '' : 's'
+              } before Day ${task.endDay ?? state.week}`
+        task.completed = achievableDelta === 0
+        if (task.completed) task.firstSatisfiedDay = state.week
+        refreshSecretMissionCompletion(sm, state.week)
+      }
+    },
+
+    /**
+     * A no-op lifecycle receipt dispatched after social deadline processing.
+     * The secret-mission middleware uses it to settle daily streaks exactly once.
+     */
+    settleSecretMissionDay(_state, _action: PayloadAction<{ day: number }>) {},
+
+    recordSecretMissionEasterEgg(state, action: PayloadAction<{ eggId: string; day: number }>) {
+      const sm = state.secretMission
+      if (!sm) return
+      const discovered = new Set(sm.discoveredEasterEggIds ?? [])
+      discovered.add(action.payload.eggId)
+      sm.discoveredEasterEggIds = [...discovered]
+
+      if (sm.status !== 'accepted') return
+      const task = sm.tasks.find((candidate) => candidate.type === 'easter_egg_discovery')
+      if (!task) return
+      const discoveredEggIds = new Set(task.discoveredEggIds ?? [])
+      discoveredEggIds.add(action.payload.eggId)
+      task.discoveredEggIds = [...discoveredEggIds]
+      task.current = task.discoveredEggIds.length
+      task.lastProgressDay = action.payload.day
+      task.completed = task.current >= task.target
+      if (task.completed && task.firstSatisfiedDay == null) {
+        task.firstSatisfiedDay = action.payload.day
+      }
+      task.auditLog = [...(task.auditLog ?? []), `Discovered ${action.payload.eggId}`].slice(-12)
+      refreshSecretMissionCompletion(sm, state.week)
+    },
+
+    expireSecretMission(state) {
+      const sm = state.secretMission
+      if (!sm) return
+      if (sm.status === 'rewardClaimed') return
+      if (sm.status === 'expired') return
+      sm.status = 'expired'
+      state.secretMissionLastResolvedDay = state.week
+    },
+
+    /**
+     * Claim the reward after mission completion.
+     * New missions use deterministic immunity rewards; legacy reward types are
+     * still accepted for migration/tests.
+     */
+    claimMissionReward(
+      state,
+      action: PayloadAction<
+        | Exclude<CurrentMissionRewardType, 'immunity'>
+        | { claimDay: number; durationDays?: 1 | 2 | 3 }
+      >
+    ) {
+      const sm = state.secretMission
+      if (!sm || sm.status !== 'rewardPending' || sm.rewardVersion === 2) return
+      if (typeof action.payload === 'string') {
+        sm.reward = createMissionReward(action.payload)
+      } else {
+        const duration =
+          action.payload.durationDays ?? pickMissionImmunityDuration(sm.triggeredDay, sm.templateId)
+        sm.reward = createImmunityReward(duration, action.payload.claimDay)
+      }
+      sm.status = 'rewardClaimed'
+      state.secretMissionLastResolvedDay =
+        typeof action.payload === 'string' ? state.week : action.payload.claimDay
+
+      // The Confessional is the canonical place to claim the mission reward.
+      // Retire its pending faux-TV reminder now so it cannot tell the player to
+      // claim a reward they have already opened. Keep the event in log history.
+      const retiredMissionBroadcastIds = new Set<string>()
+      for (const event of state.tvFeed) {
+        if (
+          event.meta?.major !== 'secret_mission_complete' ||
+          event.meta.broadcastConsumed === true
+        ) {
+          continue
+        }
+        const eventMissionNumber = event.meta.secretMissionNumber
+        if (typeof eventMissionNumber === 'number' && eventMissionNumber !== sm.missionNumber) {
+          continue
+        }
+        event.meta = { ...event.meta, broadcastConsumed: true, rewardClaimed: true }
+        retiredMissionBroadcastIds.add(event.id)
+      }
+      if (retiredMissionBroadcastIds.size > 0) {
+        state.broadcastQueue = (state.broadcastQueue ?? []).filter(
+          (id) => !retiredMissionBroadcastIds.has(id)
+        )
+      }
+    },
+
+    /**
+     * Expire a claimed reward when Final 4 is reached.
+     * Only runs when the reward exists and is still eligible (i.e. not consumed
+     * and not already an empty box).  Idempotent — safe to call multiple times.
+     *
+     * The Final 4 restriction: rewards can only be used BEFORE Final 4 week.
+     * Once Final 4 begins, any stored eligible reward is expired and becomes unusable.
+     */
+    expireMissionReward(state) {
+      const sm = state.secretMission
+      if (!sm || !sm.reward) return
+      if (
+        sm.rewardVersion === 2 &&
+        isMissionPower(sm.reward.type) &&
+        ['overthrowLoh', 'noSkip'].includes(sm.reward.type)
+      )
+        return
+      if (sm.reward.consumed) return // already used — nothing to expire
+      if (!sm.reward.eligible) return // emptyBox or already expired — skip
+      sm.reward.expired = true
+      sm.reward.eligible = false
+    },
+
+    activateMissionImmunityReward(state) {
+      if (!state.awaitingMissionImmunityOffer) return
+      state.awaitingMissionImmunityOffer = false
+      const sm = state.secretMission
+      const reward = sm?.reward
+      if (
+        !reward ||
+        reward.type !== 'immunity' ||
+        !reward.eligible ||
+        state.phase === 'final4_eviction' ||
+        state.phase === 'final3' ||
+        reward.activeUntilDay === undefined ||
+        state.week > reward.activeUntilDay
+      ) {
+        return
+      }
+
+      const humanPlayer = state.players.find((player) => player.isUser)
+      if (
+        !humanPlayer ||
+        !state.nomineeIds.includes(humanPlayer.id) ||
+        state.posWinnerId === humanPlayer.id
+      )
+        return
+
+      state.nomineeIds = state.nomineeIds.filter((id) => id !== humanPlayer.id)
+      if (humanPlayer.status === 'nominated+pos') humanPlayer.status = 'pos'
+      else humanPlayer.status = 'active'
+      addPovProtectedId(state, humanPlayer.id)
+      reward.consumed = true
+      reward.eligible = false
+      reward.usedDay = state.week
+
+      pushEvent(
+        state,
+        `${humanPlayer.name} used their secret immunity and stepped off the block before the Safety Ceremony could finish! 🛡️`,
+        'game'
+      )
+
+      const aliveNow = state.players.filter(
+        (player) => player.status !== 'evicted' && player.status !== 'jury'
+      )
+      // Use a dedicated seed modifier so immunity-driven replacement picks stay
+      // deterministic without perturbing the main ceremony RNG stream.
+      const seedRng = mulberry32((state.seed ^ IMMUNITY_REPLACEMENT_SEED_MODIFIER) >>> 0)
+      ensureMinimumNominees(state, aliveNow, 2, seedRng)
+    },
+
+    declineMissionImmunityReward(state) {
+      state.awaitingMissionImmunityOffer = false
+    },
+
+    // ── PR 3: doubleVote activation reducers ──────────────────────────────
+
+    /**
+     * Accept the Big Eye doubleVote offer — activates the double-vote mode
+     * for the current live_vote phase.
+     *
+     * Sets `humanDoubleVoteActive = true` and clears `awaitingDoubleVoteOffer`.
+     * The live-vote modal in GameScreen detects `humanDoubleVoteActive` and shows
+     * two nominee selectors instead of one.
+     *
+     * Guard: only applies when `awaitingDoubleVoteOffer` is true and an eligible
+     * doubleVote reward exists.
+     */
+    activateDoubleVoteReward(state) {
+      if (!state.awaitingDoubleVoteOffer) return
+      // Always clear the offer flag (ensures UI won't be stuck if state is inconsistent)
+      state.awaitingDoubleVoteOffer = false
+      const sm = state.secretMission
+      if (!sm?.reward || sm.reward.type !== 'doubleVote' || !sm.reward.eligible) return
+      if (state.bellaWill) state.bellaWill.extraVoteChoiceActive = false
+      state.humanDoubleVoteActive = true
+    },
+
+    /**
+     * Decline the Big Eye doubleVote offer — clears `awaitingDoubleVoteOffer`
+     * without consuming the reward. The reward remains stored for a future vote.
+     */
+    declineDoubleVoteReward(state) {
+      state.awaitingDoubleVoteOffer = false
+      // A stored Double Vote has priority for this eviction even when declined.
+      // Bella's inherited ballot remains pending for a later eligible elimination.
+    },
+
+    /**
+     * Submit two vote targets when the human player has the doubleVote power active.
+     * Records both votes in `state.votes` using `<humanId>` and `<humanId>__dv2`
+     * as the voter keys, then consumes the reward and clears the activation flag.
+     *
+     * @param action.payload  Tuple [primaryTarget, secondaryTarget] — both must be
+     *                        valid nominee IDs.  The same nominee may be chosen twice.
+     */
+    submitHumanDoubleVote(state, action: PayloadAction<[string, string]>) {
+      if (!state.humanDoubleVoteActive) return
+      const [target1, target2] = action.payload
+      if (!state.nomineeIds.includes(target1)) return
+      if (!state.nomineeIds.includes(target2)) return
+
+      const humanPlayer = state.players.find((p) => p.isUser)
+      if (!humanPlayer || !canCastClassicEvictionVote(state, humanPlayer.id)) return
+      if (!canPlayerTargetPlayer(state, humanPlayer.id, target1)) return
+      if (!canPlayerTargetPlayer(state, humanPlayer.id, target2)) return
+      if (!state.votes) state.votes = {}
+
+      const bellaWill = state.bellaWill
+      const usesStoreExtraVote = state.storeExtraVoteChoiceActive === true
+      const usesBellaExtraVote =
+        !usesStoreExtraVote &&
+        bellaWill?.extraVoteChoiceActive === true &&
+        bellaWill.extraVotePending &&
+        bellaWill.heirId === humanPlayer.id
+
+      // Primary vote is always the human's normal legal ballot.
+      state.votes[humanPlayer.id] = target1
+      // The second ballot keeps its source identity so stacking and audit logic
+      // can distinguish purchased, inherited, and mission-granted ballots.
+      const secondVoteKey = usesStoreExtraVote
+        ? `${humanPlayer.id}__storeExtraVote`
+        : usesBellaExtraVote
+          ? `${humanPlayer.id}__bellaWill`
+          : `${humanPlayer.id}__dv2`
+      state.votes[secondVoteKey] = target2
+
+      state.awaitingHumanVote = false
+      state.humanDoubleVoteActive = false
+      state.storeExtraVoteChoiceActive = false
+
+      if (usesBellaExtraVote && bellaWill) {
+        bellaWill.extraVotePending = false
+        bellaWill.extraVoteChoiceActive = false
+        pushEvent(
+          state,
+          `Bella's Will grants ${humanPlayer.name} a separate extra ballot in tonight's elimination.`,
+          'vote'
+        )
+      } else if (!usesStoreExtraVote) {
+        const sm = state.secretMission
+        if (sm?.reward && sm.reward.type === 'doubleVote') {
+          sm.reward.consumed = true
+          sm.reward.eligible = false
+        }
+      }
+    },
+
+    /**
+     * Activate a previously armed Store Extra Vote for the current live vote.
+     * Eligibility and conflict priority are checked by the Eyeolean power middleware.
+     */
+    activateStoreExtraVote(state) {
+      if (!state.awaitingHumanVote || state.humanDoubleVoteActive) return
+      state.humanDoubleVoteActive = true
+      state.storeExtraVoteChoiceActive = true
+    },
+
+    /**
+     * Vox adapts the Store Extra Vote to its secret-nomination rules: the human
+     * may name one additional, distinct target on the current ballot.
+     */
+    activateStoreVoxExtraVote(state) {
+      if (!isVoxPopuliActive(state) || state.phase !== 'nomination_results') return
+      if (!state.awaitingNominations || state.storeVoxExtraNominationChoiceActive) return
+      state.storeVoxExtraNominationChoiceActive = true
+      const human = state.players.find((player) => player.isUser)
+      const ballotPrompt = state.tvFeed.find(
+        (event) =>
+          event.meta?.week === state.week &&
+          event.meta?.broadcastTemplateId === 'nominations.vox-ballot' &&
+          event.meta?.broadcastConsumed !== true
+      )
+      if (human && ballotPrompt) {
+        const voteCount = getVoxBallotSize(state) + 1
+        ballotPrompt.text = `${human.name}, cast your ${voteCount} secret nomination votes in the Confessional.`
+      }
+    },
+
+    /** Apply the selected Store shield to the next nomination round only. */
+    activateStoreNominationProtection(
+      state,
+      action: PayloadAction<{
+        productKey: 'immunity' | 'protection'
+        targetId: string
+        week: number
+      }>
+    ) {
+      const { productKey, targetId, week } = action.payload
+      if (!targetId || week !== state.week || getAlivePlayers(state).length <= 4) return
+      if (state.phase === 'nomination_results' || state.phase === 'eviction_results') return
+      if (!canStoreNominationProtectionAffectPlayer(state, targetId)) return
+      const protections = (state.storeNominationProtections ?? []).filter(
+        (protection) => protection.productKey !== productKey
+      )
+      state.storeNominationProtections = [...protections, { productKey, targetId, week }]
+    },
+
+    clearStoreNominationProtection(state, action: PayloadAction<'immunity' | 'protection'>) {
+      state.storeNominationProtections = (state.storeNominationProtections ?? []).filter(
+        (protection) => protection.productKey !== action.payload
+      )
+    },
+
+    /**
+     * Apply a previously armed Store Remove a Vote after the canonical house
+     * tally exists. The middleware consumes the reservation only if this changes
+     * the human player's effective tally.
+     */
+    applyStoreVoteRemoval(state) {
+      applyOneVoteDeductionToHuman(state)
+    },
+
+    /**
+     * Vox has no house eviction tally. Its matching defensive effect removes
+     * one secret nomination against the human, then rebuilds the official
+     * nomination result from the adjusted ballot ledger.
+     */
+    applyStoreVoxVoteRemoval(state) {
+      if (!isVoxPopuliActive(state) || !state.voxPopuli) return
+      if (state.phase !== 'nomination_results' || state.awaitingNominations) return
+      const human = state.players.find((player) => player.isUser)
+      if (!human || !state.nomineeIds.includes(human.id)) return
+
+      const eligibleVoters = Object.entries(state.voxPopuli.nominationBallots)
+        .filter(([, ballot]) => ballot.includes(human.id))
+        .map(([voterId]) => voterId)
+        .sort((left, right) => {
+          const leftRank = hashString(`store-vox-remove:${state.week}:${left}:${human.id}`)
+          const rightRank = hashString(`store-vox-remove:${state.week}:${right}:${human.id}`)
+          return leftRank - rightRank || left.localeCompare(right)
+        })
+      const voterId = eligibleVoters[0]
+      if (!voterId) return
+
+      state.voxPopuli.nominationBallots[voterId] = state.voxPopuli.nominationBallots[
+        voterId
+      ]!.filter((targetId) => targetId !== human.id)
+      const resolution = resolveCurrentVoxNominations(state)
+      applyVoxNominationResolution(state, resolution)
+
+      const remainingNames = state.nomineeIds.map(
+        (id) => state.players.find((player) => player.id === id)?.name ?? id
+      )
+      const priorResult = state.tvFeed.find((event) => {
+        const templateId = event.meta?.broadcastTemplateId
+        return (
+          event.meta?.week === state.week &&
+          typeof templateId === 'string' &&
+          [
+            'nominations.vox-result-with-auto',
+            'nominations.vox-auto-remains',
+            'nominations.vox-result',
+            'nominations.vox-ballot-complete',
+          ].includes(templateId)
+        )
+      })
+      const correction = `One secret nomination against ${human.name} has been removed. The final block is ${formatNameList(remainingNames)}.`
+      if (priorResult) priorResult.text = correction
+      else pushEvent(state, correction, 'game')
+    },
+
+    // ── PR 3: voteDeduction activation reducers ───────────────────────────
+
+    /**
+     * Accept the Big Eye voteDeduction offer — subtracts 1 vote from the human
+     * player's tally in `voteResults`, recomputes `pendingEviction` based on the
+     * updated counts, consumes the reward, and clears `awaitingVoteDeductionPrompt`.
+     *
+     * Guard: only applies when `awaitingVoteDeductionPrompt` is true and an
+     * eligible voteDeduction reward exists.
+     */
+    activateVoteDeductionReward(state) {
+      if (!state.awaitingVoteDeductionPrompt) return
+      // Always clear the prompt flag (ensures UI won't be stuck if state is inconsistent)
+      state.awaitingVoteDeductionPrompt = false
+      const sm = state.secretMission
+      if (!sm?.reward || sm.reward.type !== 'voteDeduction' || !sm.reward.eligible) return
+      if (!applyOneVoteDeductionToHuman(state)) return
+
+      sm.reward.consumed = true
+      sm.reward.eligible = false
+    },
+
+    /**
+     * Decline the Big Eye voteDeduction offer — clears `awaitingVoteDeductionPrompt`
+     * without consuming the reward. The power remains stored for a future vote week.
+     */
+    declineVoteDeduction(state) {
+      state.awaitingVoteDeductionPrompt = false
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addCase(restoreWeekendDebugSnapshot, (_state, action) => action.payload.game)
+  },
+})
+
+export const {
+  archivePulseChronicle,
+  setPhase,
+  advanceWeek,
+  updatePlayer,
+  recordConfessionalMisconduct,
+  syncStrategicRelationships,
+  syncStrategicThreatReads,
+  syncStrategicAlliances,
+  setLohSocialPlan,
+  recordHoldTheWallSafetyDeal,
+  addTvEvent,
+  setHumanPregnancyRole,
+  resetPregnancyStoryForDebug,
+  startPregnancyAttempt,
+  revealPregnancyTest,
+  recordPregnancyNewsShare,
+  revealPregnancyNewsLeak,
+  revealPaternityResult,
+  markPregnancyReactions,
+  updateTvEvent,
+  removeTvEvent,
+  setBroadcastOverride,
+  resetBroadcastOverride,
+  replaceBroadcastConfig,
+  syncPhaseBroadcasts,
+  claimActiveBroadcastEvent,
+  claimPresentationEvent,
+  consumeBroadcastEvent,
+  consumeBroadcastEvents,
+  addCustomBroadcast,
+  updateCustomBroadcast,
+  reorderCustomBroadcasts,
+  reorderPhaseBroadcasts,
+  removeCustomBroadcast,
+  setDramaSocialMode,
+  requestPublicModeChange,
+  setLohSafetyAdvice,
+  addSocialSummary,
+  setLive,
+  launchMinigame,
+  completeMinigame,
+  skipMinigame,
+  applyMinigameWinner,
+  applyCompetitionSeasonUpdate,
+  registerBatteryLowVoteEffects,
+  applyF3MinigameWinner,
+  updateGamePRs,
+  advance,
+  setReplacementNominee,
+  selectNominee1,
+  finalizeNominations,
+  commitNominees,
+  commitPublicSave,
+  submitPovDecision,
+  submitPovSaveTarget,
+  submitHumanVote,
+  activateStoreExtraVote,
+  activateStoreVoxExtraVote,
+  activateStoreNominationProtection,
+  clearStoreNominationProtection,
+  applyStoreVoteRemoval,
+  applyStoreVoxVoteRemoval,
+  submitTieBreak,
+  submitDoubleEvictionTieBreak,
+  selectVoxFinalThreeAppeal,
+  commitVoxAudienceVote,
+  commitVoxAudiencePreview,
+  dismissVoteResults,
+  dismissEvictionSplash,
+  continueSurvivorAfterAd,
+  continueSurvivorAfterPaidRecovery,
+  revealSurvivorReplacement,
+  setEvictionOverlay,
+  clearEvictionOverlay,
+  chooseTribunalInvitation,
+  completeTribunalArrival,
+  finalizePendingEviction,
+  selfEvict,
+  aiReplacementRendered,
+  finalizeFinal4Eviction,
+  finalizeFinal3Eviction,
+  finalizeGame,
+  completeVoxFinalistShowcase,
+  startVoxFinalVote,
+  resolveVoxSeasonWinner,
+  completeVoxSeasonRecap,
+  startWinnerCinematic,
+  startWinnerInterview,
+  advanceInterview,
+  startPublicFavorite,
+  resumeAfterPublicFavorite,
+  startGoodbyeSequence,
+  advanceGoodbyeSequence,
+  startLightsOff,
+  completeFinale,
+  activateBattleBack,
+  completeBattleBack,
+  consumeBattleBackReturn,
+  dismissBattleBack,
+  openBattleBackCompetition,
+  offerBattleBackRetry,
+  acceptBattleBackRetry,
+  clearBattleBackRetryOffer,
+  activateDoubleEviction,
+  activateSpecialVeto,
+  setCupidArrowSchedule,
+  activateCupidArrowNow,
+  breakCupidArrowNow,
+  revealCupidArrowVisuals,
+  finishCupidArrowVisualReturn,
+  setVoxPopuliSchedule,
+  activateVoxPopuliNow,
+  setSeasonExpansion,
+  queueForcedShock,
+  clearForcedShock,
+  consumeForcedShock,
+  activateDayStartShock,
+  confirmDayStartShock,
+  activateDepressionShock,
+  endDepressionShock,
+  setDepressionShockRoll,
+  submitDiamondReplacement,
+  submitCoupReplacement,
+  submitVipSecondUseDecision,
+  submitVipSecondSaveTarget,
+  startFavoritePlayerPhase,
+  openFavoritePlayerVoting,
+  eliminateFavoriteCandidate,
+  resolveFavoritePlayerWinner,
+  awardFavoritePrize,
+  openSpectator,
+  closeSpectator,
+  completeFinalThreeOpening,
+  completeFinalThreeBlockReveal,
+  completeSpectatorFinalPowerReveal,
+  setAwaitingFinal3Plea,
+  finalizeFinal3Decision,
+  forceHoH,
+  forceNominees,
+  forcePovWinner,
+  prepareTribunalInvitationTest,
+  prepareLohBackdoorTest,
+  forcePlayerStatus,
+  prepareVoxFinalThreeTest,
+  prepareClassicFinalThreeTest,
+  prepareClassicFinalFourTest,
+  forcePhase,
+  clearBlockingFlags,
+  archiveSeason,
+  replacePlayers,
+  applyFirstSeasonAppearance,
+  updateUserPlayerIdentity,
+  resolveUnfillableReplacement,
+  debugForceBellaIntoCast,
+  debugSetBellaHeir,
+  debugSetBellaWillReward,
+  debugActivateBellaInheritance,
+  clearSurvivorReplacementTransition,
+  refreshSeasonDirectorPlan,
+  resetGame,
+  rerollSeed,
+  hydrateGame,
+  setHasSeenConfessionalSpotlight,
+  submitHubSaysVote,
+  chooseHubSaysPlayer,
+  continueHubSays,
+  continueWeekendFeature,
+  advanceWeekendSeasonFact,
+  beginWeekendTribunalGlimpse,
+  beginFinaleReunionSocial,
+  beginWeekendReunionDeparture,
+  finishWeekendReunionDeparture,
+  skipWeekendTribunalStream,
+  openWeekendTribunalStream,
+  returnFromWeekendTribunalStream,
+  recordWeekendPartyBeat,
+  beginWeekendDayTransition,
+  advanceWeekendDay,
+  spendWeekendSocialResources,
+  adjustWeekendSocialResources,
+  completeWeekendInterlude,
+  debugActivateWeekendInterlude,
+  setWeekendsEnabledForSeason,
+  forceWildcardEntryForQa,
+  debugRestartWeekendInterlude,
+  debugSkipToWeekendDayTwo,
+  debugPrepareFinaleReunionPreview,
+  debugEndFinaleReunionPreview,
+  debugExitWeekendInterlude,
+  submitTwinShockAnswer,
+  completeTwinShockRevealAnimation,
+  triggerSecretMission,
+  markSecondSecretMissionChanceResolved,
+  offerSecretMission,
+  acceptSecretMission,
+  declineSecretMission,
+  updateMissionTaskProgress,
+  syncMissionTask,
+  setMissionTaskBaselineApproval,
+  settleSecretMissionDay,
+  addUniqueDayToTask,
+  recordSecretMissionEasterEgg,
+  completeMission,
+  expireSecretMission,
+  claimMissionReward,
+  expireMissionReward,
+  activateMissionImmunityReward,
+  declineMissionImmunityReward,
+  activateDoubleVoteReward,
+  declineDoubleVoteReward,
+  submitHumanDoubleVote,
+  activateVoteDeductionReward,
+  declineVoteDeduction,
+  activateDemocracia,
+  submitDemocraciaVote,
+  dismissDemocraciaResultDisplay,
+  resolveDemocraciaPublicBreaker,
+  submitCoLohNomination,
+  submitPosTieBreak,
+} = gameSlice.actions
+export default withMissionPowers(gameSlice.reducer, getEligibleReplacementNominees)
+
+// ─── Selectors ────────────────────────────────────────────────────────────────
+/** Resolve a pending Vox Populi audience vote from the live Public Opinion model. */
+export const resolvePendingVoxAudienceVote =
+  () => (dispatch: AppDispatch, getState: () => RootState) => {
+    const root = getState()
+    const game = root.game
+    const context = game.voxPopuli?.publicVoteContext
+    if (
+      !isVoxPopuliActive(game) ||
+      !game.voxPopuli?.awaitingPublicVote ||
+      (context !== 'eviction' && context !== 'final3')
+    ) {
+      return
+    }
+    const rawResult = resolveVoxAudienceEviction({
+      nomineeIds: game.nomineeIds,
+      profiles: root.publicOpinion?.profiles ?? {},
+      seed: game.seed,
+      week: game.week,
+    })
+    const previewApplies =
+      game.voxPopuli.audiencePreviewWeek === game.week &&
+      game.voxPopuli.audiencePreviewNomineeIds?.length === game.nomineeIds.length &&
+      game.nomineeIds.every((id) => game.voxPopuli?.audiencePreviewNomineeIds?.includes(id))
+    const result = previewApplies
+      ? reconcileVoxAudienceResultWithPreview({
+          finalPercentages: rawResult.percentages,
+          previewPercentages: game.voxPopuli.audiencePreviewPercentages,
+          nomineeIds: game.nomineeIds,
+        })
+      : rawResult
+    dispatch(
+      commitVoxAudienceVote({
+        context,
+        percentages: result.percentages,
+        rankedIds: result.rankedIds,
+      })
+    )
+  }
+
+/** Submit the active player's last Vox appeal before the Final Three audience vote. */
+export const submitVoxFinalThreeAppeal =
+  (appeal: 'underdog' | 'loyalty' | 'resume') =>
+  (dispatch: AppDispatch, getState: () => RootState) => {
+    const before = getState().game
+    const vox = before.voxPopuli
+    const human = before.players.find((player) => player.isUser)
+    if (
+      !human ||
+      !isVoxPopuliActive(before) ||
+      !vox ||
+      vox.finalThreeAppealUsed ||
+      before.phase !== 'final3_decision' ||
+      !vox.awaitingPublicVote ||
+      !before.nomineeIds.includes(human.id)
+    ) {
+      return
+    }
+
+    const wins = (human.stats?.lohWins ?? 0) + (human.stats?.posWins ?? 0)
+    const nominations = human.stats?.timesNominated ?? 0
+    const delta =
+      appeal === 'underdog'
+        ? nominations >= 2
+          ? 4
+          : 2
+        : appeal === 'resume'
+          ? wins >= 2
+            ? 4
+            : 2
+          : 3
+    const headlineText =
+      appeal === 'underdog'
+        ? `${human.name} asks the audience to reward the fight it took to survive.`
+        : appeal === 'resume'
+          ? `${human.name} makes one final case from the season they played.`
+          : `${human.name} reminds the audience of every relationship built along the way.`
+
+    dispatch(selectVoxFinalThreeAppeal(appeal))
+    dispatch(
+      updateApproval({
+        playerId: human.id,
+        delta,
+        reason: `vox_final_three_appeal_${appeal}`,
+        week: before.week,
+        isHeadline: true,
+        headlineText,
+      })
+    )
+  }
+
+/** Reveal the once-per-day, rewarded Vox audience snapshot on the Faux TV. */
+export const revealVoxTemporaryAudienceVote =
+  () => (dispatch: AppDispatch, getState: () => RootState) => {
+    const root = getState()
+    const game = root.game
+    if (
+      !isVoxPopuliActive(game) ||
+      !game.voxPopuli ||
+      game.voxPopuli.audiencePreviewWeek === game.week ||
+      game.nomineeIds.length < 2
+    ) {
+      return
+    }
+    const finalResult = resolveVoxAudienceEviction({
+      nomineeIds: game.nomineeIds,
+      profiles: root.publicOpinion?.profiles ?? {},
+      seed: game.seed,
+      week: game.week,
+    })
+    const percentages = resolveVoxAudiencePreview({
+      finalPercentages: finalResult.percentages,
+      nomineeIds: game.nomineeIds,
+      seed: game.seed,
+      week: game.week,
+    })
+    dispatch(
+      commitVoxAudiencePreview({
+        week: game.week,
+        nomineeIds: [...game.nomineeIds],
+        percentages,
+      })
+    )
+  }
+
+const selectPlayers = (state: RootState) => state.game.players
+
+export const selectAlivePlayers = createSelector(selectPlayers, (players) =>
+  players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+)
+
+export const selectEvictedPlayers = createSelector(selectPlayers, (players) =>
+  players.filter((p) => p.status === 'evicted' || p.status === 'jury')
+)
+
+/**
+ * Deterministically predicts the Final 3 Part 3 winner without mutating state.
+ *
+ * Mirrors the RNG logic in the `final3_comp3` branch of `advance()` so
+ * SpectatorView can receive an authoritative `initialWinnerId` before
+ * `advance()` is dispatched (which happens only after playback completes).
+ *
+ * Returns null when the prediction is not applicable (wrong phase, missing
+ * finalists, or a human finalist is present — the minigame path takes over).
+ */
+export const selectF3Part3PredictedWinnerId = (state: RootState): string | null => {
+  const { phase, seed, f3Part1WinnerId, f3Part2WinnerId, finalThree, players } = state.game
+  const part1WinnerId = finalThree?.part1?.winnerId ?? f3Part1WinnerId
+  const part2WinnerId = finalThree?.part2?.winnerId ?? f3Part2WinnerId
+  if (phase !== 'final3_comp3' || !part1WinnerId || !part2WinnerId) return null
+  const finalists = players.filter((p) => p.id === part1WinnerId || p.id === part2WinnerId)
+  if (finalists.length < 2) return null
+  // Bail out for the human-participant path (minigame handles that case).
+  if (finalists.some((p) => p.isUser)) return null
+  const seedRng = mulberry32(seed)
+  const newSeed = (seedRng() * 0x100000000) >>> 0
+  const rng = mulberry32(newSeed)
+  return seededPick(rng, finalists).id
+}
+
+/**
+ * Deterministically predicts the Final 3 Part 2 winner without mutating state.
+ *
+ * Mirrors the RNG logic in the `final3_comp2` branch of `advance()` so
+ * SpectatorView can receive an authoritative `initialWinnerId` before
+ * `advance()` is dispatched (which happens only after playback completes).
+ *
+ * Returns null when the prediction is not applicable (wrong phase, missing
+ * Part-1 winner, no Part-2 competitors, or a human is competing in Part 2 —
+ * the minigame path takes over in that case). Mirrors the `advance()` guard
+ * exactly: only `losers.length === 0` is treated as non-applicable so that a
+ * single-competitor edge case (corrupted state) still yields a deterministic
+ * result consistent with what `advance()` would pick.
+ */
+export const selectF3Part1PredictedWinnerId = (state: RootState): string | null => {
+  const { phase, seed, players } = state.game
+  if (phase !== 'final3' && phase !== 'final3_comp1') return null
+  const alive = players.filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+  if (alive.length === 0 || alive.some((player) => player.isUser)) return null
+  const seedRng = mulberry32(seed)
+  const newSeed = (seedRng() * 0x100000000) >>> 0
+  return seededPick(mulberry32(newSeed), alive).id
+}
+
+export const selectF3Part2PredictedWinnerId = (state: RootState): string | null => {
+  const { phase, seed, f3Part1WinnerId, finalThree, players } = state.game
+  const part1WinnerId = finalThree?.part1?.winnerId ?? f3Part1WinnerId
+  if (phase !== 'final3_comp2' || !part1WinnerId) return null
+  const alive = players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+  const losers = alive.filter((p) => p.id !== part1WinnerId)
+  if (losers.length === 0) return null
+  // Bail out for the human-participant path (minigame handles that case).
+  if (losers.some((p) => p.isUser)) return null
+  const seedRng = mulberry32(seed)
+  const newSeed = (seedRng() * 0x100000000) >>> 0
+  const rng = mulberry32(newSeed)
+  return seededPick(rng, losers).id
+}
+
+function pickDebugAlivePlayer(
+  state: GameState,
+  rng: () => number,
+  excludeIds: Set<string> = new Set(),
+  mode: 'highest' | 'lowest' = 'highest'
+): Player | null {
+  const alive = state.players.filter(
+    (player) =>
+      player.status !== 'evicted' && player.status !== 'jury' && !excludeIds.has(player.id)
+  )
+  if (alive.length === 0) return null
+  return pickStrategicAiPlayer(state, alive, rng, mode) ?? seededPick(rng, alive)
+}
+
+function buildDebugIncomingInteraction(
+  fromId: string,
+  week: number,
+  rng: () => number
+): IncomingInteraction {
+  const types: IncomingInteraction['type'][] = [
+    'compliment',
+    'gossip',
+    'warning',
+    'alliance_proposal',
+    'deal_offer',
+    'nomination_plea',
+    'check_in',
+    'snide_remark',
+    'other',
+  ]
+  const type = seededPick(rng, types)
+  const now = Date.now()
+  const requiresResponse = ['alliance_proposal', 'deal_offer', 'nomination_plea'].includes(type)
+  const textByType: Record<IncomingInteraction['type'], string[]> = {
+    compliment: ['You are still the one to beat.', 'That move was pretty iconic.'],
+    gossip: [
+      'People are already reading the week as a power shift.',
+      'There is a new whisper chain in the Hub.',
+    ],
+    warning: ['The Hub is noticing your numbers.', 'Someone thinks your name is coming up soon.'],
+    alliance_proposal: [
+      'Want to keep the line steady this week?',
+      'We should make this official while we still can.',
+    ],
+    deal_offer: [
+      'Keep me off the block and I will return the favor.',
+      'There is a quiet deal to be made here.',
+    ],
+    nomination_plea: ['I need one more week to survive.', 'Please, not me this time.'],
+    check_in: ['Just checking in on the vibe.', 'Wanted to see where your head is at.'],
+    snide_remark: ['Bold plan. Hope it works.', 'Interesting strategy if you like chaos.'],
+    other: ['We need to talk later.', 'Something feels off this week.'],
+  }
+  const text = seededPick(rng, textByType[type])
+
+  return {
+    id: `dbg-interaction-${week}-${fromId}-${Math.floor(now % 1_000_000)}-${Math.floor(rng() * 1_000)}`,
+    fromId,
+    type,
+    text,
+    createdAt: now,
+    createdWeek: week,
+    expiresAtWeek: week + 1,
+    read: false,
+    requiresResponse,
+    resolved: false,
+  }
+}
+
+// ─── Debug thunks ─────────────────────────────────────────────────────────────
+function seedDebugCycleNoise(dispatch: AppDispatch, rootState: RootState, rng: () => number): void {
+  const { game, publicOpinion } = rootState
+  const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+  if (alive.length === 0) return
+
+  dispatch(resetDailyFeedBudget({ week: game.week }))
+  dispatch(snapshotWeekRelationships())
+  dispatch(decaySocialMemory())
+
+  const beatCount = Math.min(3, alive.length)
+  const actors = seededPickN(rng, alive, beatCount)
+  const socialSummaryParts: string[] = []
+
+  actors.forEach((actor, index) => {
+    const targets = alive.filter((p) => p.id !== actor.id)
+    if (targets.length === 0) return
+
+    const target =
+      pickStrategicAiPlayer(game, targets, rng, index % 2 === 0 ? 'highest' : 'lowest') ??
+      seededPick(rng, targets)
+    const approvalDelta = rng() < 0.5 ? 2 : -2
+    const relationshipDelta = approvalDelta > 0 ? 2 : -2
+    const memoryDeltas =
+      approvalDelta > 0 ? { gratitude: 1, trustMomentum: 1 } : { resentment: 1, trustMomentum: -1 }
+    const timestamp = Date.now()
+
+    dispatch(
+      updateRelationship({
+        source: actor.id,
+        target: target.id,
+        delta: relationshipDelta,
+        actionSource: 'system',
+      })
+    )
+    dispatch(
+      updateSocialMemory({
+        actorId: actor.id,
+        targetId: target.id,
+        deltas: memoryDeltas,
+        event: {
+          type: 'debug_cycle_noise',
+          actorId: actor.id,
+          targetId: target.id,
+          week: game.week,
+          timestamp,
+        },
+      })
+    )
+    dispatch(
+      recordSocialAction({
+        entry: {
+          actionId: `dbg-social-${game.week}-${actor.id}-${target.id}-${timestamp}`,
+          actorId: actor.id,
+          targetId: target.id,
+          cost: 0,
+          delta: relationshipDelta,
+          outcome: approvalDelta > 0 ? 'success' : 'failure',
+          newEnergy: publicOpinion?.profiles?.[actor.id]?.approval ?? 0,
+          timestamp,
+          score: approvalDelta > 0 ? 1 : -1,
+          label: approvalDelta > 0 ? 'Warm' : 'Messy',
+          source: 'system',
+          costs: { energy: 0, influence: 0, info: 0 },
+          balancesAfter: { energy: 0, influence: 0, info: 0 },
+        } satisfies SocialActionLogEntry,
+      })
+    )
+    dispatch(pushIncomingInteraction(buildDebugIncomingInteraction(actor.id, game.week, rng)))
+    dispatch(
+      updateApproval({
+        playerId: target.id,
+        delta: approvalDelta,
+        reason: 'debug_week_noise',
+        week: game.week,
+        eventType: 'debug_week_noise',
+        attributedToId: actor.id,
+      })
+    )
+
+    socialSummaryParts.push(
+      `${actor.name} stirred things up with ${target.name} (${approvalDelta > 0 ? '+' : ''}${approvalDelta})`
+    )
+  })
+
+  if (socialSummaryParts.length > 0) {
+    dispatch(
+      addDirection({
+        id: `dbg-direction-${game.week}-${Date.now()}`,
+        type: rng() < 0.5 ? 'start_drama' : 'reinforce_alliance',
+        playerId: actors[0]?.id ?? alive[0].id,
+        relatedPlayerId: actors[1]?.id,
+        description: socialSummaryParts.join(' | '),
+        status: 'active',
+        createdWeek: game.week,
+        expiresAtWeek: game.week + 1,
+        approvalDelta: rng() < 0.5 ? -2 : 2,
+        progressPercent: 25,
+      })
+    )
+  }
+
+  dispatch(
+    addSocialSummary({
+      summary:
+        socialSummaryParts.length > 0
+          ? socialSummaryParts.join(' | ')
+          : `Quiet week for the Hub — ${alive[0]?.name ?? 'the Hub'} kept things contained.`,
+      week: game.week,
+    })
+  )
+}
+
+function resolveDebugBlockers(
+  dispatch: AppDispatch,
+  rootState: RootState,
+  rng: () => number
+): boolean {
+  const { game } = rootState
+  if (game.missionPowers?.decision) {
+    const decision = game.missionPowers.decision
+    if (decision.kind === 'backupTarget') {
+      const candidate = getEligibleReplacementNominees(game)[0]
+      if (candidate) dispatch(selectMissionBackup({ id: decision.id, targetId: candidate.id }))
+      else dispatch(expireNewMissionReward('No legal backup remains.'))
+    } else dispatch(answerMissionPowerDecision({ id: decision.id, accept: false }))
+    return true
+  }
+  if (game.missionPowers?.safetyIntent) {
+    dispatch(advance())
+    return true
+  }
+  const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+
+  if (game.voxPopuli?.awaitingPublicVote) {
+    dispatch(resolvePendingVoxAudienceVote())
+    return true
+  }
+
+  if (game.voxPopuli?.finaleStage === 'recap') {
+    dispatch(game.voxPopuli.winnerId ? completeVoxSeasonRecap() : startVoxFinalVote())
+    return true
+  }
+
+  if (game.voxPopuli?.finaleStage === 'showcase') {
+    dispatch(completeVoxFinalistShowcase())
+    return true
+  }
+
+  if (game.voxPopuli?.finaleStage === 'ready') {
+    dispatch(startVoxFinalVote())
+    return true
+  }
+
+  if (game.voxPopuli?.finaleStage === 'final_vote') {
+    const finalists = game.voxPopuli.finalistIds
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const winner =
+      [...finalists].sort(
+        (a, b) =>
+          (rootState.publicOpinion?.profiles?.[b.id]?.approval ?? 50) -
+          (rootState.publicOpinion?.profiles?.[a.id]?.approval ?? 50)
+      )[0] ?? null
+    if (winner) dispatch(resolveVoxSeasonWinner(winner.id))
+    return true
+  }
+
+  if (game.pendingEviction) {
+    dispatch(finalizePendingEviction(game.pendingEviction.evicteeId))
+    return true
+  }
+
+  if ((game.aiReplacementStep ?? 0) > 0) {
+    if (game.aiReplacementWaiting) dispatch(aiReplacementRendered())
+    else dispatch(advance())
+    return true
+  }
+
+  // Headless season simulations do not mount the presentation components that
+  // normally dismiss these UI-only pauses after the reducer has resolved them.
+  if (game.voteResults) {
+    dispatch(dismissVoteResults())
+    return true
+  }
+
+  if (game.evictionSplashId) {
+    dispatch(dismissEvictionSplash())
+    return true
+  }
+
+  if (game.evictionOverlayPlayerId) {
+    dispatch(clearEvictionOverlay(game.evictionOverlayPlayerId))
+    return true
+  }
+
+  if (game.twinShock?.pendingRevealAnimation) {
+    dispatch(completeTwinShockRevealAnimation())
+    return true
+  }
+
+  if (game.twinShock?.promptStage) {
+    dispatch(submitTwinShockAnswer('I give up'))
+    return true
+  }
+
+  if (game.weekendInterlude?.active) {
+    dispatch({ type: 'game/completeWeekendForSimulation' })
+    return true
+  }
+
+  if (game.dayStartShock) {
+    dispatch(confirmDayStartShock())
+    return true
+  }
+
+  if (game.spectatorActive) {
+    dispatch(closeSpectator())
+    return true
+  }
+
+  if (game.battleBack?.active) {
+    const candidates = game.battleBack.candidates
+      .map((id) => game.players.find((p) => p.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const winner =
+      candidates.find((player) => player.status === 'jury' || player.status === 'evicted') ?? null
+    if (winner) {
+      dispatch(completeBattleBack(winner.id))
+    } else {
+      dispatch(dismissBattleBack())
+    }
+    return true
+  }
+
+  if (game.favoritePlayer?.active) {
+    const winner = pickDebugAlivePlayer(game, rng) ?? alive[0] ?? null
+    if (winner) {
+      dispatch(resolveFavoritePlayerWinner(winner.id))
+      dispatch(awardFavoritePrize())
+    }
+    return true
+  }
+
+  if (game.replacementNeeded) {
+    const exclude = new Set<string>([game.lohId ?? '', game.posWinnerId ?? ''])
+    game.nomineeIds.forEach((id) => exclude.add(id))
+    if (game.povSavedId) exclude.add(game.povSavedId)
+    const replacement = pickDebugAlivePlayer(game, rng, exclude, 'highest')
+    if (replacement) {
+      dispatch(setReplacementNominee(replacement.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.awaitingNominations && game.phase === 'nomination_results') {
+    const loh = game.players.find((player) => player.id === game.lohId)
+    const decisionMaker = getCupidHumanCoholder(game, game.lohId) ?? loh
+    const nomineeCount = game.doubleEviction?.weekActive === true ? 3 : 2
+    const eligible = decisionMaker ? getEligibleNominationTargets(game, decisionMaker.id) : []
+    const selected = pickStrategicAiPlayers(game, eligible, nomineeCount, rng, {
+      actorId: decisionMaker?.id,
+    })
+    if (selected.length === nomineeCount) {
+      dispatch(commitNominees(selected.map((player) => player.id)))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (
+    game.phase === 'pos_ceremony_results' &&
+    !game.awaitingPovDecision &&
+    !game.awaitingPovSaveTarget &&
+    !game.replacementNeeded &&
+    game.aiReplacementStep === 0
+  ) {
+    // The live UI advances after the holder's choice and replacement sequence.
+    // In a headless run, move into the vote window once those choices are settled.
+    dispatch(setPhase('social_2'))
+    return true
+  }
+
+  if (
+    game.awaitingPublicSave &&
+    game.phase === 'pre_veto_public_save' &&
+    game.nomineeIds.length === (isCupidArrowActive(game) ? 6 : 3)
+  ) {
+    const publicSaveResult = resolvePairAwarePublicSave(rootState)
+    const savedId = publicSaveResult.savedId || game.nomineeIds[0]
+    dispatch(
+      commitPublicSave({
+        savedId,
+      })
+    )
+    return true
+  }
+
+  if (game.awaitingPovDecision) {
+    const nominees = game.nomineeIds
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const eligible = getReplacementEligiblePlayers(
+      game,
+      alive,
+      game.specialVeto?.activeType === 'coup' ? 2 : 1,
+      { allowLoh: true }
+    )
+    const usePower =
+      shouldUseSafetyForTwin(game, game.posWinnerId, nominees) ||
+      shouldAiUseTargetedSafetyPower(game, game.posWinnerId, nominees, eligible, {
+        replacementCount: game.specialVeto?.activeType === 'coup' ? 2 : 1,
+        preferLoh: true,
+      })
+
+    dispatch(submitPovDecision(usePower))
+    return true
+  }
+
+  if (game.awaitingPovSaveTarget) {
+    const nominees = game.nomineeIds
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const nomineeToSave = pickSafetySaveTarget(game, game.posWinnerId, nominees, rng)
+    if (nomineeToSave) {
+      dispatch(submitPovSaveTarget(nomineeToSave.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.specialVeto?.awaitingHolderReplacement) {
+    const eligible = getReplacementEligiblePlayers(game, alive, 1, { actorId: game.posWinnerId })
+    const replacement = pickStrategicReplacementNominee(game, game.posWinnerId, eligible, rng, {
+      reason: 'selected strategic Halo Exchange backup',
+    })
+    if (replacement) {
+      dispatch(submitDiamondReplacement(replacement.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.specialVeto?.awaitingCoupReplacement1 || game.specialVeto?.awaitingCoupReplacement2) {
+    const eligible = getReplacementEligiblePlayers(game, alive, 2, {
+      allowLoh: true,
+      actorId: game.posWinnerId,
+    })
+    const replacement = pickStrategicReplacementNominee(game, game.posWinnerId, eligible, rng, {
+      reason: 'selected strategic Coup backup',
+    })
+    if (replacement) {
+      dispatch(submitCoupReplacement(replacement.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.specialVeto?.awaitingVipSecondUseDecision) {
+    const nominees = game.players.filter((player) => game.nomineeIds.includes(player.id))
+    const eligible = getReplacementEligiblePlayers(game, alive)
+    const useSecond =
+      shouldUseSafetyForTwin(game, game.posWinnerId, nominees) ||
+      shouldAiUseTargetedSafetyPower(game, game.posWinnerId, nominees, eligible, {
+        preferLoh: true,
+      })
+    dispatch(submitVipSecondUseDecision(useSecond))
+    return true
+  }
+
+  if (game.specialVeto?.awaitingVipSecondSaveTarget) {
+    const nominees = game.nomineeIds
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const nomineeToSave = pickSafetySaveTarget(game, game.posWinnerId, nominees, rng)
+    if (nomineeToSave) {
+      dispatch(submitVipSecondSaveTarget(nomineeToSave.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.awaitingMissionImmunityOffer) {
+    dispatch(declineMissionImmunityReward())
+    return true
+  }
+
+  if (game.awaitingDoubleVoteOffer) {
+    dispatch(declineDoubleVoteReward())
+    return true
+  }
+
+  if (game.awaitingVoteDeductionPrompt) {
+    dispatch(declineVoteDeduction())
+    return true
+  }
+
+  if (game.awaitingHumanVote && game.phase === 'live_vote') {
+    const target = pickStrategicAiPlayer(
+      game,
+      game.players.filter((player) => game.nomineeIds.includes(player.id)),
+      rng,
+      'highest'
+    )
+    if (target) {
+      dispatch(submitHumanVote(target.id))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.awaitingTieBreak) {
+    const tiedIds = game.tiedNomineeIds ?? game.nomineeIds
+    const tiedPlayers = tiedIds
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const chosen = pickStrategicAiPlayer(game, tiedPlayers, rng, 'highest')
+    if (chosen) {
+      if (game.awaitingPosTieBreak) {
+        dispatch(submitPosTieBreak(chosen.id))
+      } else {
+        dispatch(submitTieBreak(chosen.id))
+      }
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.awaitingCoLohNomination) {
+    const excluded = new Set<string>([...(game.coLohIds ?? []), ...game.nomineeIds])
+    const nominee = pickDebugAlivePlayer(game, rng, excluded, 'highest')
+    const coLohId = game.coLohIds?.find(
+      (id) => game.players.find((player) => player.id === id)?.isUser
+    )
+    if (coLohId && nominee) {
+      dispatch(submitCoLohNomination({ coLohId, nomineeId: nominee.id }))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (game.awaitingFinal3Plea || game.awaitingFinal3Eviction) {
+    const hohWinnerId = game.lohId ?? pickDebugAlivePlayer(game, rng)?.id ?? null
+    const nominee = pickStrategicAiPlayer(
+      game,
+      game.nomineeIds
+        .map((id) => game.players.find((player) => player.id === id))
+        .filter((player): player is Player => Boolean(player)),
+      rng,
+      'highest'
+    )
+    if (hohWinnerId && nominee) {
+      dispatch(finalizeFinal3Decision({ hohWinnerId, evicteeId: nominee.id }))
+    } else {
+      dispatch(clearBlockingFlags())
+    }
+    return true
+  }
+
+  if (
+    game.phase === 'final3_comp1_minigame' ||
+    game.phase === 'final3_comp2_minigame' ||
+    game.phase === 'final3_comp3_minigame'
+  ) {
+    const participants = game.minigameContext?.participants ?? getFinalThreeActiveIds(game)
+    const candidates = participants
+      .map((id) => game.players.find((player) => player.id === id))
+      .filter((player): player is Player => Boolean(player))
+    const winner = pickStrategicAiPlayer(game, candidates, rng, 'highest')
+    if (winner) dispatch(applyF3MinigameWinner(winner.id))
+    else dispatch(clearBlockingFlags())
+    return true
+  }
+
+  return false
+}
+
+/** Dispatch advance() repeatedly until the phase reaches 'eviction_results' (debug only). */
+export const fastForwardToEviction = () => (dispatch: AppDispatch, getState: () => RootState) => {
+  let steps = 0
+  while (
+    getState().game.phase !== 'eviction_results' &&
+    getState().game.phase !== 'jury' &&
+    steps < PHASE_ORDER.length
+  ) {
+    const rootState = getState()
+    const state = rootState.game
+    if (state.voxPopuli?.awaitingPublicVote) {
+      dispatch(resolvePendingVoxAudienceVote())
+    }
+    // Auto-resolve pre-veto public save only when it is actually actionable.
+    else if (
+      state.awaitingPublicSave &&
+      state.phase === 'pre_veto_public_save' &&
+      state.nomineeIds.length === (isCupidArrowActive(state) ? 6 : 3)
+    ) {
+      const publicSaveResult = resolvePairAwarePublicSave(rootState)
+      const savedId = publicSaveResult.savedId || state.nomineeIds[0]
+      dispatch(
+        commitPublicSave({
+          savedId,
+        })
+      )
+    } else {
+      dispatch(advance())
+    }
+    steps++
+  }
+}
+
+/**
+ * Simulate a full elimination cycle with debug-friendly social/public noise.
+ * Advances through blocker states, commits pending eliminations, and continues
+ * until the game stabilises on the next week or a terminal endgame beat.
+ */
+export const simulateImmediateEliminationCycle =
+  (onSocialPhase?: () => void) => (dispatch: AppDispatch, getState: () => RootState) => {
+    const initialWeek = getState().game.week
+    const cycleSeed =
+      (getState().game.seed ^
+        ((initialWeek + 1) * 0x9e3779b9) ^
+        (getState().game.players.length << 8)) >>>
+      0
+    const rng = mulberry32(cycleSeed)
+    const completedSocialPhases = new Set<string>()
+    seedDebugCycleNoise(dispatch, getState(), rng)
+
+    let steps = 0
+    const maxSteps = PHASE_ORDER.length * 24
+    while (steps < maxSteps) {
+      const rootState = getState()
+      const game = rootState.game
+
+      if (game.phase === 'jury' || game.seasonFinale?.phase === 'seasonComplete') {
+        break
+      }
+
+      if (game.week > initialWeek && game.phase === 'week_start') {
+        break
+      }
+
+      if (onSocialPhase && (game.phase === 'social_1' || game.phase === 'social_2')) {
+        const phaseKey = `${game.week}:${game.phase}`
+        if (!completedSocialPhases.has(phaseKey)) {
+          completedSocialPhases.add(phaseKey)
+          onSocialPhase()
+          steps++
+          continue
+        }
+      }
+
+      if (resolveDebugBlockers(dispatch, rootState, rng)) {
+        steps++
+        continue
+      }
+
+      const prevPhase = game.phase
+      const prevWeek = game.week
+      dispatch(advance())
+
+      const nextState = getState().game
+      if (
+        nextState.phase === prevPhase &&
+        nextState.week === prevWeek &&
+        !nextState.pendingEviction
+      ) {
+        // Advancing can queue a UI prompt without changing phase (for example,
+        // the Day 4 twin-shock confessional). Resolve newly created blockers
+        // before treating an unchanged phase as a true stall.
+        if (resolveDebugBlockers(dispatch, getState(), rng)) {
+          steps++
+          continue
+        }
+        dispatch(clearBlockingFlags())
+        break
+      }
+
+      steps++
+    }
+  }
+
+/**
+ * Public minigame API — startMinigame thunk.
+ *
+ * A fresh per-invocation seed is generated on every call so that restarting,
+ * reloading, or re-launching a minigame never replays the exact same game
+ * (same booster sequence, same AI variation, etc.).  This seed is generated
+ * independently of the caller-supplied `opts.seed` — `opts.seed` is not used
+ * by this thunk at all, so even passing the same base seed across replays or
+ * debug runs still produces varied results each time.
+ *
+ * All participants in the same invocation — human UI and precomputed AI scores
+ * — share this single fresh seed, preserving internal consistency for that run.
+ *
+ * Score-based (non-endurance) games with a human participant (except Quick Tap):
+ *   AI scores are NOT precomputed here. Instead the session is flagged with
+ *   `hybridResolveOnComplete: true` and the central hybrid resolver in
+ *   `completeMinigame` generates AI scores after the human score is known.
+ *   This prevents a predictable outcome before the human has finished playing.
+ *
+ * Quick Tap Race with a human participant:
+ *   AI scores ARE precomputed via `simulateQuickTapAiScore()`, giving a
+ *   competitive band-based distribution independent of the human score anchor.
+ *   `isHybridScoredGame('quickTap')` returns false, so it follows the same
+ *   precomputed path as endurance games.
+ *
+ * Endurance / non-hybrid games with a human participant:
+ *   AI scores ARE precomputed and stored in `session.aiScores` as before.
+ *
+ * AI-only games (no human participant):
+ *   Precomputed scores are used immediately to derive the winner — no UI needed.
+ *
+ * Returns the MinigameResult for AI-only runs; undefined when human UI is shown.
+ */
+export const startMinigame =
+  (opts: { key: string; participants: string[]; seed: number; options: { timeLimit: number } }) =>
+  (dispatch: AppDispatch, getState: () => RootState): MinigameResult | undefined => {
+    const rootState = getState()
+    const state = rootState.game
+    const model = getMinigameAiModel(opts.key)
+    const isHybrid = isHybridScoredGame(opts.key)
+    const isVipQuickTap =
+      (opts.key === 'quickTap' || opts.key === 'quickTapSeasons') &&
+      hasEffectiveStoreEntitlement(rootState.vip, 'premiumChallenges')
+
+    // Generate a fresh per-invocation seed so every new game launch / restart /
+    // reload gets a different booster sequence and AI variation, even when the
+    // caller passes the same base seed (e.g. the same game.seed across replays).
+    // Mix Math.random() with Date.now() — the same pattern used elsewhere in
+    // this file — so the result is unpredictable per invocation.
+    const invocationSeed =
+      (Math.floor(Math.random() * 0x100000000) ^ (Date.now() & 0xffffffff)) >>> 0
+
+    // Always precompute AI scores for AI-only runs (no UI is involved) and for
+    // endurance/non-hybrid games (which keep the old precomputed path).
+    // For hybrid games with a human participant, precomputation is skipped.
+    const aiScores: Record<string, number> = {}
+
+    const hasHuman = opts.participants.some((id) => {
+      const p = state.players.find((pl) => pl.id === id)
+      return !!p?.isUser
+    })
+    const aiRuntime = captureSeasonAiRuntime(
+      state,
+      state.players.filter((p) => opts.participants.includes(p.id))
+    )
+    const competitionIntents: Record<string, CompetitionIntent> = {}
+    for (const id of opts.participants) {
+      const player = state.players.find((candidate) => candidate.id === id)
+      if (!player || player.isUser) continue
+      competitionIntents[id] = decideCompetitionIntent(invocationSeed, id, player.aiGameIdentity, {
+        mode: getAiIdentityMode(state),
+        day: state.week,
+        phase: state.phase,
+        prizeType:
+          state.phase === 'loh_comp' ? 'LOH' : state.phase === 'pos_comp' ? 'POS' : undefined,
+        playerStatus: player.status,
+      })
+    }
+
+    if (isVipQuickTap && !hasHuman) {
+      const profiles = Object.fromEntries(
+        opts.participants.map((id) => {
+          const player = state.players.find((candidate) => candidate.id === id)
+          return [
+            id,
+            runtimeCompetitionProfile(
+              aiRuntime,
+              id,
+              player?.competitionProfile,
+              hasHuman ? opts.key : undefined
+            ) ?? getDefaultCompetitionProfile(),
+          ]
+        })
+      )
+      Object.assign(
+        aiScores,
+        scoreQuickTapVipAiOnly({
+          seed: invocationSeed,
+          participantIds: opts.participants,
+          profiles,
+          mode: opts.key === 'quickTapSeasons' ? 'seasons' : 'race',
+        })
+      )
+    } else if (!isVipQuickTap && (!isHybrid || !hasHuman)) {
+      // Precompute for: (a) AI-only runs, (b) endurance/non-hybrid games,
+      // (c) Quick Tap Race and Snake (isHybridScoredGame returns false for them).
+      opts.participants.forEach((id, index) => {
+        const p = state.players.find((pl) => pl.id === id)
+        if (p && !p.isUser) {
+          const simulatedScore = simulateMinigameAiScore({
+            gameKey: opts.key,
+            seed: invocationSeed,
+            playerId: id,
+            participantIndex: index,
+            profile:
+              runtimeCompetitionProfile(
+                aiRuntime,
+                id,
+                p.competitionProfile,
+                hasHuman ? opts.key : undefined
+              ) ?? getDefaultCompetitionProfile(),
+            seasonState: getCompetitionSeasonState(state.competitionSeasonStateByPlayerId, id),
+            aiGameIdentity: p.aiGameIdentity,
+            identityMode: getAiIdentityMode(state),
+            timeLimitSeconds: opts.options.timeLimit,
+            minigameModel: model,
+          })
+          aiScores[id] = applyCompetitionIntentToScore(
+            simulatedScore,
+            model,
+            competitionIntents[id] ?? 'compete',
+            invocationSeed,
+            id
+          )
+        }
+      })
+    }
+
+    if (!hasHuman) {
+      // AI-only: determine winner immediately and return the result directly.
+      // We do NOT dispatch completeMinigame here — that would write a stale
+      // minigameResult that could later be consumed by an unrelated advance().
+      const winnerId =
+        opts.key === 'pressurePlank'
+          ? rankPressurePlankResults(opts.participants, aiScores, invocationSeed)[0]?.playerId
+          : determineWinner(opts.participants, aiScores)
+      if (!winnerId) throw new Error('startMinigame could not resolve a winner')
+      const result: MinigameResult = {
+        seedUsed: invocationSeed,
+        scores: aiScores,
+        winnerId,
+        competitionIntents,
+      }
+      dispatch(
+        applyCompetitionSeasonUpdate({
+          participants: opts.participants,
+          scores: aiScores,
+          winnerId,
+          competitionIntents,
+          gameKey: opts.key,
+        })
+      )
+      return result
+    }
+
+    // Human present: launch UI and return undefined (UI resolves via completeMinigame).
+    // For hybrid (scored) games, flag the session so completeMinigame resolves AI scores.
+    const session = {
+      key: opts.key,
+      participants: opts.participants,
+      seed: invocationSeed,
+      options: opts.options,
+      aiScores,
+      aiRuntime,
+      competitionIntents,
+      ...(opts.key === 'quickTap' || opts.key === 'quickTapSeasons'
+        ? { quickTapVariant: isVipQuickTap ? ('vip' as const) : ('classic' as const) }
+        : {}),
+      ...(isHybrid ? { hybridResolveOnComplete: true } : {}),
+    }
+    dispatch(launchMinigame(session))
+    return undefined
+  }
+
+/**
+ * Attempt to trigger the seasonal secret mission for the current day.
+ *
+ * Rules:
+ *  - Evaluates from Day 3 onward while more than 5 players remain
+ *  - The first mission is guaranteed on the first eligible week
+ *  - A second mission may trigger later in the season with a single 50% roll
+ *  - The second mission only triggers if its deadline can still land by Final 5
+ *  - The testing overrides affect only this calculation
+ *  - Uses a twist-specific RNG path so it does not perturb other outcomes
+ *
+ * Returns `true` if the mission triggered for the current day.
+ */
+export const tryActivateSecretMission =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+    if (isCupidArrowTwistLocked(game)) return false
+    if (isSeasonDirectorKillSwitched('secretMissions')) return false
+
+    const aliveCount = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    ).length
+    const seasonMissionCount = getSeasonSecretMissionCount(game)
+    const secondMissionChanceResolved =
+      game.secretMissionSecondChanceResolved ?? seasonMissionCount >= 2
+
+    if (game.phase !== 'week_start') return false
+    if (game.week < 3) return false
+    if (aliveCount <= 5) return false
+    if (seasonMissionCount >= 2) return false
+    if (game.twistActivatedThisWeek) return false
+    if (game.twinShock?.promptStage || game.twinShock?.pendingRevealAnimation) return false
+    if (
+      game.twinShock?.status === 'day4_pending' ||
+      game.twinShock?.status === 'day4_asked_no_correct_guess'
+    ) {
+      return false
+    }
+    if (!canReplaceSecretMissionSlot(game.secretMission)) return false
+
+    const maxDaySpan = aliveCount - 5
+    const isSecondMissionAttempt = seasonMissionCount === 1
+    const lastResolvedDay =
+      game.secretMissionLastResolvedDay ??
+      (game.secretMission?.status === 'expired' ? game.secretMission.endDay : undefined)
+
+    const forcedWeek = settings.sim.secretMissionTriggerWeekOverride
+    if (forcedWeek !== null) {
+      if (game.week !== forcedWeek) return false
+      dispatch(
+        triggerSecretMission(isSecondMissionAttempt ? { day: game.week, maxDaySpan } : game.week)
+      )
+      return true
+    }
+
+    const override = settings.sim.secretMissionTriggerOverride
+    if (
+      !isSecondMissionAttempt &&
+      override === null &&
+      game.week < getFirstSecretMissionScheduledDay(game.seed, game.season)
+    ) {
+      return false
+    }
+    const plan = game.seasonDirectorPlan
+    if (plan && override === null) {
+      const policy = plan.policy.secretMissions
+      if (!policy.enabled) return false
+
+      if (!isSecondMissionAttempt) {
+        if (!plan.selections.firstSecretMission) return false
+        if (
+          !isWithinDirectorWindow(aliveCount, policy.first, plan.policy.pacing.finaleLockPlayers)
+        ) {
+          return false
+        }
+        dispatch(triggerSecretMission(game.week))
+        return true
+      }
+
+      if (secondMissionChanceResolved || !plan.selections.secondSecretMission) return false
+      if (aliveCount < policy.second.minPlayers) {
+        dispatch(markSecondSecretMissionChanceResolved())
+        return false
+      }
+      if (
+        !isWithinDirectorWindow(aliveCount, policy.second, plan.policy.pacing.finaleLockPlayers)
+      ) {
+        return false
+      }
+      if (
+        typeof lastResolvedDay !== 'number' ||
+        game.week - lastResolvedDay <= policy.second.minimumGapDays
+      ) {
+        return false
+      }
+      if (maxDaySpan < MIN_SECRET_MISSION_DAY_SPAN) {
+        dispatch(markSecondSecretMissionChanceResolved())
+        return false
+      }
+      dispatch(triggerSecretMission({ day: game.week, maxDaySpan }))
+      return true
+    }
+
+    // Legacy/debug path kept intact for existing QA controls and old saves.
+    if (isSecondMissionAttempt) {
+      if (maxDaySpan < MIN_DAYS_BEFORE_FINAL_FIVE_FOR_SECOND_MISSION) {
+        dispatch(markSecondSecretMissionChanceResolved())
+        return false
+      }
+      if (
+        typeof lastResolvedDay !== 'number' ||
+        game.week - lastResolvedDay <= SECOND_SECRET_MISSION_COOLDOWN_FULL_DAYS
+      ) {
+        return false
+      }
+      if (maxDaySpan < MIN_SECRET_MISSION_DAY_SPAN) {
+        dispatch(markSecondSecretMissionChanceResolved())
+        return false
+      }
+    }
+
+    const rng = mulberry32((game.seed ^ Math.imul(game.week, 0x9e3779b1)) >>> 0)
+    const didTrigger = checkSecretMissionTrigger(
+      {
+        day: game.week,
+        aliveCount,
+        override,
+        seasonMissionCount,
+        secondMissionRollResolved: secondMissionChanceResolved,
+      },
+      rng
+    )
+    if (!didTrigger) {
+      if (isSecondMissionAttempt && !secondMissionChanceResolved) {
+        dispatch(markSecondSecretMissionChanceResolved())
+      }
+      return false
+    }
+
+    dispatch(
+      triggerSecretMission(isSecondMissionAttempt ? { day: game.week, maxDaySpan } : game.week)
+    )
+    return true
+  }
+
+/**
+ * Resolve the seasonal Depression Shock at a day boundary. It receives one
+ * 25% roll per eligible season; a successful roll waits for a shock-free day.
+ */
+export const tryActivateDepressionShock =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+    const current = game.depressionShock ?? createInitialDepressionShockState()
+
+    if (game.phase !== 'week_start' || game.week < DEPRESSION_SHOCK_MIN_WEEK) return false
+    if (current.completed) return false
+
+    // The second storm day and recovery are both state-driven, never rerolled.
+    if (current.activeDay === 2 && current.recoveryWeek === game.week) {
+      dispatch(endDepressionShock())
+      return false
+    }
+    if (
+      current.activeDay === 1 &&
+      current.activatedWeek !== null &&
+      game.week > current.activatedWeek
+    ) {
+      if (game.twistActivatedThisWeek || game.dayStartShock) return false
+      dispatch(activateDepressionShock({ source: 'random' }))
+      return true
+    }
+
+    if (!settings.sim.enableTwists || !isDepressionShockEligibleMode(game)) return false
+    if (activeHousemateCount(game) < 6) return false
+    if (!current.rollResolved) {
+      const rng = mulberry32((game.seed ^ DEPRESSION_SHOCK_RNG_SALT) >>> 0)
+      const passed = rng() < 0.25
+      // Store the one-time roll before checking the day availability so a
+      // successful season can defer behind Twin Shock or another live shock.
+      dispatch(
+        setDepressionShockRoll({
+          passed,
+        })
+      )
+      if (!passed) return false
+    }
+
+    const resolved = getState().game.depressionShock
+    if (!resolved?.pendingActivation || game.twistActivatedThisWeek || game.dayStartShock)
+      return false
+    dispatch(activateDepressionShock({ source: 'random' }))
+    return true
+  }
+
+/** Activate a debug-queued Depression Shock at the next valid morning. */
+export const tryActivatePendingForcedDepressionShock =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+    const pending = game.pendingForcedShock
+    if (!pending || pending.type !== 'depressionShock') return false
+    if (!isDepressionShockEligibleMode(game) || game.phase !== 'week_start') return false
+    if (game.week < Math.max(DEPRESSION_SHOCK_MIN_WEEK, pending.earliestWeek)) return false
+    if (game.twistActivatedThisWeek || game.dayStartShock || activeHousemateCount(game) < 6)
+      return false
+    dispatch(activateDepressionShock({ source: 'debug' }))
+    dispatch(consumeForcedShock())
+    return true
+  }
+
+/**
+ * Attempt to trigger the random day-start shock on the current day.
+ *
+ * Eligibility:
+ *  - `settings.sim.enableTwists` must be true
+ *  - current phase must be `week_start`
+ *  - the season must be at least Day 3
+ *  - at least 5 hubmates must still be alive
+ *  - no other twist may already be active this week
+ *  - no queued debug shock may be waiting to consume the window
+ *
+ * If the roll succeeds, the popup is activated and the user must confirm the
+ * elimination before the standard elimination animation can begin.
+ */
+export const tryActivateDayStartShock =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+
+    if (isCupidArrowTwistLocked(game)) return false
+    if (isSeasonDirectorKillSwitched('morningShock')) return false
+    if (!settings.sim.enableTwists) return false
+    if (game.phase !== 'week_start') return false
+    if (game.dayStartShock) return false
+    if (game.dayStartShockUsedThisSeason) return false
+    if (game.pendingForcedShock) return false
+    if (game.twistActivatedThisWeek) return false
+    if (game.week < DAY_START_SHOCK_MIN_WEEK) return false
+
+    const activePlayers = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    )
+    if (activePlayers.length <= 4) return false
+
+    const plan = game.seasonDirectorPlan
+    if (plan) {
+      const policy = plan.policy.morningShock
+      if (!policy.enabled || !plan.selections.morningShock) return false
+      if (
+        !isWithinDirectorWindow(activePlayers.length, policy, plan.policy.pacing.finaleLockPlayers)
+      ) {
+        return false
+      }
+    } else {
+      const chance = Math.max(0, Math.min(100, settings.sim.dayStartShockChance ?? 1))
+      if (chance <= 0) return false
+      const chanceRng = mulberry32((game.seed ^ DAY_START_SHOCK_RNG_SALT) >>> 0)
+      if (chanceRng() * 100 >= chance) return false
+    }
+
+    const rng = mulberry32((game.seed ^ DAY_START_SHOCK_RNG_SALT) >>> 0)
+    // Keep the selection RNG independent from the Director's season roll.
+    if (!plan) rng()
+    const selection = buildDayStartShockSelection(
+      game.players,
+      rng,
+      game.players.filter((player) => player.isUser).map((player) => player.id)
+    )
+    if (!selection) return false
+
+    dispatch(
+      activateDayStartShock({
+        ...selection,
+        triggeredWeek: game.week,
+        source: 'random',
+      })
+    )
+    return true
+  }
+
+/**
+ * Attempt to trigger a queued debug day-start shock.
+ *
+ * Bypasses the probability roll, but still respects the day 1 / day 2 and
+ * final-4 guardrails so the debug queue mirrors the live ruleset.
+ */
+export const tryActivatePendingForcedDayStartShock =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+    const pending = game.pendingForcedShock
+
+    if (isCupidArrowTwistLocked(game)) return false
+    if (!pending || pending.type !== 'dayStartShock') return false
+    if (game.phase !== 'week_start') return false
+    if (game.week < pending.earliestWeek) return false
+    if (game.dayStartShock) return false
+    if (game.dayStartShockUsedThisSeason) {
+      dispatch(clearForcedShock())
+      return false
+    }
+    if (game.twistActivatedThisWeek) return false
+
+    const activePlayers = game.players.filter(
+      (player) => player.status !== 'evicted' && player.status !== 'jury'
+    )
+    if (activePlayers.length <= 4) {
+      dispatch(clearForcedShock())
+      return false
+    }
+
+    const rng = mulberry32((game.seed ^ (DAY_START_SHOCK_RNG_SALT ^ 0x1f1f1f1f)) >>> 0)
+    const selection = buildDayStartShockSelection(
+      game.players,
+      rng,
+      game.players.filter((player) => player.isUser).map((player) => player.id)
+    )
+    if (!selection) {
+      dispatch(clearForcedShock())
+      return false
+    }
+
+    dispatch(
+      activateDayStartShock({
+        ...selection,
+        triggeredWeek: game.week,
+        source: 'debug',
+      })
+    )
+    dispatch(consumeForcedShock())
+    return true
+  }
+
+/**
+ * Attempt to activate the Battle Back / Jury Return twist after an elimination.
+ *
+ * Eligibility:
+ *  - `settings.sim.enableTwists` must be true
+ *  - twist has not been used this season (`!game.battleBack?.used`)
+ *  - at least 3 jurors currently in the game
+ *  - at least 5 active players remaining after the elimination
+ *  - current phase is `eviction_results`
+ *
+ * If eligible, rolls a probability check using `settings.sim.battleBackChance`
+ * (percentage, 0–100; default 30) and a seeded RNG derived from the game seed.
+ *
+ * Returns `true` if the twist was activated (overlay will appear); `false` otherwise.
+ */
+export const tryActivateBattleBack =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (isSeasonDirectorKillSwitched('battleBack')) return false
+    if (!settings.sim.enableTwists) return false
+    if (game.battleBack?.active) return false
+    if (game.phase !== 'eviction_results') return false
+
+    const plan = game.seasonDirectorPlan
+    if (plan) {
+      const policy = plan.policy.battleBack
+      if (!policy.enabled) return false
+
+      const active = game.players.filter(
+        (player) => player.status !== 'evicted' && player.status !== 'jury'
+      )
+      const jurors = getBattleBackEligiblePlayers(game.players)
+      const human = game.players.find((player) => player.isUser)
+      const humanIsJuror = human ? jurors.some((player) => player.id === human.id) : false
+      const humanWasPreTribunalEvicted = human?.status === 'evicted'
+
+      // A pre-Tribunal human elimination ends the playable season. Do not
+      // launch even an AI-only Battle Back behind the game-over flow.
+      if (humanWasPreTribunalEvicted) return false
+
+      // Battle Back is a Tribunal-only return mechanic. Pre-Tribunal players
+      // keep status "eliminated" and are never candidates. If the human reached
+      // the Tribunal and is later eliminated, their return opportunity takes
+      // precedence over the optional AI-only season selection.
+      if (
+        humanIsJuror &&
+        policy.human.guaranteedOpportunityAfterEviction &&
+        policy.human.maxGuaranteedOpportunitiesPerSeason > 0 &&
+        game.seasonDirectorHumanReturnUsed !== true &&
+        active.length >= policy.human.minimumActivePlayersAfterEviction &&
+        jurors.length >= policy.human.minimumCandidates
+      ) {
+        dispatch(
+          activateBattleBack({
+            candidates: jurors.map((player) => player.id),
+            week: game.week,
+            humanReturn: true,
+            source: 'human-guarantee',
+          })
+        )
+        return true
+      }
+
+      // If the human is already in the Tribunal pool but their guaranteed
+      // window is not viable yet, do not spend the one AI-only Battle Back.
+      if (humanIsJuror) return false
+      // Optional AI-only B2G never stacks onto another major shock from this
+      // game day. The human guarantee above is the deliberate retention exception.
+      if (game.twistActivatedThisWeek) return false
+      // An AI-only return can happen before the human guarantee, but never after
+      // the human opportunity has already been consumed.
+      if (
+        game.battleBack?.used ||
+        game.seasonDirectorAiBattleBackUsed === true ||
+        game.seasonDirectorHumanReturnUsed === true
+      ) {
+        return false
+      }
+      if (policy.aiOnly.maxPerSeason <= 0) return false
+      if (!plan.selections.aiBattleBack) return false
+      if (
+        !isWithinDirectorWindow(active.length, policy.aiOnly, plan.policy.pacing.finaleLockPlayers)
+      ) {
+        return false
+      }
+      if (jurors.length < policy.aiOnly.minimumCandidates) return false
+      if (!hasDirectorSpotlightRoom(game)) return false
+
+      dispatch(
+        activateBattleBack({
+          candidates: jurors.map((player) => player.id),
+          week: game.week,
+          source: 'ai-director',
+        })
+      )
+      return true
+    }
+
+    if (game.battleBack?.used) return false
+    if (game.twistActivatedThisWeek) return false
+
+    const jurors = getBattleBackEligiblePlayers(game.players)
+    const active = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+
+    if (jurors.length < 3) return false
+    if (active.length < 5) return false
+
+    const chance = settings.sim.battleBackChance ?? 30
+    const rng = mulberry32((game.seed ^ 0xba77eba0) >>> 0)
+    const roll = rng() * 100
+
+    if (roll >= chance) return false
+
+    const candidates = jurors.map((p) => p.id)
+    dispatch(activateBattleBack({ candidates, week: game.week, source: 'legacy-random' }))
+    return true
+  }
+
+export const tryActivatePendingForcedBattleBack =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (game.pendingForcedShock?.type !== 'battleBack') return false
+    if (game.phase !== 'eviction_results') return false
+    if (game.week < game.pendingForcedShock.earliestWeek) return false
+    if (game.battleBack?.used) return false
+    if (game.twistActivatedThisWeek) return false
+
+    const jurors = getBattleBackEligiblePlayers(game.players)
+    const active = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+
+    if (jurors.length < 3) return false
+    if (active.length < 5) return false
+
+    dispatch(
+      activateBattleBack({
+        candidates: jurors.map((p) => p.id),
+        week: game.week,
+        source: 'forced-debug',
+      })
+    )
+    dispatch(consumeForcedShock())
+    return true
+  }
+
+/**
+ * Attempt to activate the Double Elimination twist for the current week.
+ *
+ * Activation rules (elimination-count pacing):
+ *  - Does not attempt until at least 5 eliminations have happened this season.
+ *  - Does not attempt at final 5 or fewer alive players.
+ *  - Typically attempted at most once per eligible week by the main UI.
+ *  - Each eligible attempt rolls against `settings.sim.doubleEvictionChance` (default 35%).
+ *  - May activate up to 2 times per season; failed attempts do not consume a use.
+ *  - Cannot activate during the same week as a Special Veto.
+ *
+ * Eligibility:
+ *  - `settings.sim.enableTwists` must be true
+ *  - current phase must be `nominations`
+ *  - double elimination must not already be active this week
+ *  - no other twist has already activated this week (`twistActivatedThisWeek`)
+ *
+ * Returns `true` if the twist was activated; `false` otherwise.
+ */
+export const tryActivateDoubleEviction =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+
+    if (isCupidArrowTwistLocked(game)) return false
+    if (isSeasonDirectorKillSwitched('doubleElimination')) return false
+    if (game.pendingForcedShock) return false
+    if (!settings.sim.enableTwists) return false
+    if (game.phase !== 'nominations') return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.twistActivatedThisWeek) return false
+
+    const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+    const aliveCount = alive.length
+    const usedCount = game.doubleEviction?.usedCount ?? 0
+    const plan = game.seasonDirectorPlan
+
+    if (plan) {
+      const policy = plan.policy.doubleElimination
+      if (!policy.enabled || !plan.selections.doubleElimination) return false
+      if (usedCount >= policy.maxPerSeason) return false
+      if (!isWithinDirectorWindow(aliveCount, policy, plan.policy.pacing.finaleLockPlayers)) {
+        return false
+      }
+      if (!hasDirectorSpotlightRoom(game)) return false
+      dispatch(activateDoubleEviction())
+      return true
+    }
+
+    const evictionsSoFar = game.players.filter(
+      (p) => p.status === 'evicted' || p.status === 'jury'
+    ).length
+    if (evictionsSoFar < 5) return false
+    if (aliveCount <= 5) return false
+    if (usedCount >= 2) return false
+
+    const chance = settings.sim.doubleEvictionChance ?? 35
+    const rng = mulberry32((game.seed ^ 0xde1cef01) >>> 0)
+    const roll = rng() * 100
+
+    if (roll >= chance) return false
+
+    dispatch(activateDoubleEviction())
+    return true
+  }
+
+export const tryActivatePendingForcedDoubleEviction =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+
+    if (isCupidArrowTwistLocked(game)) return false
+    if (game.pendingForcedShock?.type !== 'doubleEviction') return false
+    if (game.phase !== 'nominations') return false
+    if (game.week < game.pendingForcedShock.earliestWeek) return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.twistActivatedThisWeek) return false
+
+    const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+    if (alive.length <= 5) return false
+    if (isVoxPopuliActive(game)) {
+      const evictionsSoFar = game.players.length - alive.length
+      if (evictionsSoFar < 5 || (game.doubleEviction?.usedCount ?? 0) >= 2) return false
+    }
+
+    dispatch(activateDoubleEviction())
+    dispatch(consumeForcedShock())
+    return true
+  }
+
+/**
+ * Attempt to activate a special safety twist after the POS winner is determined.
+ *
+ * Activation rules:
+ *  - `settings.sim.enableTwists` must be true
+ *  - current phase must be `pos_results`
+ *  - at least 5 eliminations must have happened this season
+ *  - at least 6 alive players (above final 5)
+ *  - not a Double Elimination week
+ *  - no other twist has already activated this week (`twistActivatedThisWeek`)
+ *  - the season must not already have had a special safety activated
+ *
+ * If eligible, rolls `settings.sim.specialSafetyChance` (0-100, default 25) and
+ * picks a random safety type deterministically.
+ *
+ * Note: the thunk/function name and `specialVeto` state key remain legacy internal
+ * identifiers for compatibility, even though the user-facing terminology is Safety.
+ *
+ * Returns `true` if activated, `false` otherwise.
+ */
+export const tryActivateSpecialVeto =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (isSeasonDirectorKillSwitched('specialSafety')) return false
+    if (game.pendingForcedShock) return false
+    if (!settings.sim.enableTwists) return false
+    if (game.phase !== 'pos_results') return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.twistActivatedThisWeek) return false
+    if (game.specialVeto?.seasonUsed) return false
+
+    const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+    const plan = game.seasonDirectorPlan
+
+    if (plan) {
+      const policy = plan.policy.specialSafety
+      const chosenType = plan.selections.specialSafetyType
+      if (!policy.enabled || !chosenType) return false
+      if (!isWithinDirectorWindow(alive.length, policy, plan.policy.pacing.finaleLockPlayers)) {
+        return false
+      }
+      if (!hasDirectorSpotlightRoom(game)) return false
+      dispatch(activateSpecialVeto({ type: chosenType, week: game.week }))
+      return true
+    }
+
+    if (alive.length <= 5) return false
+    const evictionsSoFar = game.players.filter(
+      (p) => p.status === 'evicted' || p.status === 'jury'
+    ).length
+    if (evictionsSoFar < 5) return false
+
+    const chance = settings.sim.specialSafetyChance ?? 25
+    const SPECIAL_VETO_RNG_SALT = 0x5e7c7074
+    const rngSpecial = mulberry32((game.seed ^ SPECIAL_VETO_RNG_SALT) >>> 0)
+    const roll = rngSpecial() * 100
+
+    if (roll >= chance) return false
+
+    const types: SpecialVetoType[] = ['vip', 'diamond', 'coup', 'spotlight']
+    const typeRoll = rngSpecial()
+    const chosenType = types[Math.floor(typeRoll * types.length)]
+
+    dispatch(activateSpecialVeto({ type: chosenType, week: game.week }))
+    return true
+  }
+
+export const tryActivatePendingForcedSpecialVeto =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+    const pending = game.pendingForcedShock
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (!pending || !isSpecialVetoType(pending.type)) return false
+    if (game.phase !== 'pos_results') return false
+    if (game.week < pending.earliestWeek) return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.twistActivatedThisWeek) return false
+
+    const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+    if (alive.length <= 5) return false
+
+    dispatch(activateSpecialVeto({ type: pending.type, week: game.week }))
+    dispatch(consumeForcedShock())
+    return true
+  }
+
+// ─── Democracia thunks ────────────────────────────────────────────────────────
+
+/**
+ * Attempt to automatically activate Democracia on the current day.
+ *
+ * Eligibility conditions:
+ *  - Simulation twists are enabled in settings
+ *  - Current day (week) is 5, 7, 9, or 10 (hard cutoff)
+ *  - Alive count is odd
+ *  - Democracia has not been used this season
+ *  - No other twist is already active this day
+ *  - Phase must be 'loh_comp_announcement' (the LOH competition window)
+ */
+export const tryActivateDemocracia =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game, settings } = getState()
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (!settings.sim.enableTwists) return false
+    if (game.democracia?.usedThisSeason) return false
+    if (game.phase !== 'loh_comp_announcement') return false
+    if (game.twistActivatedThisWeek) return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.specialVeto?.activeType != null) return false
+    if (game.democracia?.active) return false
+
+    // Day eligibility: 5, 7, 9 (with fallback up to 10)
+    const day = game.week
+    const ELIGIBLE_DAYS = [5, 7, 9, 10]
+    if (!ELIGIBLE_DAYS.includes(day)) return false
+    if (day > 10) return false
+
+    const alive = game.players.filter((p) => p.status !== 'evicted' && p.status !== 'jury')
+    if (alive.length % 2 === 0) return false // must be odd alive count
+
+    dispatch(activateDemocracia())
+    return true
+  }
+
+/**
+ * Attempt to activate a debug-forced Democracia shock.
+ *
+ * Bypasses normal day/alive-count eligibility checks.
+ * Fires when the pending forced shock type is 'democracia' and the
+ * current phase is 'loh_comp_announcement' at or after the earliest week.
+ */
+export const tryActivatePendingForcedDemocracia =
+  () =>
+  (dispatch: AppDispatch, getState: () => RootState): boolean => {
+    const { game } = getState()
+    const pending = game.pendingForcedShock
+
+    if (isCupidArrowTwistLocked(game) || isVoxPopuliTwistLocked(game)) return false
+    if (!pending || pending.type !== 'democracia') return false
+    if (game.phase !== 'loh_comp_announcement') return false
+    if (game.week < pending.earliestWeek) return false
+    if (game.twistActivatedThisWeek) return false
+    if (game.doubleEviction?.weekActive) return false
+    if (game.specialVeto?.activeType != null) return false
+    if (game.democracia?.active) return false
+
+    dispatch(activateDemocracia())
+    dispatch(consumeForcedShock())
+    return true
+  }

@@ -1,0 +1,401 @@
+/**
+ * Final3Ceremony — styles.
+ *
+ * Final Two reveal presentation. The power-holder reveal is shared with the
+ * Part 3 spectator broadcast so it cannot replay as a second screen.
+ */
+
+/* ── Final Two stage ─────────────────────────────────────────────────────── */
+
+.f3c-final-two {
+  position: fixed;
+  inset: 0;
+  z-index: 7050;
+  overflow: hidden;
+  color: #f9f2df;
+  text-align: center;
+  background-color: #090b16;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(5, 7, 18, 0.2),
+      transparent 33%,
+      rgba(5, 7, 18, 0.1) 62%,
+      rgba(5, 7, 18, 0.38)
+    ),
+    var(--final-two-hub-backdrop);
+  background-position: center, center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  animation: f3c-fade-in 0.45s ease both;
+}
+
+.f3c-final-two::after {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  content: '';
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(6, 8, 18, 0.28),
+      transparent 28%,
+      transparent 72%,
+      rgba(6, 8, 18, 0.28)
+    ),
+    linear-gradient(
+      180deg,
+      rgba(4, 5, 12, 0.12) 0%,
+      transparent 32%,
+      rgba(4, 5, 12, 0.08) 58%,
+      rgba(4, 5, 12, 0.62) 100%
+    );
+}
+
+.f3c-final-two__eyebrow {
+  position: absolute;
+  top: max(1rem, env(safe-area-inset-top, 0px));
+  left: 50%;
+  z-index: 2;
+  width: min(92%, 34rem);
+  margin: 0;
+  transform: translateX(-50%);
+  color: #ffd45b;
+  font-size: clamp(1rem, 3vw, 1.35rem);
+  font-weight: 800;
+  letter-spacing: 0.24em;
+}
+
+.f3c-final-two__players {
+  position: absolute;
+  top: 23%;
+  right: 2.5%;
+  bottom: 23%;
+  left: 2.5%;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 0;
+  gap: clamp(0.25rem, 1vw, 0.65rem);
+}
+
+.f3c-final-two__player {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  width: min(50%, 23rem);
+  height: 100%;
+  overflow: visible;
+  color: #fff7df;
+  font-size: clamp(1.05rem, 3vw, 1.5rem);
+  font-weight: 800;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6);
+  animation: f3c-slide-up 0.5s ease both;
+}
+
+.f3c-final-two__cutout {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+  transform: scale(1.08);
+  transform-origin: center bottom;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.55));
+}
+
+.f3c-final-two__figure {
+  position: relative;
+  z-index: 0;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.f3c-final-two__player:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.f3c-final-two__copy {
+  position: absolute;
+  right: 5%;
+  bottom: calc(var(--game-action-dock-height, 82px) + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  left: 5%;
+  z-index: 2;
+  max-width: 34rem;
+  margin: 0;
+  margin-inline: auto;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: clamp(0.95rem, 2.4vw, 1.15rem);
+  font-weight: 650;
+  line-height: 1.3;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
+}
+
+/* ── Keyframes ─────────────────────────────────────────────────────────────── */
+
+@keyframes f3c-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes f3c-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 620px) {
+  .f3c-final-two__players {
+    top: 24%;
+    right: 0.5%;
+    bottom: 24%;
+    left: 0.5%;
+    gap: 0;
+  }
+
+  .f3c-final-two__copy {
+    font-size: clamp(0.9rem, 3.5vw, 1.05rem);
+  }
+}
+
+@media (max-height: 720px) and (orientation: portrait) {
+  .f3c-final-two__players {
+    top: 21%;
+    bottom: 27%;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .f3c-final-two {
+    background-position:
+      center 18%,
+      center 18%;
+    background-size:
+      cover,
+      auto 165%;
+  }
+
+  .f3c-final-two__eyebrow {
+    top: max(0.5rem, env(safe-area-inset-top, 0px));
+    font-size: clamp(0.85rem, 2.2vw, 1rem);
+  }
+
+  .f3c-final-two__players {
+    top: 17%;
+    right: 10%;
+    bottom: 19%;
+    left: 10%;
+  }
+
+  .f3c-final-two__copy {
+    bottom: calc(var(--game-action-dock-height, 82px) + env(safe-area-inset-bottom, 0px) + 0.25rem);
+    font-size: 0.85rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .f3c-final-two,
+  .f3c-final-two__player {
+    animation: none;
+  }
+}
+
+/* Phase 4: Final Two returns to the same garden architecture and live monitor
+   as the preceding rounds. Only the cast and monitor script have changed. */
+.f3c-final-two {
+  background: #080811;
+  font-family: Montserrat, Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.f3c-final-two::after {
+  display: none;
+}
+
+.f3c-final-two__monitor-copy {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: clamp(5px, 1.5cqw, 9px);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.f3-venue__screen .f3c-final-two__eyebrow {
+  position: static;
+  top: auto;
+  left: auto;
+  width: 100%;
+  margin: 0;
+  color: #ffe6b8;
+  font-size: clamp(16px, 5.7cqw, 28px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  transform: none;
+}
+
+.f3-venue__screen .f3c-final-two__copy {
+  position: static;
+  inset: auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  color: #d4c7d3;
+  font-size: clamp(11px, 3cqw, 15px);
+  font-weight: 400;
+  line-height: 1.28;
+}
+
+.f3c-final-two__players {
+  position: absolute;
+  top: 49%;
+  right: auto;
+  /* Include the generated podium's below-floor depth as its width grows. */
+  bottom: calc(104px + min(8.5vw, 6.3dvh) + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 2%;
+  width: min(91%, calc(100dvh * 0.69));
+  height: auto;
+  min-height: 0;
+  transform: translateX(-50%);
+}
+
+.f3c-final-two__player {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  container-type: size;
+  flex: 1 1 0;
+  width: 48%;
+  min-width: 0;
+  height: 100%;
+  animation: f3c-slide-up 0.5s ease both;
+}
+
+.f3c-final-two__figure {
+  position: absolute;
+  z-index: 2;
+  inset: 0 0 18px;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  container-type: size;
+}
+
+.f3c-final-two__cutout {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-position: center bottom;
+  transform: scale(1.04);
+  transform-origin: center bottom;
+  filter: drop-shadow(0 13px 21px #000b);
+}
+
+.f3c-final-two__podium {
+  position: absolute;
+  z-index: 1;
+  bottom: 18px;
+  left: 9%;
+  width: 82%;
+  height: auto;
+  aspect-ratio: 8 / 3;
+  object-fit: contain;
+  transform: translateY(58%);
+}
+
+.f3c-final-two__name {
+  position: absolute;
+  z-index: 3;
+  right: -4%;
+  /* Platform width × height ratio × its below-floor fraction, then 8px gap. */
+  top: calc(100% - 10px + 17.835cqw);
+  bottom: auto;
+  left: -4%;
+  display: block;
+  padding-inline: 3px;
+  color: #fff6e7;
+  font-size: clamp(11px, 2.8vw, 15px);
+  font-weight: 600;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  text-shadow:
+    0 2px 5px #080811,
+    0 0 14px #000;
+}
+
+@media (max-width: 620px) {
+  .f3c-final-two__players {
+    top: 49%;
+    right: auto;
+    bottom: calc(104px + min(8.5vw, 6.3dvh) + env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    width: min(94%, calc(100dvh * 0.7));
+    gap: 1%;
+  }
+}
+
+@media (max-height: 720px) and (orientation: portrait) {
+  .f3c-final-two__players {
+    top: 48%;
+    bottom: calc(104px + min(8.5vw, 6.3dvh) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .f3c-final-two {
+    background: #080811;
+  }
+  .f3c-final-two__players {
+    top: 49%;
+    right: auto;
+    bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    width: min(94%, calc(100dvh * 0.7));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .f3c-final-two__player {
+    animation: none;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .f3c-final-two__players {
+    top: 17%;
+    bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+    left: 73%;
+    width: 46%;
+    height: auto;
+  }
+
+  .f3c-final-two__cutout {
+    transform: scale(1);
+  }
+}

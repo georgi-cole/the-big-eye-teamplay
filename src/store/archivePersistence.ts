@@ -1,0 +1,56 @@
+import { getDurableItem, removeDurableItem, setDurableItem } from './durablePersistence'
+import type { SeasonArchive } from './seasonArchive'
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+
+/**
+ * Set to `false` to disable durable persistence entirely.
+ * When false, `saveSeasonArchives` is a no-op and `loadSeasonArchives`
+ * always returns undefined — making it easy to replace with a server-backed
+ * persistence layer without touching call-sites.
+ */
+// eslint-disable-next-line prefer-const
+export let enabled = true
+
+export const DEFAULT_ARCHIVE_KEY = 'bbmobilenew:seasonArchives'
+
+// ─── Persistence helpers ──────────────────────────────────────────────────────
+
+/**
+ * Persist `archives` to durable storage under `key`.
+ * Silently swallows errors (quota exceeded, private-browsing restrictions, etc.)
+ * so the calling code never has to guard against storage failures.
+ */
+export function saveSeasonArchives(key: string, archives: SeasonArchive[]): void {
+  if (!enabled) return
+  try {
+    setDurableItem(key, JSON.stringify(archives))
+  } catch {
+    // Storage unavailable or quota exceeded — ignore.
+  }
+}
+
+/**
+ * Load season archives from durable storage under `key`.
+ * Returns `undefined` when persistence is disabled, the key is not present,
+ * or the stored value cannot be parsed as JSON.
+ */
+export function loadSeasonArchives(key: string): SeasonArchive[] | undefined {
+  if (!enabled) return undefined
+  try {
+    const raw = getDurableItem(key)
+    if (raw === null) return undefined
+    return JSON.parse(raw) as SeasonArchive[]
+  } catch {
+    return undefined
+  }
+}
+
+/** Remove a profile-scoped archive payload when that profile is deleted. */
+export function clearSeasonArchives(key: string): void {
+  try {
+    removeDurableItem(key)
+  } catch {
+    // Best-effort cleanup when storage is unavailable.
+  }
+}

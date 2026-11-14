@@ -1,0 +1,36 @@
+import { execFileSync } from 'node:child_process'
+import { chmod, mkdir, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const scriptDir = dirname(fileURLToPath(import.meta.url))
+const repoRoot = dirname(scriptDir)
+const gitDir = join(repoRoot, '.git')
+
+const hook = `#!/bin/sh
+set -eu
+
+echo "Running PR preflight before push..."
+npm run check:pr
+`
+
+try {
+  await stat(gitDir)
+} catch (error) {
+  if (error?.code === 'ENOENT') {
+    console.log('Git metadata is unavailable; skipping local pre-push hook installation.')
+    process.exit(0)
+  }
+  throw error
+}
+
+const hooksDir = execFileSync(
+  'git',
+  ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+  { cwd: repoRoot, encoding: 'utf8' }
+).trim()
+const hookPath = join(hooksDir, 'pre-push')
+await mkdir(hooksDir, { recursive: true })
+await writeFile(hookPath, hook, 'utf8')
+await chmod(hookPath, 0o755)
+console.log('Installed .git/hooks/pre-push -> npm run check:pr')

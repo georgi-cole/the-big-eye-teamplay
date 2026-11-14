@@ -1,0 +1,705 @@
+import type { AiGameIdentity, AiIdentityMode } from '../ai/aiGameIdentity'
+import type { MinigameAiModel } from '../ai/competition/types'
+import type { Player } from '../types'
+import type { IntelligenceDelivery, SocialActionLogEntry } from './types'
+import type {
+  RealityBelief,
+  RealityDomainState,
+  RealityFact,
+  RealityMemory,
+  RealityMemorySource,
+} from './reality/types'
+import { canActorKnowFact } from './reality/knowledge'
+import { getRealityAllianceKnowledgeView } from './reality/allianceKnowledge'
+import {
+  createIntelligenceEligibility,
+  type IntelligenceEligibilityPlayer,
+} from './intelligenceEligibility'
+
+export type CompetitionIntent = 'compete' | 'conserve' | 'throw'
+export type { IntelligenceDelivery } from './types'
+
+export interface IntelLeadView {
+  factId: string
+  propositionType: string
+  text: string
+  source: string
+  confidence: 'Unverified' | 'Credible' | 'Confirmed'
+  confidenceValue: number
+  day: number
+  subjectIds: string[]
+}
+
+type CompetitionIntentContext = {
+  mode: AiIdentityMode
+  day: number
+  phase: string
+  prizeType?: string
+  playerStatus?: string
+  forcedWinner?: boolean
+}
+
+const SUPPORTED_INTEL_PROPOSITIONS = new Set([
+  'COMPETITION_THROW_SUSPICION',
+  'SECRET_MEETING',
+  'ROMANTIC_MOMENT',
+  'SECRET_ALLIANCE',
+  'ALLIANCE_PUBLIC_CLAIM',
+  'ALLIANCE_EXPOSED',
+  'TARGETING',
+  'ALLIANCE_FRACTURE',
+])
+
+const DURABLE_ALLIANCE_ROSTER_PROPOSITIONS = new Set([
+  'SECRET_ALLIANCE',
+  'ALLIANCE_PUBLIC_CLAIM',
+  'ALLIANCE_EXPOSED',
+])
+
+function isDurableAllianceRosterFact(domain: RealityDomainState, fact: RealityFact): boolean {
+  return Boolean(
+    fact.objectId &&
+    domain.alliances[fact.objectId] &&
+    DURABLE_ALLIANCE_ROSTER_PROPOSITIONS.has(fact.propositionType)
+  )
+}
+
+function recipientAlreadyKnowsAllianceRoster(
+  view: ReturnType<typeof getRealityAllianceKnowledgeView>,
+  recipientAllianceBeliefs: readonly RealityBelief[],
+  fact: RealityFact,
+  sourceConfidence: number
+): boolean {
+  const knownIds = new Set([...view.knownMemberIds, ...view.historicalMemberIds])
+  const viewCoversRoster =
+    fact.subjectIds.every((id) => knownIds.has(id)) && view.confidence + 0.08 >= sourceConfidence
+  if (viewCoversRoster) return true
+
+  return recipientAllianceBeliefs.some(
+    (belief) =>
+      belief.status !== 'DISPROVEN' &&
+      belief.status !== 'STALE' &&
+      belief.objectId === fact.objectId &&
+      belief.confidence + 0.08 >= sourceConfidence &&
+      fact.subjectIds.every((id) => belief.subjectIds.includes(id))
+  )
+}
+
+function hash(source: string): number {
+  let value = 2166136261
+  for (const character of source) {
+    value ^= character.charCodeAt(0)
+    value = Math.imul(value, 16777619)
+  }
+  return value >>> 0
+}
+
+function seededUnit(seed: number, salt: string): number {
+  let value = (seed ^ hash(salt)) >>> 0
+  value += 0x6d2b79f5
+  value = Math.imul(value ^ (value >>> 15), value | 1)
+  value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+}
+
+function throwChance(identity?: AiGameIdentity): number {
+  if (!identity) return 0.035
+  const byArchetype: Partial<Record<AiGameIdentity['archetype'], number>> = {
+    active_floater: 0.2,
+    strategic_operator: 0.12,
+    puppet_master: 0.14,
+    opportunist: 0.1,
+    double_agent: 0.11,
+    underdog_survivor: 0.07,
+    social_butterfly: 0.06,
+    romantic_loyalist: 0.07,
+    aggressive_competitor: 0.005,
+    clutch_competitor: 0.01,
+  }
+  let chance = byArchetype[identity.archetype] ?? 0.04
+  if (identity.temperament === 'impulsive') chance += 0.035
+  if (identity.temperament === 'secretive') chance += 0.02
+  if (identity.temperament === 'paranoid') chance -= 0.02
+  return Math.max(0, Math.min(0.24, chance))
+}
+
+/** Decide a hidden competition intention without touching Surveyeval. */
+export function decideCompetitionIntent(
+  seed: number,
+  playerId: string,
+  identity: AiGameIdentity | undefined,
+  context: CompetitionIntentContext
+): CompetitionIntent {
+  if (context.mode === 'survival' || context.forcedWinner || context.day < 3) return 'compete'
+  if (context.playerStatus?.includes('nominated') && context.prizeType === 'POS') return 'compete'
+  // Vox makes last place dangerous, so deliberately tanking its immunity contest is irrational.
+  if (context.mode === 'vox_populi' && context.prizeType === 'LOH') return 'compete'
+
+  const draw = seededUnit(seed, `${playerId}:${context.day}:${context.phase}:competition-intent`)
+  const chance = throwChance(identity) * (context.mode === 'vox_populi' ? 0.22 : 1)
+  if (draw < chance) return 'throw'
+  if (
+    draw < chance + 0.08 &&
+    identity &&
+    ['active_floater', 'strategic_operator', 'puppet_master', 'opportunist'].includes(
+      identity.archetype
+    )
+  ) {
+    return 'conserve'
+  }
+  return 'compete'
+}
+
+/** Apply an intention to a simulated score while respecting score direction and model bounds. */
+export function applyCompetitionIntentToScore(
+  score: number,
+  model: MinigameAiModel,
+  intent: CompetitionIntent,
+  seed: number,
+  playerId: string
+): number {
+  if (intent === 'compete' || !Number.isFinite(score)) return score
+  const draw = seededUnit(seed, `${playerId}:${model.key}:${intent}:performance`)
+  const factor = intent === 'throw' ? 0.24 + draw * 0.24 : 0.78 + draw * 0.14
+  const minimum = model.minScore ?? 0
+  const maximum = model.maxScore
+  if (model.scoreDirection === 'lower-is-better') {
+    const ceiling = maximum ?? Math.max(minimum + 1, Math.abs(score) * 2.2)
+    return Math.round(Math.max(minimum, Math.min(ceiling, ceiling - (ceiling - score) * factor)))
+  }
+  const adjusted = minimum + (score - minimum) * factor
+  return Math.round(
+    typeof maximum === 'number'
+      ? Math.max(minimum, Math.min(maximum, adjusted))
+      : Math.max(minimum, adjusted)
+  )
+}
+
+function playerName(players: readonly Pick<Player, 'id' | 'name'>[], id: string | undefined) {
+  return players.find((player) => player.id === id)?.name ?? id ?? 'someone'
+}
+
+function namesForPair(fact: RealityFact, players: readonly Pick<Player, 'id' | 'name'>[]) {
+  return fact.subjectIds.slice(0, 2).map((id) => playerName(players, id))
+}
+
+function compactGroupNames(
+  fact: RealityFact,
+  players: readonly Pick<Player, 'id' | 'name'>[],
+  maximum = 3
+): string {
+  const names = fact.subjectIds.map((id) => playerName(players, id))
+  if (names.length <= maximum) return names.join(', ')
+  const hiddenCount = names.length - maximum
+  return `${names.slice(0, maximum).join(', ')} and ${hiddenCount} ${hiddenCount === 1 ? 'other' : 'others'}`
+}
+
+export function formatIntelLeadText(
+  fact: RealityFact,
+  players: readonly Pick<Player, 'id' | 'name'>[]
+): string {
+  const subject = playerName(players, fact.subjectIds[0])
+  const [first, second] = namesForPair(fact, players)
+  const variation = (lines: readonly string[]) => lines[hash(fact.id) % lines.length] ?? lines[0]
+  switch (fact.propositionType) {
+    case 'COMPETITION_THROW_SUSPICION':
+      return variation([
+        `${subject} may be deliberately hiding their competition strength.`,
+        `${subject}'s recent performance looks quieter than their ability suggests.`,
+        `People are questioning whether ${subject} is saving their real competition game for later.`,
+      ])
+    case 'SECRET_MEETING':
+      return variation([
+        `${first} and ${second} were seen having a private conversation.`,
+        `${first} and ${second} slipped away from the group for a quiet talk.`,
+        `${first} and ${second} have been finding reasons to compare notes in private.`,
+      ])
+    case 'ROMANTIC_MOMENT':
+      return variation([
+        `${first} and ${second} shared a moment that looked more than strategic.`,
+        `The chemistry between ${first} and ${second} is starting to draw attention.`,
+        `${first} and ${second} had a private moment the Hub may not ignore.`,
+      ])
+    case 'SECRET_ALLIANCE': {
+      const names = compactGroupNames(fact, players)
+      return variation([
+        `${names} may have made a private agreement.`,
+        `${names} appear to be quietly building something together.`,
+        `A pattern suggests ${names} are coordinating more closely than they admit.`,
+      ])
+    }
+    case 'ALLIANCE_PUBLIC_CLAIM':
+      return `${compactGroupNames(fact, players)} have been publicly linked as an alliance, though the full picture is still unclear.`
+    case 'ALLIANCE_EXPOSED': {
+      const names = compactGroupNames(fact, players)
+      const allianceName = typeof fact.value === 'string' ? fact.value : ''
+      return allianceName
+        ? `${allianceName} has been exposed: ${names} are tied to the pact.`
+        : `A hidden alliance has been exposed involving ${names}.`
+    }
+    case 'TARGETING':
+      return `${subject} may be targeting ${playerName(players, fact.objectId)}.`
+    case 'ALLIANCE_FRACTURE':
+      return variation([
+        `${first} and ${second}'s working relationship may be breaking down.`,
+        `${first} and ${second} no longer seem to be reading from the same playbook.`,
+        `Something has put strain on the trust between ${first} and ${second}.`,
+      ])
+    default:
+      return 'A new lead is circulating in the hub.'
+  }
+}
+
+export function formatFauxTvWhisper(
+  fact: RealityFact,
+  players: readonly Pick<Player, 'id' | 'name'>[]
+): string {
+  const subject = playerName(players, fact.subjectIds[0])
+  const [first, second] = namesForPair(fact, players)
+  switch (fact.propositionType) {
+    case 'COMPETITION_THROW_SUSPICION':
+      return `HUB WHISPERS — After another unusually quiet competition from ${subject}, players are wondering whether they are hiding their strength.`
+    case 'SECRET_MEETING':
+      return `HUB WHISPERS — ${first} and ${second} have been finding reasons to speak away from the group.`
+    case 'ROMANTIC_MOMENT':
+      return `HUB WHISPERS — A private moment between ${first} and ${second} did not go unnoticed.`
+    case 'SECRET_ALLIANCE':
+      return `HUB WHISPERS — The growing closeness between ${first} and ${second} is beginning to attract attention.`
+    case 'ALLIANCE_PUBLIC_CLAIM':
+      return `HUB EXPOSED — ${first} and ${second} have been publicly linked, but the full alliance picture remains unclear.`
+    case 'ALLIANCE_EXPOSED': {
+      const names = compactGroupNames(fact, players)
+      const allianceName = typeof fact.value === 'string' ? fact.value : ''
+      return allianceName
+        ? `HUB EXPOSED — ${allianceName} is no longer secret. ${names} are linked to the alliance.`
+        : `HUB EXPOSED — A hidden alliance has surfaced: ${names}.`
+    }
+    case 'TARGETING':
+      return `HUB WHISPERS — ${subject}'s name has been linked to a quiet campaign against ${playerName(players, fact.objectId)}.`
+    case 'ALLIANCE_FRACTURE':
+      return `HUB WHISPERS — The trust between ${first} and ${second} may be starting to crack.`
+    default:
+      return `HUB WHISPERS — ${formatIntelLeadText(fact, players)}`
+  }
+}
+
+export function formatIncomingIntel(
+  fact: RealityFact,
+  players: readonly Pick<Player, 'id' | 'name'>[],
+  humanId: string
+): string {
+  const subject = playerName(players, fact.subjectIds[0])
+  if (fact.propositionType === 'TARGETING' && fact.objectId === humanId) {
+    return `I keep hearing your name in ${subject}'s plans. I cannot prove it yet, but I thought you should know.`
+  }
+  if (fact.propositionType === 'COMPETITION_THROW_SUSPICION') {
+    return `People are starting to compare notes about ${subject}'s competition performances. Some think they are deliberately holding back.`
+  }
+  return `I heard something you may want to know: ${formatIntelLeadText(fact, players)}`
+}
+
+export function formatHistoricalIntel(
+  fact: RealityFact,
+  players: readonly { id: string; name?: string }[]
+): string {
+  const namedPlayers = players.map((player) => ({ ...player, name: player.name ?? player.id }))
+  const [first, second] = namesForPair(fact, namedPlayers)
+  const subject = playerName(namedPlayers, fact.subjectIds[0])
+  const object = playerName(namedPlayers, fact.objectId)
+  const day = `Day ${fact.day}`
+
+  switch (fact.propositionType) {
+    case 'TARGETING':
+      return `${day}: ${subject}'s plan was reported to target ${object}.`
+    case 'COMPETITION_THROW_SUSPICION':
+      return `${day}: People were comparing notes about ${subject}'s competition performances; some suspected they had been holding back.`
+    case 'SECRET_MEETING':
+      return `${day}: ${first} and ${second} were reported to have met privately.`
+    case 'ROMANTIC_MOMENT':
+      return `${day}: ${first} and ${second} were reported to have shared a private moment.`
+    case 'SECRET_ALLIANCE':
+      return `${day}: ${compactGroupNames(fact, namedPlayers)} were reported to have made a private pact.`
+    case 'ALLIANCE_PUBLIC_CLAIM':
+      return `${day}: ${compactGroupNames(fact, namedPlayers)} were publicly linked, though the full group was unclear.`
+    case 'ALLIANCE_EXPOSED': {
+      const allianceName = typeof fact.value === 'string' ? fact.value : 'A hidden alliance'
+      return `${day}: ${allianceName} surfaced, linking ${compactGroupNames(fact, namedPlayers)}.`
+    }
+    case 'ALLIANCE_FRACTURE':
+      return `${day}: Trust between ${first} and ${second} was reported to be weakening.`
+    default:
+      return `${day}: The lead concerned ${compactGroupNames(fact, namedPlayers)}.`
+  }
+}
+
+function confidenceLabel(value: number): IntelLeadView['confidence'] {
+  if (value >= 0.88) return 'Confirmed'
+  if (value >= 0.64) return 'Credible'
+  return 'Unverified'
+}
+
+function sourceLabel(memory: RealityMemory | undefined): string {
+  switch (memory?.sourceType) {
+    case 'DIRECT':
+      return 'Direct conversation'
+    case 'WITNESSED':
+      return 'You witnessed it'
+    case 'OFFICIAL':
+      return 'Official'
+    case 'INFERRED':
+      return 'Pattern noticed'
+    case 'HEARSAY':
+    default:
+      return 'Hub rumour'
+  }
+}
+
+export function getIntelLeadViews(
+  domain: RealityDomainState,
+  ownerId: string,
+  players: readonly (Pick<Player, 'id' | 'name' | 'status'> & IntelligenceEligibilityPlayer)[],
+  currentDay: number
+): IntelLeadView[] {
+  const eligibility = createIntelligenceEligibility(players)
+  const activeIds = new Set(
+    players
+      .filter((player) => player.status !== 'evicted' && player.status !== 'jury')
+      .map((player) => player.id)
+  )
+  const knownPlayerIds = new Set(players.map((player) => player.id))
+  return Object.values(domain.beliefsByOwner[ownerId] ?? {})
+    .filter((belief) => belief.status !== 'DISPROVEN' && belief.status !== 'STALE')
+    .map((belief) => ({ belief, fact: domain.facts[belief.id.replace(`belief:${ownerId}:`, '')] }))
+    .filter((entry): entry is { belief: RealityBelief; fact: RealityFact } => {
+      if (!entry.fact || !SUPPORTED_INTEL_PROPOSITIONS.has(entry.fact.propositionType)) {
+        return false
+      }
+      const durableAllianceFact = isDurableAllianceRosterFact(domain, entry.fact)
+      if (!durableAllianceFact && currentDay - entry.belief.lastUpdatedDay > 4) return false
+      if (!durableAllianceFact && !eligibility.isFactEligible(entry.fact)) return false
+      const validSubjectIds = durableAllianceFact ? knownPlayerIds : activeIds
+      const subjectsKnown = entry.fact.subjectIds.every((id) => validSubjectIds.has(id))
+      const objectKnown = durableAllianceFact
+        ? Boolean(entry.fact.objectId && domain.alliances[entry.fact.objectId])
+        : !entry.fact.objectId || activeIds.has(entry.fact.objectId)
+      return subjectsKnown && objectKnown
+    })
+    .map(({ belief, fact }) => {
+      const memory = (domain.memoriesByOwner[ownerId] ?? []).find((entry) =>
+        belief.supportingMemoryIds.includes(entry.id)
+      )
+      return {
+        factId: fact.id,
+        propositionType: fact.propositionType,
+        text: formatIntelLeadText(fact, players),
+        source: sourceLabel(memory),
+        confidence: confidenceLabel(belief.confidence),
+        confidenceValue: belief.confidence,
+        day: fact.day,
+        subjectIds: [...fact.subjectIds],
+      }
+    })
+    .sort((left, right) => right.confidenceValue - left.confidenceValue || right.day - left.day)
+}
+export function makeIntelMemory(input: {
+  ownerId: string
+  fact: RealityFact
+  sourceType: RealityMemorySource
+  sourceChain: string[]
+  confidence: number
+  day: number
+  phase: string
+}): RealityMemory {
+  return {
+    id: `memory:intel:${input.ownerId}:${input.fact.id}:${input.day}:${hash(input.sourceChain.join('|'))}`,
+    ownerId: input.ownerId,
+    eventId: input.fact.sourceEventId,
+    day: input.day,
+    phase: input.phase,
+    participantIds: [...input.fact.participantIds],
+    sourceType: input.sourceType,
+    sourceChain: [...new Set(input.sourceChain)],
+    confidence: Math.max(0.05, Math.min(1, input.confidence)),
+    importance: 0.72,
+    surprise: 0.62,
+    emotionalValence: input.fact.propositionType === 'ROMANTIC_MOMENT' ? 0.2 : -0.12,
+    emotionalIntensity: 0.48,
+    secrecy:
+      input.fact.visibility === 'PAIR_ONLY' || input.fact.visibility === 'PRIVATE' ? 0.84 : 0.4,
+    strategicRelevance: input.fact.propositionType === 'ROMANTIC_MOMENT' ? 0.48 : 0.82,
+    visibility: input.fact.visibility,
+    tags: ['intel', input.fact.propositionType.toLowerCase()],
+    relatedPromiseIds: [],
+    relatedSecretIds: [],
+    recallStrength: 0.86,
+  }
+}
+
+export function selectIntelFactForActor(
+  domain: RealityDomainState,
+  actorId: string,
+  recipientId: string,
+  currentDay: number,
+  players: readonly IntelligenceEligibilityPlayer[]
+): { fact: RealityFact; belief: RealityBelief } | null {
+  const recipientBeliefs = domain.beliefsByOwner[recipientId] ?? {}
+  const eligibility = createIntelligenceEligibility(players)
+  const recipientBeliefsByAlliance = new Map<string, RealityBelief[]>()
+  for (const belief of Object.values(recipientBeliefs)) {
+    if (!belief.objectId) continue
+    const allianceBeliefs = recipientBeliefsByAlliance.get(belief.objectId) ?? []
+    allianceBeliefs.push(belief)
+    recipientBeliefsByAlliance.set(belief.objectId, allianceBeliefs)
+  }
+  const recipientAllianceViews = new Map<
+    string,
+    ReturnType<typeof getRealityAllianceKnowledgeView>
+  >()
+  const candidates = Object.values(domain.beliefsByOwner[actorId] ?? {})
+    .map((belief) => ({
+      belief,
+      fact: domain.facts[belief.id.replace(`belief:${actorId}:`, '')],
+    }))
+    .filter((entry): entry is { belief: RealityBelief; fact: RealityFact } => {
+      if (
+        !entry.fact ||
+        !SUPPORTED_INTEL_PROPOSITIONS.has(entry.fact.propositionType) ||
+        entry.belief.status !== 'ACTIVE'
+      ) {
+        return false
+      }
+      const durableAllianceFact = isDurableAllianceRosterFact(domain, entry.fact)
+      const alliance = entry.fact.objectId ? domain.alliances[entry.fact.objectId] : undefined
+      const actorHasLeftAlliance =
+        durableAllianceFact &&
+        Boolean(
+          alliance && (alliance.status === 'DISSOLVED' || !alliance.memberIds.includes(actorId))
+        )
+      return (
+        (durableAllianceFact || eligibility.isFactEligible(entry.fact)) &&
+        (durableAllianceFact || currentDay - entry.belief.lastUpdatedDay <= 3) &&
+        (!entry.fact.subjectIds.includes(actorId) || actorHasLeftAlliance) &&
+        (entry.fact.objectId !== actorId || durableAllianceFact)
+      )
+    })
+    .filter(({ fact, belief }) => {
+      if (canActorKnowFact(fact, recipientId)) return false
+      const recipientBelief = recipientBeliefs[`belief:${recipientId}:${fact.id}`]
+      if (recipientBelief?.sourceChain.includes(actorId)) return false
+      if (recipientBelief && recipientBelief.confidence + 0.08 >= belief.confidence) return false
+      if (isDurableAllianceRosterFact(domain, fact) && fact.objectId) {
+        let view = recipientAllianceViews.get(fact.objectId)
+        if (!view) {
+          view = getRealityAllianceKnowledgeView(domain, fact.objectId, recipientId)
+          recipientAllianceViews.set(fact.objectId, view)
+        }
+        if (
+          recipientAlreadyKnowsAllianceRoster(
+            view,
+            recipientBeliefsByAlliance.get(fact.objectId) ?? [],
+            fact,
+            belief.confidence
+          )
+        ) {
+          return false
+        }
+      }
+      return true
+    })
+    .sort((left, right) => {
+      const leftRelevant =
+        left.fact.objectId === recipientId || left.fact.subjectIds.includes(recipientId)
+      const rightRelevant =
+        right.fact.objectId === recipientId || right.fact.subjectIds.includes(recipientId)
+      return (
+        Number(rightRelevant) - Number(leftRelevant) ||
+        right.belief.confidence - left.belief.confidence
+      )
+    })
+  return candidates[0] ?? null
+}
+
+export function selectDiscoverableFact(
+  domain: RealityDomainState,
+  actorId: string,
+  currentDay: number,
+  deliveredFactIds: ReadonlySet<string>,
+  players: readonly IntelligenceEligibilityPlayer[],
+  observableOnly = false,
+  preferredFactId?: string
+): RealityFact | null {
+  const eligibility = createIntelligenceEligibility(players)
+  const candidates = preferredFactId
+    ? [domain.facts[preferredFactId]].filter((fact): fact is RealityFact => Boolean(fact))
+    : Object.values(domain.facts)
+  return (
+    candidates
+      .filter((fact) => {
+        const belief = domain.beliefsByOwner[actorId]?.[`belief:${actorId}:${fact.id}`]
+        const alreadyPrivatelyEntitled =
+          (fact.visibility === 'PRIVATE' || fact.visibility === 'PAIR_ONLY') &&
+          canActorKnowFact(fact, actorId)
+        return (
+          SUPPORTED_INTEL_PROPOSITIONS.has(fact.propositionType) &&
+          eligibility.isFactEligible(fact) &&
+          currentDay - fact.day <= 4 &&
+          !deliveredFactIds.has(fact.id) &&
+          !fact.subjectIds.includes(actorId) &&
+          !alreadyPrivatelyEntitled &&
+          (!belief || belief.status === 'DISPROVEN' || belief.status === 'STALE') &&
+          (!observableOnly ||
+            fact.witnessIds.length > 0 ||
+            fact.visibility === 'GROUP_VISIBLE' ||
+            fact.visibility === 'HOUSE_PUBLIC' ||
+            fact.visibility === 'CEREMONY_PUBLIC')
+        )
+      })
+      .sort((left, right) => right.day - left.day || left.id.localeCompare(right.id))[0] ?? null
+  )
+}
+/** Select the single new lead an observation action is allowed to deliver. */
+export function selectIntelActionFact(
+  domain: RealityDomainState,
+  deliveries: readonly IntelligenceDelivery[] | undefined,
+  actorId: string,
+  currentDay: number,
+  actionId: string,
+  players: readonly IntelligenceEligibilityPlayer[],
+  preferredFactId?: string
+): RealityFact | null {
+  if (
+    currentDay < 3 ||
+    !['observe', 'read_the_room', 'snoop_around', 'eavesdrop'].includes(actionId)
+  ) {
+    return null
+  }
+  const actorDeliveries = deliveries ?? []
+  const privateDeliveriesToday = actorDeliveries.filter(
+    (item) =>
+      item.day === currentDay &&
+      item.recipientId === actorId &&
+      (item.channel === 'social_action' || item.channel === 'incoming')
+  ).length
+  if (privateDeliveriesToday >= 2) return null
+  const deliveredFactIds = new Set(
+    actorDeliveries
+      .filter((item) => item.channel === 'social_action' && item.recipientId === actorId)
+      .map((item) => item.factId)
+  )
+  return selectDiscoverableFact(
+    domain,
+    actorId,
+    currentDay,
+    deliveredFactIds,
+    players,
+    actionId === 'observe' || actionId === 'read_the_room',
+    preferredFactId
+  )
+}
+
+export function selectFauxTvFact(
+  domain: RealityDomainState,
+  currentDay: number,
+  deliveredFactIds: ReadonlySet<string>,
+  players: readonly IntelligenceEligibilityPlayer[]
+): RealityFact | null {
+  const eligibility = createIntelligenceEligibility(players)
+  return (
+    Object.values(domain.facts)
+      .filter(
+        (fact) =>
+          SUPPORTED_INTEL_PROPOSITIONS.has(fact.propositionType) &&
+          eligibility.isFactEligible(fact) &&
+          fact.witnessIds.length > 0 &&
+          currentDay - fact.day <= 3 &&
+          !deliveredFactIds.has(fact.id)
+      )
+      .sort((left, right) => right.day - left.day || left.id.localeCompare(right.id))[0] ?? null
+  )
+}
+
+function pickWitnesses(
+  entry: SocialActionLogEntry,
+  players: readonly Player[],
+  maximum: number
+): string[] {
+  const actor = players.find((player) => player.id === entry.actorId)
+  const secrecyPenalty = actor?.aiGameIdentity?.temperament === 'secretive' ? 0.28 : 0
+  const chance = Math.max(0.12, 0.56 - secrecyPenalty)
+  const candidates = players
+    .filter(
+      (player) =>
+        player.status !== 'evicted' &&
+        player.status !== 'jury' &&
+        player.id !== entry.actorId &&
+        player.id !== entry.targetId &&
+        player.id !== entry.subjectId
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))
+  return candidates
+    .filter(
+      (player) =>
+        seededUnit(entry.timestamp, `${entry.actionId}:${entry.actorId}:${player.id}`) < chance
+    )
+    .slice(0, maximum)
+    .map((player) => player.id)
+}
+
+export function buildIntelFactFromSocialAction(
+  entry: SocialActionLogEntry,
+  players: readonly Player[],
+  phase: string
+): RealityFact | null {
+  if (entry.outcome !== 'success' || entry.actorId === entry.targetId) return null
+  let propositionType: string | null = null
+  let subjectIds: string[] = [entry.actorId, entry.targetId]
+  let objectId: string | undefined
+  let witnessMaximum = 1
+
+  if (['proposeAlliance', 'ally', 'ride_or_die'].includes(entry.actionId)) {
+    propositionType = 'SECRET_ALLIANCE'
+  } else if (
+    [
+      'flirt',
+      'private_flirt',
+      'late_night_talk',
+      'cuddle',
+      'kiss_under_covers',
+      'pool_makeout',
+      'spend_night',
+    ].includes(entry.actionId)
+  ) {
+    propositionType = 'ROMANTIC_MOMENT'
+    witnessMaximum = 2
+  } else if (['whisper', 'share_intel', 'trade_secrets'].includes(entry.actionId)) {
+    propositionType = 'SECRET_MEETING'
+  } else if (entry.actionId === 'pitch_target' && entry.subjectId) {
+    propositionType = 'TARGETING'
+    subjectIds = [entry.actorId]
+    objectId = entry.subjectId
+    witnessMaximum = 2
+  } else if (['betray', 'break_alliance', 'break_bromance'].includes(entry.actionId)) {
+    propositionType = 'ALLIANCE_FRACTURE'
+    witnessMaximum = 2
+  }
+  if (!propositionType) return null
+
+  const witnesses = pickWitnesses(entry, players, witnessMaximum)
+  const factId = `fact:intel:${entry.week ?? 1}:${entry.actionId}:${entry.actorId}:${entry.targetId}:${entry.timestamp}`
+  return {
+    id: factId,
+    propositionType,
+    subjectIds,
+    ...(objectId ? { objectId } : {}),
+    value: true,
+    day: entry.week ?? 1,
+    phase: entry.phase ?? phase,
+    visibility: propositionType === 'TARGETING' ? 'PRIVATE' : 'PAIR_ONLY',
+    participantIds: [...new Set([entry.actorId, entry.targetId])],
+    witnessIds: witnesses,
+    viewerVisible: false,
+    publicVisible: false,
+    juryVisible: false,
+    sourceEventId: `social:${entry.timestamp}:${entry.actorId}:${entry.actionId}`,
+  }
+}

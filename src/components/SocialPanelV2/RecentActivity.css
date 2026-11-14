@@ -1,0 +1,323 @@
+/* ─── RecentActivity ─────────────────────────────────────────────────────────
+ * Styles for the recent social actions feed component.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+.ra-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.ra-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ra-header::before {
+  content: none;
+}
+
+.ra-title {
+  color: rgba(223, 208, 247, 0.7);
+  font-size: 0.57rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ra-header__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  margin-left: auto;
+}
+
+.ra-history-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  border: 1px solid rgba(223, 196, 133, 0.3);
+  border-radius: 999px;
+  padding: 0 0.3rem;
+  color: #e6ce87;
+  background: rgba(110, 72, 29, 0.14);
+  font: inherit;
+  font-size: 0.56rem;
+  line-height: 1;
+  min-height: 27px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.ra-history-btn__count {
+  display: inline-grid;
+  min-width: 0.9rem;
+  height: 0.9rem;
+  padding: 0 0.08rem;
+  place-items: center;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(223, 196, 133, 0.16);
+  font-size: 0.5rem;
+  line-height: 1;
+}
+
+.ra-history-btn:hover {
+  border-color: rgba(223, 196, 133, 0.56);
+  background: rgba(110, 72, 29, 0.24);
+  color: #f5dfa0;
+}
+
+.ra-history-btn:focus-visible {
+  outline: 2px solid rgba(245, 223, 160, 0.9);
+  outline-offset: 2px;
+}
+
+.ra-clear-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: var(--color-text-muted, rgba(255, 255, 255, 0.48));
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  min-height: 36px;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.ra-clear-btn:hover {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.ra-empty {
+  margin: auto 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted, rgba(255, 255, 255, 0.3));
+  font-style: italic;
+  text-align: center;
+  padding: 0.5rem 0;
+}
+
+/* ── Entry list ──────────────────────────────────────────────────────────── */
+.ra-content {
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.ra-container--expanded .ra-content {
+  max-height: none;
+}
+
+.ra-feedback {
+  margin: 0;
+  padding: 0.4rem 0.46rem;
+  border: 1px solid rgba(225, 205, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(65, 47, 85, 0.22);
+  color: rgba(249, 244, 255, 0.88);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ra-feedback-wrap {
+  position: relative;
+}
+
+.ra-feedback-wrap .ra-feedback {
+  padding-right: 2.5rem;
+}
+
+.ra-feedback + .ra-list {
+  margin-top: 0.3rem;
+}
+
+.ra-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 0;
+}
+
+.ra-entry {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.46rem 2.5rem 0.46rem 0.46rem;
+  background: linear-gradient(100deg, rgba(65, 47, 85, 0.22), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(225, 205, 255, 0.09);
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+/* ── Icon ────────────────────────────────────────────────────────────────── */
+.ra-entry__icon {
+  font-size: 0.78rem;
+  font-weight: 900;
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+}
+
+.ra-entry__icon--positive {
+  color: #34d399;
+}
+.ra-entry__icon--negative {
+  color: #ef4444;
+}
+.ra-entry__icon--warning {
+  color: #f2bd55;
+}
+.ra-entry__icon--neutral {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* ── Narrative text ──────────────────────────────────────────────────────── */
+.ra-entry__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ra-entry__action-tag {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(223, 208, 247, 0.7);
+}
+
+.ra-entry__narrative {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.76rem;
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ra-entry__relationship {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.22rem 0.38rem;
+  margin-top: 0.08rem;
+  font-size: 0.67rem;
+  line-height: 1.2;
+}
+
+.ra-entry__relationship-label {
+  color: rgba(223, 208, 247, 0.62);
+  font-weight: 700;
+}
+
+.ra-entry__relationship-change {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.12rem;
+  font-weight: 800;
+}
+
+.ra-entry__relationship-change--up {
+  color: #70ddb0;
+}
+
+.ra-entry__relationship-change--down {
+  color: #f08b98;
+}
+
+.ra-entry__relationship-change--neutral {
+  color: rgba(224, 218, 232, 0.68);
+}
+
+.ra-entry__relationship-change span[aria-hidden='true'] {
+  font-size: 0.86rem;
+  line-height: 1;
+}
+
+.ra-entry__dismiss {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #f07888;
+  font: inherit;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ra-entry__dismiss:hover {
+  color: #ff9aa7;
+  background: rgba(240, 120, 136, 0.1);
+}
+
+.ra-entry__dismiss:focus-visible {
+  outline: 2px solid rgba(255, 154, 167, 0.9);
+  outline-offset: -3px;
+}
+
+/* ── Timestamp ───────────────────────────────────────────────────────────── */
+.ra-entry__time {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.62rem;
+  flex-shrink: 0;
+  margin: 0 1.6rem 0 auto;
+}
+
+/* ── New-entry highlight ─────────────────────────────────────────────────── */
+@keyframes ra-entry-highlight {
+  0% {
+    transform: translateY(0.4rem);
+    background: rgba(146, 100, 238, 0.3);
+    box-shadow: 0 0 1rem rgba(128, 83, 218, 0.2);
+  }
+  100% {
+    transform: translateY(0);
+    background: linear-gradient(100deg, rgba(65, 47, 85, 0.22), rgba(255, 255, 255, 0.025));
+    box-shadow: none;
+  }
+}
+
+.ra-entry--new {
+  animation: ra-entry-highlight 1.2s ease-out forwards;
+}
+
+/* ── Reduce motion ───────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ra-clear-btn {
+    transition: none !important;
+  }
+  .ra-entry--new {
+    animation: none;
+  }
+}

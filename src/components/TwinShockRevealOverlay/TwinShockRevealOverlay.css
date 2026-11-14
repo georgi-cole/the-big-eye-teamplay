@@ -1,0 +1,99 @@
+.twin-shock-reveal {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  color: #fff;
+  --twin-shock-edge-light: rgba(185, 164, 249, 0.24);
+  --twin-shock-wipe-ease: cubic-bezier(0.3, 0.66, 0.36, 1);
+}
+
+.twin-shock-reveal--ali_enters {
+  --twin-shock-edge-light: rgba(251, 196, 132, 0.23);
+}
+
+.twin-shock-reveal__outgoing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #09070e;
+  -webkit-mask-image: linear-gradient(90deg, transparent 42%, #000 54%);
+  mask-image: linear-gradient(90deg, transparent 42%, #000 54%);
+  -webkit-mask-size: 280% 100%;
+  mask-size: 280% 100%;
+  -webkit-mask-position: 100% 0;
+  mask-position: 100% 0;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  transition:
+    -webkit-mask-position var(--twin-shock-wipe-duration) var(--twin-shock-wipe-ease),
+    mask-position var(--twin-shock-wipe-duration) var(--twin-shock-wipe-ease),
+    opacity 220ms ease calc(var(--twin-shock-wipe-duration) - 220ms);
+}
+
+.twin-shock-reveal--revealing .twin-shock-reveal__outgoing {
+  -webkit-mask-position: 0 0;
+  mask-position: 0 0;
+  opacity: 0;
+}
+
+.twin-shock-reveal__portrait {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.twin-shock-reveal__fallback {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.twin-shock-reveal--ali_enters .twin-shock-reveal__portrait {
+  filter: saturate(0.55) brightness(0.72);
+}
+
+.twin-shock-reveal--ali_enters .twin-shock-reveal__outgoing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    132deg,
+    transparent 45%,
+    rgba(158, 23, 37, 0.45) 46%,
+    rgba(170, 25, 42, 0.85) 49%,
+    rgba(111, 12, 25, 0.7) 54%,
+    transparent 55%
+  );
+}
+
+.twin-shock-reveal__light {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 46%,
+    var(--twin-shock-edge-light) 50%,
+    transparent 55%
+  );
+  opacity: 0;
+}
+
+.twin-shock-reveal--revealing .twin-shock-reveal__light {
+  animation: twin-shock-edge-sweep var(--twin-shock-wipe-duration) var(--twin-shock-wipe-ease) both;
+}
+
+@keyframes twin-shock-edge-sweep {
+  from {
+    opacity: 1;
+    transform: translateX(-96%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(84%);
+  }
+}

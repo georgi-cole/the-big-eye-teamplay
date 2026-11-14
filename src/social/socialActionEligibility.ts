@@ -1,0 +1,481 @@
+import { getCurrentPact } from './reality/allianceIdentity'
+import { getNemesisReasonAvailability } from './reality/nemesisInquiry'
+import { findRealityAllianceForConsultation } from './reality/relationshipForms'
+import type { PlayerStatus } from '../types'
+import { getPublicDramaActionAvailability, isPublicDramaAction } from './dramaPacing'
+import type { SocialActionDefinition, SubjectPool } from './socialActions'
+import { isRealityExclusiveAction, resolveActionTargetMode } from './socialActions'
+import type { DramaSocialNetwork, RelationshipsMap } from './types'
+import type { RealityDomainState } from './reality/types'
+import { actorHasBelief, isExposableRealitySecretType } from './reality/knowledge'
+import { hasCanonicalRelationshipTag, isRepairableRelationship } from './relationshipSemantics'
+import { getPregnancyEligibility, type PregnancyStoryState } from './reality/pregnancy'
+
+export interface ActionEligibilityPlayer {
+  id: string
+  status: PlayerStatus | string
+  isUser?: boolean
+  age?: number
+  sex?: string
+  reproductiveProfile?: {
+    canBecomePregnant?: boolean
+    canCausePregnancy?: boolean
+  }
+  aiGameIdentity?: { archetype?: string; temperament?: string }
+}
+
+export interface SocialActionEligibilityContext {
+  action: SocialActionDefinition
+  actorId?: string
+  targetIds?: readonly string[]
+  subjectId?: string
+  phase?: string
+  week?: number
+  players?: readonly ActionEligibilityPlayer[]
+  nomineeIds?: readonly string[]
+  primaryTargetStatus?: PlayerStatus | null
+  actorStatus?: PlayerStatus | null
+  relationships?: RelationshipsMap
+  dramaNetwork?: DramaSocialNetwork
+  reality?: RealityDomainState
+  pregnancyStory?: PregnancyStoryState
+  dramaMode?: boolean
+  /** Used by Classic upgrade previews to test relevance without unlocking execution. */
+  ignoreRealityModeGate?: boolean
+  requireCompleteSelection?: boolean
+  allowAIOnly?: boolean
+}
+
+export interface SocialActionEligibilityResult {
+  eligible: boolean
+  reason: string
+}
+
+function unavailable(reason: string): SocialActionEligibilityResult {
+  return { eligible: false, reason }
+}
+
+function isInHouse(status: string | undefined): boolean {
+  return Boolean(status && status !== 'evicted' && status !== 'jury')
+}
+
+function isNominee(
+  status: string | undefined,
+  playerId: string,
+  nomineeIds?: readonly string[]
+): boolean {
+  return nomineeIds ? nomineeIds.includes(playerId) : Boolean(status?.includes('nominated'))
+}
+
+function relationshipTags(
+  relationships: RelationshipsMap | undefined,
+  actorId: string,
+  targetId: string
+): Set<string> {
+  return new Set(relationships?.[actorId]?.[targetId]?.tags ?? [])
+}
+
+function isValidSubject(
+  pool: SubjectPool,
+  subjectId: string,
+  actorId: string,
+  primaryTargetId: string,
+  players: readonly ActionEligibilityPlayer[],
+  nomineeIds: readonly string[] | undefined,
+  relationships: RelationshipsMap | undefined,
+  allowActorAsSubject: boolean
+): boolean {
+  const subject = players.find((player) => player.id === subjectId)
+  if (!subject || !isInHouse(subject.status) || subject.id === primaryTargetId) return false
+  if (!allowActorAsSubject && subject.id === actorId) return false
+
+  switch (pool) {
+    case 'nominees':
+      return isNominee(subject.status, subject.id, nomineeIds)
+    case 'non_nominees':
+      return !isNominee(subject.status, subject.id, nomineeIds)
+    case 'allies': {
+      const tags = relationshipTags(relationships, actorId, subject.id)
+      return (
+        tags.has('alliance') ||
+        tags.has('bromance') ||
+        tags.has('romance') ||
+        (relationships?.[actorId]?.[subject.id]?.affinity ?? 0) > 0
+      )
+    }
+    case 'voters':
+      return (
+        !isNominee(subject.status, subject.id, nomineeIds) &&
+        subject.status !== 'loh' &&
+        subject.status !== 'loh+pos'
+      )
+    case 'houseguests':
+    default:
+      return true
+  }
+}
+
+export function evaluateSocialActionEligibility({
+  action,
+  actorId = '',
+  targetIds = [],
+  subjectId,
+  phase,
+  week,
+  players = [],
+  nomineeIds,
+  primaryTargetStatus,
+  actorStatus,
+  relationships,
+  dramaNetwork,
+  reality,
+  pregnancyStory,
+  dramaMode = false,
+  ignoreRealityModeGate = false,
+  requireCompleteSelection = false,
+  allowAIOnly = false,
+}: SocialActionEligibilityContext): SocialActionEligibilityResult {
+  if (action.aiOnly && !allowAIOnly) return unavailable('AI-only action')
+  if (isRealityExclusiveAction(action) && !dramaMode && !ignoreRealityModeGate) {
+    return unavailable('Reality Mode required')
+  }
+
+  if (dramaMode && isPublicDramaAction(action.id)) {
+    const pacing = getPublicDramaActionAvailability(dramaNetwork, week)
+    if (!pacing.available) return unavailable(pacing.reason)
+  }
+
+  const allowedPhases = dramaMode
+    ? (action.dramaAllowedPhases ?? action.allowedPhases)
+    : action.allowedPhases
+  if (allowedPhases && (!phase || !allowedPhases.includes(phase))) {
+    return unavailable('Not available at this point in the week')
+  }
+
+  const targetMode = resolveActionTargetMode(action, dramaMode)
+  const targets = [...new Set(targetIds.filter(Boolean))]
+  if (action.id === 'ask_nemesis_reason') {
+    if (!dramaMode || !actorId || targets.length !== 1 || !reality) {
+      return unavailable('Select a revealed Nemesis to ask.')
+    }
+    const availability = getNemesisReasonAvailability(reality, actorId, targets[0], week)
+    if (!availability.eligible) return unavailable(availability.reason)
+  }
+  if (
+    actorId &&
+    reality &&
+    ['proposeAlliance', 'ally'].includes(action.id) &&
+    targets.some((id) => getCurrentPact(reality, actorId, id))
+  )
+    return unavailable('You already share a personal pact')
+  if (
+    actorId &&
+    reality &&
+    action.id === 'consult_alliance' &&
+    (targets.length === 0 ||
+      targets.some((id) => !findRealityAllianceForConsultation(reality, actorId, id)))
+  )
+    return unavailable('This commitment is not ready for a strategy meeting')
+
+  if (targetMode === 'none') {
+    if (requireCompleteSelection && subjectId) return unavailable('This action has no subject')
+  } else if (requireCompleteSelection) {
+    if (targetMode === 'multi') {
+      const minimum = Math.max(1, action.minTargets ?? 2)
+      if (targets.length < minimum) {
+        return unavailable(`Select at least ${minimum} hubmates`)
+      }
+      if (action.maxTargets !== undefined && targets.length > action.maxTargets) {
+        return unavailable(`Select no more than ${action.maxTargets} hubmates`)
+      }
+    } else if (targets.length !== 1) {
+      return unavailable('Select one hubmate')
+    }
+  }
+  if (requireCompleteSelection && targetMode === 'primaryPlusSubject' && !subjectId) {
+    return unavailable('Choose who the conversation is about')
+  }
+  if (targets.some((targetId) => targetId === actorId)) {
+    return unavailable('You cannot target yourself')
+  }
+
+  const playerById = new Map(players.map((player) => [player.id, player]))
+  if (
+    requireCompleteSelection &&
+    players.length > 0 &&
+    targetMode !== 'none' &&
+    targets.some(
+      (targetId) => action.id !== 'pregnancy_test' && !isInHouse(playerById.get(targetId)?.status)
+    )
+  ) {
+    return unavailable('That hubmate is no longer available')
+  }
+
+  const requiredActorStatus = dramaMode
+    ? (action.dramaRequiredActorStatus ?? action.requiredActorStatus)
+    : action.requiredActorStatus
+  if (requiredActorStatus) {
+    const resolvedActorStatus =
+      actorStatus ?? (playerById.get(actorId)?.status as PlayerStatus | undefined)
+    if (players.length === 0 && actorStatus === undefined && !requireCompleteSelection) {
+      return unavailable('Select the required role holder')
+    }
+    if (
+      (players.length > 0 || actorStatus !== undefined) &&
+      (!resolvedActorStatus || !requiredActorStatus.includes(resolvedActorStatus))
+    ) {
+      return unavailable('Your current role cannot use this action')
+    }
+  }
+
+  const requiredTargetStatus = dramaMode
+    ? (action.dramaRequiredTargetStatus ?? action.requiredTargetStatus)
+    : action.requiredTargetStatus
+  if (requiredTargetStatus) {
+    if (players.length === 0 && primaryTargetStatus === undefined && !requireCompleteSelection) {
+      return unavailable('Select the required role holder')
+    }
+    if (players.length > 0 || primaryTargetStatus !== undefined) {
+      if (targets.length === 0 && !primaryTargetStatus) {
+        return unavailable('Select the required role holder')
+      }
+      const statuses =
+        targets.length > 0
+          ? targets.map(
+              (targetId, index) =>
+                playerById.get(targetId)?.status ?? (index === 0 ? primaryTargetStatus : null)
+            )
+          : [primaryTargetStatus]
+      if (
+        statuses.some((status) => !status || !requiredTargetStatus.includes(status as PlayerStatus))
+      ) {
+        return unavailable('This action requires a different role holder')
+      }
+    }
+  }
+
+  const requiredRelationshipTags = dramaMode
+    ? (action.dramaRequiredRelationshipTags ?? action.requiredRelationshipTags)
+    : action.requiredRelationshipTags
+  if (
+    ['apologize', 'repair_bond'].includes(action.id) &&
+    (!actorId ||
+      targets.length === 0 ||
+      targets.some(
+        (targetId) =>
+          !isRepairableRelationship({ relationships, reality, actorId, targetId, day: week })
+      ))
+  ) {
+    return unavailable('There is no unresolved tension to repair with this hubmate')
+  }
+  const excludedRelationshipTags = dramaMode
+    ? (action.dramaExcludedRelationshipTags ?? action.excludedRelationshipTags)
+    : action.excludedRelationshipTags
+  const minAffinity = dramaMode
+    ? (action.dramaMinAffinity ?? action.minAffinity)
+    : action.minAffinity
+  const maxAffinity = dramaMode
+    ? (action.dramaMaxAffinity ?? action.maxAffinity)
+    : action.maxAffinity
+  const needsRelationshipContext =
+    Boolean(requiredRelationshipTags) ||
+    Boolean(excludedRelationshipTags) ||
+    minAffinity !== undefined ||
+    maxAffinity !== undefined
+  if (needsRelationshipContext) {
+    if (!actorId || targets.length === 0 || !relationships) {
+      return unavailable('Select a compatible relationship')
+    }
+    for (const targetId of targets) {
+      const affinity = relationships[actorId]?.[targetId]?.affinity ?? 0
+      if (minAffinity !== undefined && affinity < minAffinity) {
+        return unavailable(`Requires relationship ${minAffinity}% or higher`)
+      }
+      if (maxAffinity !== undefined && affinity > maxAffinity) {
+        return unavailable(`Only available while the relationship is ${maxAffinity}% or lower`)
+      }
+      if (
+        requiredRelationshipTags &&
+        !(action.id === 'repair_bond'
+          ? isRepairableRelationship({ relationships, reality, actorId, targetId, day: week })
+          : requiredRelationshipTags.some((tag) =>
+              hasCanonicalRelationshipTag({ relationships, reality, actorId, targetId, tag })
+            ))
+      ) {
+        return unavailable('The required relationship is not active')
+      }
+      if (
+        excludedRelationshipTags?.some((tag) =>
+          hasCanonicalRelationshipTag({ relationships, reality, actorId, targetId, tag })
+        )
+      ) {
+        return unavailable('This relationship has already moved past that action')
+      }
+    }
+  }
+
+  const needsArcContext =
+    Boolean(action.requiredArcTypes) ||
+    Boolean(action.excludedArcTypes) ||
+    Boolean(action.requiredArcStages) ||
+    action.requiredArcPublic !== undefined
+  if (needsArcContext) {
+    const needsExistingArc =
+      Boolean(action.requiredArcTypes) ||
+      Boolean(action.requiredArcStages) ||
+      action.requiredArcPublic !== undefined
+    if (!actorId || targets.length === 0 || (needsExistingArc && !dramaNetwork)) {
+      return unavailable('This action needs an active story')
+    }
+    for (const targetId of targets) {
+      const pairArcs = (dramaNetwork?.arcs ?? []).filter(
+        (arc) =>
+          arc.status === 'active' &&
+          arc.participantIds.includes(actorId) &&
+          arc.participantIds.includes(targetId)
+      )
+      if (action.excludedArcTypes?.some((type) => pairArcs.some((arc) => arc.type === type))) {
+        return unavailable('That story is already active')
+      }
+      const activeArc = pairArcs
+        .filter((arc) => !action.requiredArcTypes || action.requiredArcTypes.includes(arc.type))
+        .sort((left, right) => right.lastAdvancedWeek - left.lastAdvancedWeek)[0]
+      if (action.requiredArcTypes && !activeArc) {
+        return unavailable('The required story is not active')
+      }
+      if (
+        action.requiredArcStages &&
+        !action.requiredArcStages.includes(activeArc?.stage ?? 'resolved')
+      ) {
+        return unavailable('That story has not reached the right stage')
+      }
+      if (
+        action.requiredArcPublic !== undefined &&
+        activeArc?.public !== action.requiredArcPublic
+      ) {
+        return unavailable(
+          action.requiredArcPublic ? 'That story is still secret' : 'That story is already public'
+        )
+      }
+    }
+  }
+
+  if (action.id === 'pregnancy_test_self' || action.id === 'paternity_test_self') {
+    if (!actorId || !pregnancyStory) return unavailable('This story is not available yet')
+    const actor = playerById.get(actorId)
+    if (!actor) return unavailable('The player profile is unavailable')
+    const pregnancyEligibility = getPregnancyEligibility({
+      actor,
+      target: actor,
+      currentDay: week ?? 0,
+      story: pregnancyStory,
+      reality,
+      action: action.id === 'paternity_test_self' ? 'PATERNITY_TEST_SELF' : 'PREGNANCY_TEST_SELF',
+    })
+    if (!pregnancyEligibility.eligible) return unavailable(pregnancyEligibility.reason)
+  }
+
+  if (action.id === 'try_for_baby' || action.id === 'pregnancy_test') {
+    if (!actorId || targets.length !== 1 || !pregnancyStory) {
+      return unavailable(
+        action.id === 'pregnancy_test'
+          ? 'Select the pregnancy carrier'
+          : 'Select a romantic partner'
+      )
+    }
+    const actor = playerById.get(actorId)
+    const target = playerById.get(targets[0])
+    if (!actor || !target) return unavailable('Select a compatible relationship')
+    const pairArcs = (dramaNetwork?.arcs ?? []).filter(
+      (arc) =>
+        arc.status === 'active' &&
+        arc.type === 'romance' &&
+        arc.participantIds.includes(actorId) &&
+        arc.participantIds.includes(target.id)
+    )
+    const romanceActive = pairArcs.some((arc) => ['established', 'climax'].includes(arc.stage))
+    const pregnancyEligibility = getPregnancyEligibility({
+      actor,
+      target,
+      currentDay: week ?? 0,
+      story: pregnancyStory,
+      reality,
+      romanceActive,
+      relationshipScore: relationships?.[actorId]?.[target.id]?.affinity ?? 0,
+      action: action.id === 'pregnancy_test' ? 'PREGNANCY_TEST' : 'TRY_FOR_A_BABY',
+    })
+    if (!pregnancyEligibility.eligible) return unavailable(pregnancyEligibility.reason)
+  }
+
+  if (action.id === 'share_pregnancy_news') {
+    if (!actorId || !pregnancyStory) return unavailable('This story is not available yet')
+    if (targets.length === 0) return unavailable('Choose at least one hubmate to tell')
+    const activeAttemptId = pregnancyStory.activePregnancies[actorId]
+    const pregnancy = pregnancyStory.attempts.find(
+      (attempt) => attempt.attemptId === activeAttemptId
+    )
+    if (!pregnancy || !pregnancy.resultKnown || pregnancy.status !== 'POSITIVE') {
+      return unavailable('You need a confirmed pregnancy before sharing the news')
+    }
+    if (pregnancy.pregnancyPublicRevealed) {
+      return unavailable('The pregnancy news is already public')
+    }
+    const alreadyTold = new Set(pregnancy.pregnancyNewsSharedWithIds ?? [])
+    if (targets.some((targetId) => alreadyTold.has(targetId))) {
+      return unavailable('You have already shared this news with that hubmate')
+    }
+  }
+
+  if (action.requiresKnownSecret) {
+    if (!actorId || targets.length === 0) {
+      return unavailable('You do not have a secret to expose')
+    }
+    const knowsTargetSecret = targets.every(
+      (targetId) =>
+        (dramaNetwork?.rumours ?? []).some(
+          (rumour) =>
+            rumour.status === 'circulating' &&
+            rumour.subjectId === targetId &&
+            (rumour.originatorId === actorId ||
+              rumour.listeners.some((listener) => listener.playerId === actorId))
+        ) ||
+        Boolean(
+          reality &&
+          actorHasBelief(
+            reality,
+            actorId,
+            (belief) =>
+              belief.subjectIds.includes(targetId) &&
+              isExposableRealitySecretType(belief.propositionType),
+            0.45
+          )
+        )
+    )
+    if (!knowsTargetSecret) return unavailable('You do not know a secret about this hubmate')
+  }
+
+  if (requireCompleteSelection && targetMode === 'primaryPlusSubject' && subjectId) {
+    const primaryTargetId = targets[0] ?? ''
+    const invalidWithoutRoster =
+      players.length === 0 &&
+      (subjectId === primaryTargetId || (!action.allowActorAsSubject && subjectId === actorId))
+    if (
+      invalidWithoutRoster ||
+      (players.length > 0 &&
+        !isValidSubject(
+          action.subjectPool ?? 'houseguests',
+          subjectId,
+          actorId,
+          primaryTargetId,
+          players,
+          nomineeIds,
+          relationships,
+          action.allowActorAsSubject === true
+        ))
+    ) {
+      return unavailable('That subject does not fit this action')
+    }
+  }
+
+  return { eligible: true, reason: '' }
+}

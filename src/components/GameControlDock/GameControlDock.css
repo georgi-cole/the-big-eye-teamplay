@@ -1,0 +1,757 @@
+/* ── GameControlDock ────────────────────────────────────────────────────── */
+.game-control-dock-navigation {
+  display: contents;
+}
+
+.game-control-dock {
+  --dock-play-art-width: 22%;
+  --dock-column-step: max(13%, 44px);
+  --dock-side-hit-width: max(11%, 44px);
+  position: absolute;
+  /* Keep every dock hit target above the native home-indicator inset. The
+     responsive layout writes the measured value for native/preview frames;
+     the CSS safe-area variable covers ordinary browser/WebView startup. */
+  bottom: calc(
+    var(--game-safe-bottom, var(--safe-bottom, env(safe-area-inset-bottom, 0px))) +
+      var(--game-action-dock-gap, 8px)
+  );
+  left: 50%;
+  z-index: 100;
+  /* The visible SVG capsule spans x=28..952 of a 980-wide canvas. Compensate
+     for those transparent side insets so its real edges align with the
+     12px-inset Faux TV and avatar grid. */
+  width: min(calc(106.0606% - 25.455px), 483.636px);
+  aspect-ratio: 980 / 220;
+  transform: translateX(-50%);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.game-control-dock--finale-overlay {
+  /* The spectator scene is portalled to <body>, while the dock lives inside
+     the clipped game cabinet. Take the existing dock out of that clipping
+     context so its single shared Play control stays visible above the scene. */
+  position: fixed;
+  z-index: 10001;
+}
+
+.game-control-dock--finale-overlay .game-control-dock__play {
+  opacity: 1;
+  filter: drop-shadow(0 0 12px rgba(245, 206, 117, 0.72));
+}
+
+.game-control-dock::before {
+  display: none;
+}
+
+.game-control-dock__more-menu {
+  --more-menu-button-size: 44px;
+  position: absolute;
+  right: max(8px, calc(11% - 27px));
+  bottom: 61%;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: var(--more-menu-button-size);
+  gap: 6px;
+  max-height: min(58svh, 380px);
+  overflow-y: auto;
+  width: calc(var(--more-menu-button-size) + 10px);
+  box-sizing: border-box;
+  padding: 5px;
+  border: 1px solid rgba(189, 171, 239, 0.28);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(37, 26, 60, 0.98), rgba(12, 10, 25, 0.98));
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.42),
+    0 0 18px rgba(111, 82, 181, 0.12),
+    inset 0 1px rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+}
+.game-control-dock__more-menu button {
+  position: relative;
+  display: flex;
+  width: var(--more-menu-button-size);
+  height: var(--more-menu-button-size);
+  min-width: var(--more-menu-button-size);
+  min-height: var(--more-menu-button-size);
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  padding: 0;
+  background: rgba(121, 99, 177, 0.18);
+  color: rgba(244, 240, 255, 0.94);
+  cursor: pointer;
+}
+.game-control-dock__more-menu button span {
+  display: none;
+}
+.game-control-dock__more-menu button:hover {
+  background: rgba(145, 122, 205, 0.3);
+}
+.game-control-dock__more-menu button:focus-visible {
+  outline: 2px solid rgba(192, 177, 255, 0.9);
+  outline-offset: 1px;
+}
+
+.game-control-dock__more-menu button.game-control-dock__more-profile--guest-save-invite {
+  position: relative;
+  background: rgba(145, 122, 205, 0.3);
+}
+.game-control-dock__more-menu button.game-control-dock__more-profile--guest-save-invite::after {
+  position: absolute;
+  inset: -3px;
+  border: 1px solid rgba(232, 216, 255, 0.96);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 2px rgba(171, 128, 255, 0.2),
+    0 0 24px rgba(166, 116, 255, 0.5),
+    inset 0 0 18px rgba(196, 165, 255, 0.08);
+  content: '';
+  pointer-events: none;
+  animation: season-tutorial-focus-pulse 620ms cubic-bezier(0.18, 0.84, 0.24, 1) 2;
+}
+.game-control-dock__more-menu button img {
+  width: 21px;
+  height: 21px;
+  object-fit: contain;
+  opacity: 0.96;
+  filter: saturate(0.78) brightness(1.12) drop-shadow(0 1px 3px rgba(126, 99, 199, 0.28));
+  pointer-events: none;
+}
+
+.floating-action-bar__blocked-message {
+  position: absolute;
+  left: 50%;
+  bottom: calc(
+    var(--game-action-dock-height, clamp(56px, 16vw, 76px)) + var(--game-action-dock-gap, 6px) +
+      var(--game-safe-bottom, var(--safe-bottom, 0px)) + 12px
+  );
+  z-index: 115;
+  width: min(88%, 420px);
+  transform: translateX(-50%);
+  border: 1px solid rgba(151, 164, 207, 0.28);
+  border-radius: 14px;
+  padding: 12px 16px;
+  background: rgba(15, 20, 34, 0.94);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38);
+  color: rgba(247, 249, 255, 0.94);
+  font-size: 0.94rem;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
+
+.fab-clean {
+  position: absolute;
+}
+
+.fab-shell,
+.fab-play,
+.fab-icon {
+  position: absolute;
+  display: block;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fab-shell {
+  inset: 0;
+  width: 100%;
+  z-index: 1;
+}
+
+body.mode-surveyeval .fab-shell {
+  filter: hue-rotate(48deg) saturate(0.58) brightness(0.72);
+}
+body.mode-surveyeval .fab-play {
+  filter: hue-rotate(42deg) saturate(0.7) brightness(0.9);
+}
+
+.fab-play {
+  width: var(--dock-play-art-width);
+  left: calc((100% - var(--dock-play-art-width)) / 2);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+}
+
+/* The Play artwork's 188px canvas includes a halo around its 114px face. */
+.game-control-dock__play-face {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--dock-play-art-width) * 114 / 188);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.fab-icon {
+  width: 5.3%;
+  transform: translate(-50%, -50%);
+  opacity: 0.91;
+  filter: drop-shadow(0 1px 2px rgba(32, 24, 62, 0.42));
+  z-index: 2;
+}
+
+.fab-icon.social {
+  top: 50.5%;
+}
+
+.fab-icon.home {
+  top: 50.5%;
+}
+
+.fab-more-glyph {
+  position: absolute;
+  z-index: 2;
+  top: 50.5%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 4.2%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  opacity: 0.89;
+  filter: drop-shadow(0 1px 2px rgba(32, 24, 62, 0.42));
+}
+
+.fab-more-glyph i {
+  width: 14%;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: rgba(231, 231, 245, 0.82);
+  box-shadow: none;
+}
+
+.fab-icon.requests {
+  top: 50.5%;
+}
+
+.fab-icon.stats {
+  top: 50.5%;
+}
+
+.fab-icon.confessional {
+  top: 50.5%;
+}
+body.mode-surveyeval .fab-icon.confessional {
+  opacity: 0.28;
+  filter: grayscale(1);
+}
+
+.dock-hit-area {
+  position: absolute;
+  display: block;
+  min-width: 44px;
+  min-height: 44px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  translate: -50% 0;
+  z-index: 3;
+}
+
+.fab-icon,
+.fab-more-glyph,
+.dock-hit-area {
+  left: calc(50% + var(--dock-column, 0) * var(--dock-column-step));
+}
+
+.fab-icon.home,
+.hit-home {
+  --dock-column: -3;
+}
+
+.fab-icon.social,
+.hit-social {
+  --dock-column: -2;
+}
+
+.fab-icon.requests,
+.hit-requests {
+  --dock-column: -1;
+}
+
+.fab-icon.stats,
+.hit-stats {
+  --dock-column: 1;
+}
+
+.fab-icon.confessional,
+.hit-confessional {
+  --dock-column: 2;
+}
+
+.fab-more-glyph,
+.hit-more {
+  --dock-column: 3;
+}
+
+.hit-social {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+  --dock-badge-x: 72%;
+  --dock-badge-y: 22%;
+}
+
+.hit-home {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+}
+
+.hit-requests {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+  --dock-badge-x: 72%;
+  --dock-badge-y: 22%;
+}
+
+.hit-play {
+  top: 0;
+  /* Keep Play's wider target inside the gap between Incoming and Public Meter. */
+  width: min(22%, calc(2 * var(--dock-column-step) - var(--dock-side-hit-width)));
+  height: 66%;
+}
+
+.hit-stats {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+  --dock-badge-x: 72%;
+  --dock-badge-y: 22%;
+}
+
+.hit-confessional {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+  --dock-badge-x: 72%;
+  --dock-badge-y: 22%;
+}
+
+.hit-more {
+  top: 31%;
+  width: var(--dock-side-hit-width);
+  height: 34%;
+}
+
+.dock-hit-area--guest-save-invite::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: clamp(30px, 9vw, 44px);
+  height: clamp(30px, 9vw, 44px);
+  border: 1px solid rgba(167, 139, 250, 0.72);
+  border-radius: 50%;
+  box-shadow:
+    0 0 14px rgba(116, 132, 255, 0.28),
+    0 0 26px rgba(167, 139, 250, 0.18);
+  content: '';
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  animation: guestSaveCircularSpotlight 1.3s cubic-bezier(0.22, 1, 0.36, 1) 2;
+}
+
+.guest-save-spotlight {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  pointer-events: none;
+}
+
+.guest-save-spotlight__shade {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at var(--guest-save-x) var(--guest-save-y),
+    rgba(6, 7, 17, 0) 0,
+    rgba(6, 7, 17, 0) var(--guest-save-clear-radius),
+    rgba(18, 20, 42, 0.08) calc(var(--guest-save-clear-radius) + 8px),
+    rgba(6, 7, 17, 0.58) var(--guest-save-feather-radius),
+    rgba(6, 7, 17, 0.58) 100%
+  );
+  animation: guestSaveSpotlightDim 1.6s ease-out both;
+}
+
+@keyframes guestSaveSpotlightDim {
+  0% {
+    opacity: 0;
+  }
+  22%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes guestSaveCircularSpotlight {
+  0% {
+    opacity: 0;
+    scale: 0.84;
+    box-shadow: 0 0 0 rgba(116, 132, 255, 0);
+  }
+  24%,
+  74% {
+    opacity: 1;
+    scale: 1;
+    box-shadow:
+      0 0 14px rgba(116, 132, 255, 0.32),
+      0 0 28px rgba(167, 139, 250, 0.24);
+  }
+  100% {
+    opacity: 0;
+    scale: 1.08;
+  }
+}
+
+.dock-hit-area:disabled,
+.dock-hit-area--unavailable {
+  cursor: not-allowed;
+}
+
+.dock-hit-area__badge {
+  position: absolute;
+  top: var(--dock-badge-y, 9%);
+  left: var(--dock-badge-x, 64%);
+  transform: translate(-50%, -50%);
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: #ef4444;
+  box-sizing: border-box;
+  box-shadow: 0 2px 7px rgba(8, 10, 24, 0.42);
+  color: #fff;
+  font-size: 0.52rem;
+  font-weight: 800;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.dock-hit-area__notification-led {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(238, 233, 255, 0.96);
+  box-shadow:
+    0 0 3px 1px rgba(199, 184, 255, 0.82),
+    0 0 9px 4px rgba(126, 92, 255, 0.48),
+    0 0 18px 8px rgba(101, 72, 228, 0.2);
+  pointer-events: none;
+}
+
+/* Warm gold mission badge on the Confessional FAB button. */
+.dock-hit-area__badge--mission {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f2d68b 0%, #c69239 52%, #8b5a1f 100%);
+  color: #211306;
+  line-height: 18px;
+  box-shadow:
+    0 0 0 1px rgba(255, 240, 197, 0.3),
+    0 8px 18px rgba(141, 91, 25, 0.38);
+}
+
+.dock-hit-area--confessional-special .dock-hit-area__special-badge {
+  position: absolute;
+  top: 3%;
+  right: 8%;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid rgba(248, 252, 255, 0.82);
+  border-radius: 999px;
+  background: linear-gradient(145deg, #f8fbff, #aab7c8 58%, #68788d);
+  box-shadow:
+    0 0 7px rgba(235, 244, 255, 0.9),
+    0 0 17px rgba(197, 216, 237, 0.72);
+  color: #17202b;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  pointer-events: none;
+  animation: tribunal-stream-beacon 1.8s ease-in-out infinite;
+}
+
+.game-control-dock__icon--confessional-special {
+  filter: drop-shadow(0 0 4px rgba(245, 250, 255, 0.96))
+    drop-shadow(0 0 11px rgba(197, 216, 237, 0.78));
+  animation: tribunal-stream-icon-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes tribunal-stream-beacon {
+  0%,
+  100% {
+    box-shadow:
+      0 0 5px rgba(235, 244, 255, 0.64),
+      0 0 11px rgba(197, 216, 237, 0.38);
+  }
+  50% {
+    box-shadow:
+      0 0 9px rgba(255, 255, 255, 1),
+      0 0 22px rgba(204, 224, 246, 0.88);
+  }
+}
+
+@keyframes tribunal-stream-icon-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px rgba(245, 250, 255, 0.72));
+  }
+  50% {
+    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 1))
+      drop-shadow(0 0 15px rgba(197, 216, 237, 0.92));
+  }
+}
+
+.dock-hit-area:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.72);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.game-control-dock:has(.dock-hit-area--social:hover) .fab-icon.social,
+.game-control-dock:has(.dock-hit-area--social:active) .fab-icon.social,
+.game-control-dock:has(.dock-hit-area--requests:hover) .fab-icon.requests,
+.game-control-dock:has(.dock-hit-area--requests:active) .fab-icon.requests,
+.game-control-dock:has(.dock-hit-area--stats:hover) .fab-icon.stats,
+.game-control-dock:has(.dock-hit-area--stats:active) .fab-icon.stats,
+.game-control-dock:has(.dock-hit-area--confessional:hover) .fab-icon.confessional,
+.game-control-dock:has(.dock-hit-area--confessional:active) .fab-icon.confessional,
+.game-control-dock:has(.dock-hit-area--play:hover) .fab-play,
+.game-control-dock:has(.dock-hit-area--play:active) .fab-play {
+  transition:
+    filter 160ms ease,
+    opacity 160ms ease;
+}
+
+.game-control-dock:has(.dock-hit-area--social:hover) .fab-icon.social,
+.game-control-dock:has(.dock-hit-area--requests:hover) .fab-icon.requests,
+.game-control-dock:has(.dock-hit-area--stats:hover) .fab-icon.stats,
+.game-control-dock:has(.dock-hit-area--confessional:hover) .fab-icon.confessional {
+  transform: translate(-50%, -50%) scale(1.02);
+}
+
+.game-control-dock:has(.dock-hit-area--social:active) .fab-icon.social,
+.game-control-dock:has(.dock-hit-area--requests:active) .fab-icon.requests,
+.game-control-dock:has(.dock-hit-area--stats:active) .fab-icon.stats,
+.game-control-dock:has(.dock-hit-area--confessional:active) .fab-icon.confessional {
+  transform: translate(-50%, -50%) scale(0.985);
+}
+
+.game-control-dock:has(.dock-hit-area--play:hover) .fab-play {
+  transform: translateY(-50%) scale(1.01);
+  filter: brightness(1.05) drop-shadow(0 0 7px rgba(105, 83, 255, 0.18));
+}
+
+.game-control-dock:has(.dock-hit-area--play:active) .fab-play {
+  transform: translateY(-50%) scale(0.96);
+  filter: brightness(1.1) drop-shadow(0 0 5px rgba(105, 83, 255, 0.15));
+}
+
+@keyframes dock-play-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px rgba(105, 83, 255, 0.08));
+  }
+  50% {
+    filter: drop-shadow(0 0 7px rgba(105, 83, 255, 0.15));
+  }
+}
+
+.game-control-dock__play--pulse {
+  animation: dock-play-pulse 1.8s ease-in-out infinite;
+}
+
+.game-control-dock__play--disabled,
+.game-control-dock__icon--unavailable,
+.game-control-dock:has(.dock-hit-area--play:disabled) .fab-play,
+.game-control-dock:has(.dock-hit-area--social:disabled) .fab-icon.social,
+.game-control-dock:has(.dock-hit-area--requests:disabled) .fab-icon.requests,
+.game-control-dock:has(.dock-hit-area--stats:disabled) .fab-icon.stats,
+.game-control-dock:has(.dock-hit-area--confessional:disabled) .fab-icon.confessional {
+  opacity: 0.5;
+}
+
+.game-control-dock__icon--unavailable {
+  filter: grayscale(1) drop-shadow(0 0 3px rgba(75, 85, 99, 0.18));
+}
+
+.dock-hit-area--unavailable:hover,
+.dock-hit-area--unavailable:active {
+  transform: none;
+}
+
+@keyframes dock-icon-flash {
+  0% {
+    filter: drop-shadow(0 0 4px rgba(116, 132, 255, 0.16));
+  }
+  35% {
+    filter: drop-shadow(0 0 12px rgba(116, 132, 255, 0.42));
+  }
+  100% {
+    filter: drop-shadow(0 0 4px rgba(116, 132, 255, 0.16));
+  }
+}
+
+.game-control-dock__icon--flash {
+  animation: dock-icon-flash 0.6s ease-out;
+}
+
+@keyframes confessional-badge-announce {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow:
+      0 0 0 1px rgba(255, 240, 197, 0.3),
+      0 8px 18px rgba(141, 91, 25, 0.38);
+  }
+  28% {
+    transform: translate(-50%, -50%) translateY(-1px) scale(1.16);
+    box-shadow:
+      0 0 0 1px rgba(255, 244, 209, 0.42),
+      0 10px 20px rgba(204, 146, 47, 0.48);
+  }
+  52% {
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  76% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes confessional-icon-announce {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    filter: drop-shadow(0 0 6px rgba(116, 132, 255, 0.22));
+  }
+  35% {
+    transform: translate(-50%, -50%) scale(1.1);
+    filter: drop-shadow(0 0 12px rgba(98, 191, 208, 0.46));
+  }
+  70% {
+    transform: translate(-50%, -50%) scale(0.98);
+  }
+}
+
+.dock-hit-area--confessional-flash-0 .dock-hit-area__badge--mission,
+.dock-hit-area--confessional-flash-1 .dock-hit-area__badge--mission {
+  animation: confessional-badge-announce 0.9s cubic-bezier(0.22, 1, 0.36, 1) 2;
+}
+
+.game-control-dock__icon--confessional-flash-0,
+.game-control-dock__icon--confessional-flash-1 {
+  animation: confessional-icon-announce 0.9s cubic-bezier(0.22, 1, 0.36, 1) 2;
+}
+
+.dock-hit-area--confessional-persistent .dock-hit-area__badge--mission {
+  animation: confessional-badge-announce 1.05s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.game-control-dock__icon--confessional-persistent {
+  animation: confessional-icon-announce 1.05s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-hit-area--guest-save-invite::after,
+  .game-control-dock__more-menu button.game-control-dock__more-profile--guest-save-invite {
+    animation: none;
+  }
+
+  .dock-hit-area--confessional-flash-0 .dock-hit-area__badge--mission,
+  .dock-hit-area--confessional-flash-1 .dock-hit-area__badge--mission,
+  .dock-hit-area--confessional-persistent .dock-hit-area__badge--mission,
+  .game-control-dock__icon--confessional-flash-0,
+  .game-control-dock__icon--confessional-flash-1,
+  .game-control-dock__icon--confessional-persistent {
+    animation: none;
+  }
+
+  .dock-hit-area--confessional-special .dock-hit-area__special-badge,
+  .game-control-dock__icon--confessional-special {
+    animation: none;
+  }
+}
+
+.confessional-spotlight {
+  position: absolute;
+  inset: 0;
+  z-index: 1400;
+  pointer-events: none;
+}
+
+.confessional-spotlight__overlay,
+.confessional-spotlight__halo,
+.confessional-spotlight__button-glow {
+  position: absolute;
+  pointer-events: none;
+}
+
+.confessional-spotlight__overlay {
+  inset: 0;
+  background: radial-gradient(
+    circle at var(--confessional-spotlight-x) var(--confessional-spotlight-y),
+    rgba(13, 11, 28, 0) 0,
+    rgba(13, 11, 28, 0) var(--confessional-spotlight-inner),
+    rgba(18, 20, 42, 0.06) calc(var(--confessional-spotlight-inner) + 6px),
+    rgba(6, 7, 17, 0.7) var(--confessional-spotlight-outer),
+    rgba(6, 7, 17, 0.84) 100%
+  );
+}
+
+.confessional-spotlight__halo,
+.confessional-spotlight__button-glow {
+  border-radius: 999px;
+}
+
+.confessional-spotlight__halo {
+  border: 1px solid rgba(167, 139, 250, 0.48);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 0 14px rgba(116, 132, 255, 0.28),
+    0 0 26px rgba(56, 189, 248, 0.14),
+    0 0 40px rgba(167, 139, 250, 0.1);
+}
+
+.confessional-spotlight__button-glow {
+  background: radial-gradient(
+    circle,
+    rgba(167, 139, 250, 0.26) 0%,
+    rgba(96, 165, 250, 0.15) 42%,
+    rgba(56, 189, 248, 0.06) 60%,
+    rgba(56, 189, 248, 0) 76%
+  );
+  filter: blur(4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confessional-spotlight__button-glow {
+    display: none;
+  }
+}

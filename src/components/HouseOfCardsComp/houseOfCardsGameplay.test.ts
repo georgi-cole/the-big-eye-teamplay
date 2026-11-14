@@ -1,0 +1,249 @@
+import { describe, expect, it } from 'vitest'
+import {
+  HOUSE_OF_CARDS_BONUS_BET_PENALTY,
+  HOUSE_OF_CARDS_BONUS_BET_REWARD,
+  buildPortraitPairBoard,
+  chooseHouseOfCardsAiPair,
+  getHouseOfCardsAttemptToolOffer,
+  HOUSE_OF_CARDS_TOOL_POOL,
+  resolveHouseOfCardsRoundScore,
+  getHouseOfCardsScoringMistakes,
+  isHouseOfCardsBlindBetPair,
+  chooseHouseOfCardsReplayIndexes,
+  type HouseOfCardsBoardCard,
+} from './houseOfCardsUtils'
+import {
+  chooseHouseOfCardsAiTool,
+  simulateHouseOfCardsAiRound,
+} from '../../features/houseOfCards/houseOfCardsAi'
+
+const roster = [
+  { id: 'host', name: 'Host', avatar: '/host.webp' },
+  { id: 'rival-a', name: 'Rival A', avatar: '/a.webp' },
+  { id: 'rival-b', name: 'Rival B', avatar: '/b.webp' },
+]
+
+describe('Deck of Light gameplay edge cases', () => {
+  it('builds exactly two cards for each portrait identity, even when variants are needed', () => {
+    const board = buildPortraitPairBoard(9, 7, roster, ['rival-b', 'host'])
+    const identities = new Map<string, HouseOfCardsBoardCard[]>()
+    for (const card of board)
+      identities.set(card.symbol, [...(identities.get(card.symbol) ?? []), card])
+
+    expect(board).toHaveLength(14)
+    expect([...identities.values()].every((cards) => cards.length === 2)).toBe(true)
+    expect(new Set(board.map((card) => card.symbol)).size).toBe(7)
+    expect(board.some((card) => card.portraitPlayerId === 'rival-b')).toBe(true)
+    expect(board.some((card) => card.portraitBadge?.startsWith('Variant'))).toBe(true)
+  })
+
+  it('offers three unique deterministic tools to humans and AI for the entire attempt', () => {
+    const seen = new Set<string>()
+    for (let seed = 0; seed < 100; seed++) {
+      const attemptNumber = seed % 4
+      const offer = getHouseOfCardsAttemptToolOffer(seed, attemptNumber)
+      expect(offer).toEqual(getHouseOfCardsAttemptToolOffer(seed, attemptNumber))
+      expect(new Set(offer).size).toBe(3)
+      offer.forEach((tool) => {
+        expect(HOUSE_OF_CARDS_TOOL_POOL).toContain(tool)
+        seen.add(tool)
+      })
+      for (const round of [1, 2, 3, 4])
+        for (const sessionAbility of [25, 85]) {
+          const params = {
+            playerId: 'rival',
+            round,
+            tournamentSeed: seed,
+            attemptNumber,
+            sessionAbility,
+            pairCount: 4,
+            isBehind: false,
+          }
+          expect(offer).toContain(chooseHouseOfCardsAiTool(params))
+          expect(offer).toContain(
+            simulateHouseOfCardsAiRound({
+              ...params,
+              tool: HOUSE_OF_CARDS_TOOL_POOL.find((tool) => !offer.includes(tool)),
+            }).tool
+          )
+        }
+    }
+    expect(seen.size).toBe(5)
+    expect(HOUSE_OF_CARDS_TOOL_POOL).toHaveLength(5)
+  })
+
+  it('caps scores for unfinished AI simulations and applies a single Shield penalty reduction', () => {
+    const finished = resolveHouseOfCardsRoundScore({
+      pairCount: 4,
+      matchedPairs: 4,
+      mistakes: 2,
+      timeMs: 20_000,
+      bestStreak: 2,
+    })
+    const unfinished = resolveHouseOfCardsRoundScore({
+      pairCount: 4,
+      matchedPairs: 2,
+      mistakes: 2,
+      timeMs: 20_000,
+      bestStreak: 2,
+    })
+    const shielded = resolveHouseOfCardsRoundScore({
+      pairCount: 4,
+      mistakes: 2,
+      scoringMistakes: 1,
+      timeMs: 20_000,
+      bestStreak: 2,
+    })
+    expect(finished - unfinished).toBe(2_000)
+    expect(shielded - finished).toBe(90)
+    expect(
+      resolveHouseOfCardsRoundScore({
+        pairCount: 4,
+        matchedPairs: 99,
+        mistakes: 0,
+        timeMs: 0,
+        bestStreak: 0,
+      })
+    ).toBe(4_000)
+  })
+
+  it('makes strategic AI tool choices reproducibly, with seeded variation across contestants and rounds', () => {
+    const choose = (tournamentSeed: number) =>
+      chooseHouseOfCardsAiTool({
+        playerId: 'ai-1',
+        round: 2,
+        tournamentSeed,
+        sessionAbility: 68,
+        isBehind: true,
+        recentMistakes: 2,
+        pairCount: 6,
+      })
+    expect(choose(17)).toBe(choose(17))
+    const choices = new Set(Array.from({ length: 96 }, (_, seed) => choose(seed)))
+    expect(choices.size).toBeGreaterThan(1)
+  })
+
+  it('deducts only the available Shield misses and never makes the total negative', () => {
+    for (const round of [1, 2, 3, 4]) {
+      const allowance = round <= 2 ? 1 : 2
+      for (const mistakes of [0, 1, 2, 5]) {
+        expect(getHouseOfCardsScoringMistakes(mistakes, round, 'shield')).toBe(
+          Math.max(0, mistakes - allowance)
+        )
+        expect(getHouseOfCardsScoringMistakes(mistakes, round, 'peek')).toBe(mistakes)
+      }
+      const performance = simulateHouseOfCardsAiRound({
+        playerId: 'shield-player',
+        round,
+        pairCount: 4 + round,
+        tournamentSeed: Array.from({ length: 100 }, (_, n) => n).find((n) =>
+          getHouseOfCardsAttemptToolOffer(n).includes('shield')
+        )!,
+        sessionAbility: 60,
+        tool: 'shield',
+      })
+      expect(performance.scoringMistakes).toBe(Math.max(0, performance.mistakes - allowance))
+    }
+  })
+
+  it('requires two different never-seen cards for a bet', () => {
+    expect(isHouseOfCardsBlindBetPair(1, 2, new Set())).toBe(true)
+    expect(isHouseOfCardsBlindBetPair(1, 1, new Set())).toBe(false)
+    expect(isHouseOfCardsBlindBetPair(1, 2, new Set([1]))).toBe(false)
+    expect(isHouseOfCardsBlindBetPair(1, 2, new Set([2]))).toBe(false)
+    expect(isHouseOfCardsBlindBetPair(1, 2, new Set([1, 2]))).toBe(false)
+  })
+
+  it('draws two different Replay cards from the eligible pool reproducibly', () => {
+    const eligible = [2, 4, 7, 11]
+    const draws = Array.from({ length: 40 }, (_, seed) => {
+      const first = chooseHouseOfCardsReplayIndexes(eligible, seed)
+      expect(first).toEqual(chooseHouseOfCardsReplayIndexes(eligible, seed))
+      expect(new Set(first).size).toBe(2)
+      expect(first.every((index) => eligible.includes(index))).toBe(true)
+      return first.join(',')
+    })
+    expect(new Set(draws).size).toBeGreaterThan(1)
+    expect(eligible).toEqual([2, 4, 7, 11])
+    expect(chooseHouseOfCardsReplayIndexes([2], 0)).toEqual([])
+  })
+
+  it.each(['keep-open', 'replay'] as const)(
+    'simulates %s using the same board and scoring rules',
+    (tool) => {
+      const params = {
+        playerId: 'new-tool',
+        round: 3,
+        pairCount: 8,
+        tournamentSeed: Array.from({ length: 100 }, (_, seed) => seed).find((seed) =>
+          getHouseOfCardsAttemptToolOffer(seed).includes(tool)
+        )!,
+        sessionAbility: 61,
+        tool,
+      }
+      const performance = simulateHouseOfCardsAiRound(params)
+      expect(performance).toEqual(simulateHouseOfCardsAiRound(params))
+      expect(performance.toolOutcome).toBe(
+        tool === 'keep-open' ? 'Kept two cards visible' : 'Replayed two seen cards'
+      )
+      expect(performance.toolDelta).toBe(0)
+      expect(performance.scoringMistakes).toBe(performance.mistakes)
+    }
+  )
+
+  it('simulates fallible AI memory with deterministic outcomes and score-consistent bonuses', () => {
+    const params = {
+      playerId: 'ai-2',
+      round: 3,
+      pairCount: 8,
+      tournamentSeed: 711,
+      sessionAbility: 61,
+      tool: 'bonus-bet' as const,
+      isBehind: true,
+    }
+    const first = simulateHouseOfCardsAiRound(params)
+    const replay = simulateHouseOfCardsAiRound(params)
+    expect(first).toEqual(replay)
+    expect(first.completedPairs).toBeGreaterThanOrEqual(0)
+    expect(first.completedPairs).toBeLessThanOrEqual(params.pairCount)
+    expect(first.scoringMistakes).toBeLessThanOrEqual(first.mistakes)
+    expect(first).not.toHaveProperty('brightPairBonus')
+    expect([0, -HOUSE_OF_CARDS_BONUS_BET_PENALTY, HOUSE_OF_CARDS_BONUS_BET_REWARD]).toContain(
+      first.toolDelta
+    )
+    expect(first.score).toBe(
+      resolveHouseOfCardsRoundScore({
+        pairCount: params.pairCount,
+        matchedPairs: first.completedPairs,
+        mistakes: first.mistakes,
+        scoringMistakes: first.scoringMistakes,
+        timeMs: first.timeMs,
+        bestStreak: first.bestStreak,
+        toolBonus: first.toolDelta,
+      })
+    )
+  })
+
+  it('does not let final-round AI recall become perfectly reliable', () => {
+    const board: HouseOfCardsBoardCard[] = [
+      { index: 0, symbol: 'a', isFlipped: false, isMatched: false, isMismatch: false },
+      { index: 1, symbol: 'a', isFlipped: false, isMatched: false, isMismatch: false },
+      { index: 2, symbol: 'b', isFlipped: false, isMatched: false, isMismatch: false },
+      { index: 3, symbol: 'b', isFlipped: false, isMatched: false, isMismatch: false },
+    ]
+    const remembered = new Set(board.map((card) => card.index))
+    const outcomes = Array.from({ length: 64 }, (_, seed) => {
+      const pair = chooseHouseOfCardsAiPair({
+        board,
+        rememberedIndexes: remembered,
+        seed,
+        skill: 65,
+      })
+      expect(pair).not.toBeNull()
+      expect(pair?.[0]).not.toBe(pair?.[1])
+      return board[pair![0]]!.symbol === board[pair![1]]!.symbol
+    })
+    expect(outcomes.some(Boolean)).toBe(true)
+    expect(outcomes.some((isMatch) => !isMatch)).toBe(true)
+  })
+})

@@ -1,0 +1,37 @@
+/* The rare double-power beat uses the same full-bleed broadcast surface as
+   every other Faux TV announcement. Only its timing and short kicker differ. */
+.all-power-faux-tv {
+  z-index: 30;
+  pointer-events: none;
+  animation: all-power-broadcast 5.2s ease both;
+}
+
+.all-power-faux-tv__kicker {
+  margin: 0 0 0.35rem;
+  color: rgba(248, 213, 150, 0.82);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+}
+
+@keyframes all-power-broadcast {
+  0% {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+  7%,
+  92% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .all-power-faux-tv {
+    animation: none;
+  }
+}

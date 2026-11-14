@@ -1,0 +1,133 @@
+import { createRef, type ReactElement, type ReactNode } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render as renderComponent, screen } from '@testing-library/react'
+import { configureStore } from '@reduxjs/toolkit'
+import { Provider } from 'react-redux'
+import gameReducer from '../../../store/gameSlice'
+import GameControlDock from '../GameControlDock'
+
+function render(element: ReactElement) {
+  const store = configureStore({ reducer: { game: gameReducer } })
+  return renderComponent(element, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    ),
+  })
+}
+
+describe('GameControlDock', () => {
+  it('uses the clean glassy dock shell, play, and icon assets', () => {
+    const { container } = render(<GameControlDock />)
+
+    const shell = container.querySelector<HTMLImageElement>('.game-control-dock__shell')
+    expect(shell).not.toBeNull()
+    expect(shell?.getAttribute('src')).toContain('/assets/clean_glassy_dock/fab_shell_clean.svg')
+
+    const play = container.querySelector<HTMLImageElement>('.game-control-dock__play')
+    expect(play).not.toBeNull()
+    expect(play?.getAttribute('src')).toContain(
+      '/assets/clean_glassy_dock/fab_center_play_clean.svg'
+    )
+
+    const glyphs = Array.from(
+      container.querySelectorAll<HTMLImageElement>('.game-control-dock__icon')
+    ).map((glyph) => glyph.getAttribute('src'))
+
+    expect(glyphs).toEqual([
+      expect.stringContaining('/assets/updated_nav_fab_bar/home_approved_final.svg'),
+      expect.stringContaining('/assets/clean_glassy_dock/fab_icon_social_clean.svg'),
+      expect.stringContaining('/assets/clean_glassy_dock/fab_icon_inbox_clean.svg'),
+      expect.stringContaining('/assets/clean_glassy_dock/fab_icon_stats_clean.svg'),
+      expect.stringContaining('/assets/clean_glassy_dock/fab_icon_confessional_clean.svg'),
+    ])
+    expect(container.querySelector('.fab-more-glyph')).not.toBeNull()
+  })
+
+  it('portals the existing dock above the finale overlay without duplicating Play', () => {
+    const { container } = render(
+      <GameControlDock elevatedDuringOverlay primaryLabel="Play finale scene" />
+    )
+
+    expect(container.querySelector('.game-control-dock')).toBeNull()
+    const dock = document.body.querySelector('.game-control-dock')
+    expect(dock?.classList.contains('game-control-dock--finale-overlay')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Play finale scene' })).toBeEnabled()
+  })
+
+  it('preserves dock hit areas, badges, and disabled behavior', () => {
+    const onChatClick = vi.fn()
+    const onRequestsClick = vi.fn()
+    const onPrimaryActionClick = vi.fn()
+    const onPublicMeterClick = vi.fn()
+    const onToolClick = vi.fn()
+
+    const { rerender } = render(
+      <GameControlDock
+        onChatClick={onChatClick}
+        onIncomingRequestsClick={onRequestsClick}
+        onPrimaryActionClick={onPrimaryActionClick}
+        onPublicMeterClick={onPublicMeterClick}
+        onToolClick={onToolClick}
+        chatBadgeCount={3}
+        incomingRequestsBadgeCount={7}
+        publicMeterBadgeCount={11}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Social (3)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Incoming requests (7)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Advance to next phase' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Public meter (11)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confessional' }))
+
+    expect(onChatClick).toHaveBeenCalledTimes(1)
+    expect(onRequestsClick).toHaveBeenCalledTimes(1)
+    expect(onPrimaryActionClick).toHaveBeenCalledTimes(1)
+    expect(onPublicMeterClick).toHaveBeenCalledTimes(1)
+    expect(onToolClick).toHaveBeenCalledTimes(1)
+
+    rerender(<GameControlDock disabled primaryDisabled />)
+
+    expect(screen.getByRole('button', { name: 'Social' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Incoming requests' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Advance to next phase' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Public meter' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Confessional' })).toBeDisabled()
+  })
+
+  it('forwards the confessional icon ref for spotlight targeting', () => {
+    const confessionalIconRef = createRef<HTMLImageElement>()
+
+    const { container } = render(<GameControlDock confessionalIconRef={confessionalIconRef} />)
+
+    expect(confessionalIconRef.current).toBe(
+      container.querySelector<HTMLImageElement>('.fab-icon.confessional')
+    )
+  })
+
+  it('offers bug reporting in the dock More menu without leaving gameplay', () => {
+    const onMoreClick = vi.fn()
+    render(<GameControlDock onMoreClick={onMoreClick} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    expect(screen.getByRole('menu', { name: 'More destinations' })).toBeDefined()
+    const menuItems = screen.getAllByRole('menuitem')
+    expect(menuItems).toHaveLength(6)
+    expect(menuItems.every((item) => item.querySelector('img') && !item.textContent?.trim())).toBe(
+      true
+    )
+
+    const hallOfFame = screen.getByRole('menuitem', { name: 'Hall of Fame' })
+    expect(hallOfFame.querySelector('img')?.getAttribute('src')).toContain(
+      '/assets/updated_nav_fab_bar/hall_of_fame_approved_final.svg'
+    )
+
+    const feedback = screen.getByRole('menuitem', { name: 'Report a bug' })
+    expect(feedback.querySelector('img')?.getAttribute('src')).toContain(
+      '/assets/side_utilities_button/feedback_v2.svg'
+    )
+    fireEvent.click(feedback)
+    expect(onMoreClick).toHaveBeenCalledWith('feedback')
+    expect(screen.queryByRole('menu', { name: 'More destinations' })).toBeNull()
+  })
+})

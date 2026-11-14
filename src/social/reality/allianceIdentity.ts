@@ -1,0 +1,375 @@
+import type { RealityAlliance, RealityDomainState } from './types'
+import type { RelationshipsMap } from '../types'
+
+export const ALLIANCE_LIMITS = { groupsPerMember: 2, groupMembers: 6 } as const
+const MAX_SETTLED_ALLIANCE_REQUESTS = 64
+const MAX_PROCESSED_ALLIANCE_COMMANDS = 240
+
+export function isCurrentAlliance(alliance: RealityAlliance): boolean
+export function isCurrentAlliance(
+  alliance: RealityAlliance | undefined
+): alliance is RealityAlliance
+export function isCurrentAlliance(alliance: RealityAlliance | undefined): boolean {
+  return Boolean(
+    alliance &&
+    alliance.status !== 'DISSOLVED' &&
+    alliance.provenance !== 'SOURCE' &&
+    alliance.memberIds.length >= 2
+  )
+}
+
+export function allianceKind(alliance: RealityAlliance): 'PACT' | 'GROUP' {
+  return alliance.kind ?? (alliance.memberIds.length > 2 ? 'GROUP' : 'PACT')
+}
+
+export function allianceDisplayLabel(alliance: RealityAlliance, knownHostility = false): string {
+  const isPact = allianceKind(alliance) === 'PACT'
+  const noun = isPact ? 'pact' : 'alliance'
+  if (knownHostility || alliance.status === 'FRACTURED') return `Strained ${noun}`
+  if (alliance.status === 'PROBATIONARY') return `New ${noun}`
+  return isPact ? 'Pact' : 'Alliance'
+}
+
+export function getCurrentAlliancesBetween(
+  state: RealityDomainState,
+  left: string,
+  right: string
+): RealityAlliance[] {
+  if (left === right) return []
+  return Object.values(state.alliances)
+    .filter(
+      (alliance) =>
+        isCurrentAlliance(alliance) &&
+        alliance.memberIds.includes(left) &&
+        alliance.memberIds.includes(right)
+    )
+    .sort(
+      (leftAlliance, rightAlliance) =>
+        Number(allianceKind(leftAlliance) === 'GROUP') -
+          Number(allianceKind(rightAlliance) === 'GROUP') ||
+        leftAlliance.id.localeCompare(rightAlliance.id)
+    )
+}
+
+export function getCurrentPact(
+  state: RealityDomainState,
+  left: string,
+  right: string
+): RealityAlliance | undefined {
+  return Object.values(state.alliances).find(
+    (entry) =>
+      isCurrentAlliance(entry) &&
+      allianceKind(entry) === 'PACT' &&
+      entry.memberIds.includes(left) &&
+      entry.memberIds.includes(right)
+  )
+}
+
+export function currentAllianceCounts(state: RealityDomainState, actorId: string) {
+  const entries = Object.values(state.alliances).filter(
+    (entry) => isCurrentAlliance(entry) && entry.memberIds.includes(actorId)
+  )
+  return {
+    groups: entries.filter((entry) => allianceKind(entry) === 'GROUP').length,
+    pacts: entries.filter((entry) => allianceKind(entry) === 'PACT').length,
+  }
+}
+
+/** Authority is stable; social standing and commitment never elect officers. */
+export function synchronizeAllianceOfficers(alliance: RealityAlliance): void {
+  if (allianceKind(alliance) === 'PACT' || !isCurrentAlliance(alliance)) {
+    alliance.leaderId = undefined
+    alliance.coLeaderId = undefined
+    if (!alliance.leaderIds || alliance.leaderIds.length) alliance.leaderIds = []
+    return
+  }
+  if (!alliance.leaderId || !alliance.memberIds.includes(alliance.leaderId)) {
+    alliance.leaderId =
+      alliance.coLeaderId && alliance.memberIds.includes(alliance.coLeaderId)
+        ? alliance.coLeaderId
+        : [...alliance.memberIds].sort(
+            (left, right) =>
+              (alliance.memberJoinSequence?.[left] ?? 0) -
+                (alliance.memberJoinSequence?.[right] ?? 0) || left.localeCompare(right)
+          )[0]
+    alliance.coLeaderId = undefined
+    alliance.governanceRevision = (alliance.governanceRevision ?? 0) + 1
+  }
+  if (
+    alliance.coLeaderId === alliance.leaderId ||
+    (alliance.coLeaderId && !alliance.memberIds.includes(alliance.coLeaderId))
+  )
+    alliance.coLeaderId = undefined
+  const leaderIds = [alliance.leaderId, alliance.coLeaderId].filter((id): id is string =>
+    Boolean(id)
+  )
+  if (
+    leaderIds.length !== alliance.leaderIds?.length ||
+    leaderIds.some((id, index) => id !== alliance.leaderIds[index])
+  )
+    alliance.leaderIds = leaderIds
+}
+
+export function rememberAllianceRoster(alliance: RealityAlliance): void {
+  alliance.rosterKnowledgeByActor ??= {}
+  for (const actorId of alliance.memberIds) {
+    const known = alliance.rosterKnowledgeByActor[actorId]
+    if (
+      known &&
+      known.rosterRevision === (alliance.rosterRevision ?? 0) &&
+      known.name === alliance.name &&
+      known.leaderId === alliance.leaderId &&
+      known.coLeaderId === alliance.coLeaderId &&
+      known.memberIds.length === alliance.memberIds.length &&
+      known.memberIds.every((id, index) => id === alliance.memberIds[index])
+    )
+      continue
+    alliance.rosterKnowledgeByActor[actorId] = {
+      memberIds: [...alliance.memberIds],
+      rosterRevision: alliance.rosterRevision ?? 0,
+      name: alliance.name,
+      leaderId: alliance.leaderId,
+      coLeaderId: alliance.coLeaderId,
+    }
+  }
+}
+
+export function normalizeAllianceIdentity(
+  state: RealityDomainState,
+  alliance: RealityAlliance
+): void {
+  if (!alliance.kind) {
+    const wasGroup =
+      alliance.memberIds.length > 2 ||
+      alliance.founderIds.length > 2 ||
+      Object.values(state.reentryProfiles ?? {}).some((profile) =>
+        profile.alliances.some(
+          (snapshot) => snapshot.allianceId === alliance.id && snapshot.memberIds.length > 2
+        )
+      ) ||
+      state.events.some(
+        (event) =>
+          event.participantIds.length > 2 &&
+          (event.reason?.includes(`:${alliance.id}:`) ||
+            event.reason === `recruited_into:${alliance.id}`)
+      )
+    alliance.kind = wasGroup ? 'GROUP' : 'PACT'
+    alliance.provenance ??= 'LEGACY'
+  }
+  alliance.rosterRevision ??= 0
+  alliance.governanceRevision ??= 0
+  alliance.memberJoinSequence ??= Object.fromEntries(
+    alliance.memberIds.map((id, index) => [id, index])
+  )
+  // Historical inference is migration work. Current records already carry these
+  // fields; rescanning every event for every alliance on each phase is wasteful.
+  const needsFormation =
+    alliance.createdById == null ||
+    (alliance.kind === 'GROUP' && alliance.leadershipTransferApproved == null)
+  const formationEvent = needsFormation
+    ? [...(alliance.history ?? []), ...state.events]
+        .filter(
+          (event) =>
+            event.type === 'ALLIANCE_FORMED' &&
+            (event.allianceId === alliance.id || event.allianceSnapshot?.id === alliance.id)
+        )
+        .sort((left, right) => left.sequence - right.sequence)[0]
+    : undefined
+  alliance.createdById ??=
+    formationEvent?.actorId ??
+    (alliance.provenance === 'LEGACY'
+      ? undefined
+      : (alliance.founderIds[0] ??
+        [...alliance.memberIds].sort(
+          (left, right) =>
+            (alliance.memberJoinSequence?.[left] ?? 0) -
+              (alliance.memberJoinSequence?.[right] ?? 0) || left.localeCompare(right)
+        )[0]))
+
+  if (alliance.kind === 'GROUP') {
+    const creatorId = alliance.createdById
+    const creatorIsCurrentMember = Boolean(creatorId && alliance.memberIds.includes(creatorId))
+    const allianceEvents =
+      alliance.leadershipTransferApproved == null || alliance.creatorPreviouslyLeft == null
+        ? [...(alliance.history ?? []), ...state.events].filter(
+            (event) =>
+              event.allianceId === alliance.id || event.allianceSnapshot?.id === alliance.id
+          )
+        : []
+    alliance.leadershipTransferApproved ??= Boolean(
+      creatorId &&
+      allianceEvents.some(
+        (event) =>
+          event.type === 'ALLIANCE_OFFICERS_CHANGED' &&
+          event.sequence > (formationEvent?.sequence ?? -1) &&
+          event.allianceSnapshot?.leaderId &&
+          event.allianceSnapshot.leaderId !== creatorId
+      )
+    )
+    alliance.creatorPreviouslyLeft ??= Boolean(
+      creatorId &&
+      allianceEvents.some(
+        (event) =>
+          [
+            'ALLIANCE_MEMBER_LEFT',
+            'ALLIANCE_MEMBER_EXPELLED',
+            'ALLIANCE_MEMBER_DEFECTED',
+            'ALLIANCE_MEMBER_EVICTED',
+          ].includes(event.type) && event.targetIds.includes(creatorId)
+      )
+    )
+    if (
+      creatorIsCurrentMember &&
+      !alliance.leadershipTransferApproved &&
+      !alliance.creatorPreviouslyLeft
+    ) {
+      alliance.leaderId = creatorId
+      if (alliance.coLeaderId === creatorId) alliance.coLeaderId = undefined
+    } else if (!alliance.leaderId) {
+      alliance.leaderId =
+        alliance.leaderIds.find((id) => alliance.memberIds.includes(id)) ??
+        (creatorIsCurrentMember ? creatorId : undefined)
+      alliance.coLeaderId = alliance.leaderIds.find(
+        (id) => id !== alliance.leaderId && alliance.memberIds.includes(id)
+      )
+    }
+  }
+  synchronizeAllianceOfficers(alliance)
+  rememberAllianceRoster(alliance)
+}
+
+/** Duplicate pair episodes retain their original history and promise ownership. */
+export function normalizeAllianceManagement(state: RealityDomainState, migratePairs = false): void {
+  state.allianceManagement ??= {
+    version: 1,
+    nextRequestSequence: 0,
+    requests: {},
+    processedCommands: {},
+    importedLegacyIds: [],
+    aliases: {},
+  }
+  if (state.allianceManagement.version !== 1)
+    throw new Error('Unsupported alliance management save version')
+  state.allianceManagement.nextRequestSequence ??= 0
+  state.allianceManagement.requests ??= {}
+  state.allianceManagement.processedCommands ??= {}
+  state.allianceManagement.importedLegacyIds ??= []
+  state.allianceManagement.aliases ??= {}
+  if (Object.keys(state.allianceManagement.requests).length > MAX_SETTLED_ALLIANCE_REQUESTS) {
+    const requestEntries = Object.entries(state.allianceManagement.requests)
+    const pendingRequestKeys = new Set(
+      requestEntries
+        .filter(([, request]) => request.status === 'VOTING' || request.status === 'CONSENT')
+        .map(([id]) => id)
+    )
+    const settledRequestEntries = requestEntries.filter(([id]) => !pendingRequestKeys.has(id))
+    if (settledRequestEntries.length > MAX_SETTLED_ALLIANCE_REQUESTS) {
+      const retainedKeys = new Set([
+        ...pendingRequestKeys,
+        ...settledRequestEntries.slice(-MAX_SETTLED_ALLIANCE_REQUESTS).map(([id]) => id),
+      ])
+      state.allianceManagement.requests = Object.fromEntries(
+        requestEntries.filter(([id]) => retainedKeys.has(id))
+      )
+    }
+  }
+  if (
+    Object.keys(state.allianceManagement.processedCommands).length > MAX_PROCESSED_ALLIANCE_COMMANDS
+  )
+    state.allianceManagement.processedCommands = Object.fromEntries(
+      Object.entries(state.allianceManagement.processedCommands).slice(
+        -MAX_PROCESSED_ALLIANCE_COMMANDS
+      )
+    )
+  for (const promise of Object.values(state.promises)) {
+    if (!promise.originatingAllianceId && typeof promise.scope.allianceId === 'string')
+      promise.originatingAllianceId = promise.scope.allianceId
+  }
+  for (const entry of Object.values(state.alliances)) normalizeAllianceIdentity(state, entry)
+  if (!migratePairs) return
+  const pairs = new Map<string, RealityAlliance[]>()
+  for (const entry of Object.values(state.alliances)) {
+    if (!isCurrentAlliance(entry) || allianceKind(entry) !== 'PACT') continue
+    const key = [...entry.memberIds].sort().join('~')
+    pairs.set(key, [...(pairs.get(key) ?? []), entry])
+  }
+  for (const [pair, sources] of pairs) {
+    if (sources.length < 2) continue
+    const id = `legacy-pair:${pair}`
+    const canonical: RealityAlliance = {
+      ...sources[0],
+      id,
+      kind: 'PACT',
+      name: undefined,
+      provenance: 'UNRESOLVED',
+      sourceEpisodeIds: sources.map((source) => source.id).sort(),
+      sharedPromiseIds: [],
+      memberCommitment: Object.fromEntries(sources[0].memberIds.map((actorId) => [actorId, 0.5])),
+      leaderId: undefined,
+      coLeaderId: undefined,
+      leaderIds: [],
+      rosterKnowledgeByActor: {},
+      status: 'ACTIVE',
+    }
+    for (const source of sources) {
+      source.sourceOriginalStatus = source.status
+      source.status = 'DISSOLVED'
+      source.provenance = 'SOURCE'
+    }
+    state.alliances[id] = canonical
+    normalizeAllianceIdentity(state, canonical)
+  }
+}
+
+/** Old normal-mode saves only recorded pair tags. Keep each pair separate. */
+export function importLegacyPairMemberships(
+  state: RealityDomainState,
+  relationships: RelationshipsMap
+): void {
+  for (const [left, targets] of Object.entries(relationships)) {
+    for (const [right, edge] of Object.entries(targets)) {
+      if (
+        left >= right ||
+        !edge.tags.includes('alliance') ||
+        !relationships[right]?.[left]?.tags.includes('alliance')
+      )
+        continue
+      const id = `legacy-tags:${left}~${right}`
+      if (state.allianceManagement.importedLegacyIds.includes(id)) continue
+      state.allianceManagement.importedLegacyIds.push(id)
+      if (
+        Object.values(state.alliances).some(
+          (entry) => entry.memberIds.includes(left) && entry.memberIds.includes(right)
+        )
+      )
+        continue
+      state.alliances[id] = {
+        id,
+        kind: 'PACT',
+        provenance: 'UNRESOLVED',
+        sourceEpisodeIds: [id],
+        memberIds: [left, right],
+        founderIds: [],
+        leaderIds: [],
+        secrecy: 0.75,
+        cohesion: 0.5,
+        fractureRisk: 0.2,
+        purpose: 'Recorded personal pact',
+        currentTargetIds: [],
+        fallbackTargetIds: [],
+        sharedPromiseIds: [],
+        memberCommitment: { [left]: 0.5, [right]: 0.5 },
+        memberPerceivedStatus: { [left]: 'REGULAR', [right]: 'REGULAR' },
+        memberPlanBeliefs: { [left]: [], [right]: [] },
+        operationalRoles: { [left]: [], [right]: [] },
+        suspectedByIds: [],
+        knownLeakEventIds: [],
+        overlapAllianceIds: [],
+        status: 'PROBATIONARY',
+        genuine: true,
+        infiltratorIds: [],
+      }
+      normalizeAllianceIdentity(state, state.alliances[id])
+    }
+  }
+}

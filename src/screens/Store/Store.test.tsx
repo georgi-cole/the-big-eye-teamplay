@@ -1,0 +1,373 @@
+import { configureStore } from '@reduxjs/toolkit'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { Provider } from 'react-redux'
+import { MemoryRouter, Route, Routes } from 'react-router'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { STORE_PRODUCT_CATALOG } from '../../vip/vipConfig'
+import { createEmptyStoreEntitlements } from '../../vip/vipStorage'
+import { hasStoreProductIcon } from '../../components/StoreProductModal/storeProductIconUtils'
+import vipReducer, { type VipState } from '../../store/vipSlice'
+import profilesReducer from '../../store/profilesSlice'
+import gameReducer, { createInitialGameState } from '../../store/gameSlice'
+import Store from './Store'
+
+const purchaseStoreProductMock = vi.hoisted(() => vi.fn())
+const loadVipStoreSnapshotMock = vi.hoisted(() => vi.fn())
+const requestCinematicPackMock = vi.hoisted(() => vi.fn())
+const platform = vi.hoisted(() => ({ native: false }))
+
+vi.mock('../../cinematic/media/cinematicPackDownloads', () => ({
+  requestCinematicPack: requestCinematicPackMock,
+}))
+
+vi.mock('@capacitor/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@capacitor/core')>()
+  return {
+    ...actual,
+    Capacitor: {
+      ...actual.Capacitor,
+      isNativePlatform: () => platform.native,
+      getPlatform: () => (platform.native ? 'android' : 'web'),
+    },
+  }
+})
+
+vi.mock('../../vip/useSurvivalRuns', () => ({
+  useSurvivalRuns: () => ({
+    balance: 2,
+    product: { price: '€0.99' },
+    billingAvailable: true,
+    loading: false,
+    purchasing: false,
+    error: null,
+    clearError: () => undefined,
+    purchase: async () => true,
+  }),
+}))
+
+vi.mock('../../vip/vipPurchaseService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../vip/vipPurchaseService')>()
+  return {
+    ...actual,
+    purchaseStoreProduct: purchaseStoreProductMock,
+    loadVipStoreSnapshot: loadVipStoreSnapshotMock,
+  }
+})
+
+vi.mock('../../vip/effectiveEntitlements', () => ({
+  TEMPORARY_STORE_UNLOCKS_ENABLED: false,
+  isEffectiveVipActive: (vip: { isActive?: boolean } | undefined) => vip?.isActive === true,
+  hasEffectiveStoreEntitlement: (
+    vip: { isActive?: boolean; entitlements?: Record<string, boolean> } | undefined,
+    entitlement: string
+  ) => vip?.isActive === true || vip?.entitlements?.[entitlement] === true,
+}))
+
+function makeVipState(options?: {
+  owned?: string[]
+  vip?: boolean
+  billingAvailable?: boolean
+}): VipState {
+  const entitlements = createEmptyStoreEntitlements()
+  for (const key of options?.owned ?? []) {
+    if (key in entitlements) entitlements[key as keyof typeof entitlements] = true
+  }
+  const billingAvailable = options?.billingAvailable ?? true
+  const products = billingAvailable
+    ? Object.fromEntries(
+        STORE_PRODUCT_CATALOG.map((definition) => [
+          definition.key,
+          {
+            key: definition.key,
+            productId: definition.productId,
+            title: definition.title,
+            description: definition.description,
+            price: definition.key === 'vip' ? '$19.99' : '$4.99',
+          },
+        ])
+      )
+    : {}
+
+  return {
+    status: 'ready',
+    isActive: options?.vip ?? false,
+    debugUnlocked: false,
+    entitlements,
+    billingAvailable,
+    products,
+    activePurchaseKey: null,
+    lastVerifiedAt: '2026-07-21T00:00:00.000Z',
+    error: null,
+  }
+}
+
+function snapshotFrom(state: VipState) {
+  return {
+    billingAvailable: state.billingAvailable,
+    isActive: state.isActive,
+    entitlements: state.entitlements,
+    products: state.products,
+    verifiedAt: '2026-07-21T00:01:00.000Z',
+  }
+}
+
+function renderStore(initialVip = makeVipState()) {
+  const store = configureStore({
+    reducer: { vip: vipReducer, profiles: profilesReducer, game: gameReducer },
+    preloadedState: { vip: initialVip, game: createInitialGameState({ seed: 1905 }) },
+  })
+
+  render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={['/store']}>
+        <Routes>
+          <Route path="/store" element={<Store />} />
+          <Route path="/settings" element={<h1>Settings destination</h1>} />
+          <Route path="/" element={<h1>Home destination</h1>} />
+        </Routes>
+      </MemoryRouter>
+    </Provider>
+  )
+
+  return store
+}
+
+function openDramaMode() {
+  fireEvent.click(screen.getByRole('button', { name: 'Expansion' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Reality Mode' }))
+}
+
+describe('Store product presentation', () => {
+  beforeEach(() => {
+    platform.native = false
+    purchaseStoreProductMock.mockReset()
+    loadVipStoreSnapshotMock.mockReset()
+    requestCinematicPackMock.mockReset()
+  })
+
+  it('gives every catalogue product a deliberate custom icon', () => {
+    for (const product of STORE_PRODUCT_CATALOG) {
+      expect(hasStoreProductIcon(product.icon)).toBe(true)
+    }
+  })
+
+  it('presents Cupid and Vox as dedicated season expansions', () => {
+    renderStore()
+    fireEvent.click(screen.getByRole('button', { name: 'Game Modes' }))
+
+    expect(screen.getByRole('heading', { name: 'Play a different game' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: "Open Cupid's Arrow" })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Vox Populi' })).toBeInTheDocument()
+  })
+
+  it('surfaces No Ads and Premium Challenges under Extras', () => {
+    renderStore()
+    fireEvent.click(screen.getByRole('button', { name: 'Extras' }))
+
+    expect(screen.getByRole('heading', { name: 'Extras' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open No Ads' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Premium Challenges Pack' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Survival runs' })).toBeInTheDocument()
+  })
+
+  it('keeps consumable Survival runs purchasable for VIP owners', () => {
+    renderStore(makeVipState({ vip: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Extras' }))
+    const product = screen.getByRole('region', { name: 'Survival runs' })
+
+    expect(within(product).getByRole('button', { name: 'Buy 1 Survival run' })).toBeEnabled()
+    expect(within(product).getByLabelText('2 Survival runs available')).toBeVisible()
+    expect(within(product).queryByText('Included with VIP', { exact: true })).toBeNull()
+  })
+
+  it('explains that No Ads keeps optional rewarded opportunities', () => {
+    renderStore()
+    fireEvent.click(screen.getByRole('button', { name: 'Extras' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open No Ads' }))
+
+    expect(
+      screen.getByText(/optional rewarded opportunities remain available by choice/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/75% of this purchase counts toward a future VIP upgrade/i)
+    ).toBeInTheDocument()
+  })
+
+  it('marks VIP as an upgrade when qualifying standalone ownership exists', () => {
+    renderStore(makeVipState({ owned: ['survivalMode'] }))
+
+    expect(screen.getByText('VIP upgrade · permanent')).toBeInTheDocument()
+    expect(screen.getByText(/75% of their configured value is credited/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Explore VIP upgrade' })).toBeInTheDocument()
+    expect(screen.getByText('No automatic ads')).toBeInTheDocument()
+  })
+
+  it('shows owned VIP access in place of its live price', () => {
+    renderStore(makeVipState({ vip: true }))
+
+    const card = screen.getByRole('region', { name: 'The Big Eye VIP' })
+    expect(within(card).getByText('Owned', { exact: true })).toBeVisible()
+    expect(within(card).queryByText('$19.99')).toBeNull()
+    expect(within(card).queryByText('one time')).toBeNull()
+    expect(within(card).getByRole('button', { name: 'View VIP access' })).toBeEnabled()
+  })
+
+  it('switches store categories in place instead of navigating away from the store', () => {
+    renderStore()
+
+    expect(screen.getByRole('heading', { name: 'The Big Eye VIP' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Power Market' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Powers' }))
+
+    expect(screen.getByRole('heading', { name: 'Power Market' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'The Big Eye VIP' })).not.toBeInTheDocument()
+  })
+
+  it('opens the unowned product presentation with live price and real benefits', () => {
+    renderStore()
+    openDramaMode()
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Reality Mode' })).toBeInTheDocument()
+    expect(
+      screen.getByText('Make secret deals, bold moves and unforgettable rivalries')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Unlock for $4.99' })).toBeEnabled()
+  })
+
+  it('opens an owned confirmation without a purchase CTA and navigates to access', () => {
+    renderStore(makeVipState({ owned: ['dramaMode'] }))
+    openDramaMode()
+
+    expect(screen.getByRole('heading', { name: 'Reality Mode is unlocked' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Unlock for/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }))
+    expect(screen.getByRole('heading', { name: 'Settings destination' })).toBeInTheDocument()
+  })
+
+  it('prevents duplicate purchase requests and transitions immediately to unlocked', async () => {
+    let resolvePurchase: (value: ReturnType<typeof snapshotFrom>) => void = () => undefined
+    purchaseStoreProductMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePurchase = resolve
+      })
+    )
+    const purchasedState = makeVipState({ owned: ['dramaMode'] })
+
+    renderStore()
+    openDramaMode()
+    const purchaseButton = screen.getByRole('button', { name: 'Unlock for $4.99' })
+    fireEvent.click(purchaseButton)
+    fireEvent.click(purchaseButton)
+
+    await waitFor(() => expect(purchaseStoreProductMock).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: 'Confirming purchase...' })).toBeDisabled()
+
+    resolvePurchase(snapshotFrom(purchasedState))
+    expect(
+      await screen.findByRole('heading', { name: 'Reality Mode is unlocked' })
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the modal open and reports purchase cancellation', async () => {
+    purchaseStoreProductMock.mockRejectedValue(new Error('Purchase cancelled.'))
+    renderStore()
+    openDramaMode()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock for $4.99' }))
+
+    expect(await screen.findByText('Purchase cancelled.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(requestCinematicPackMock).not.toHaveBeenCalled()
+  })
+
+  it('offers cinematic scenes only after a VIP purchase has completed and closes the purchase dialog', async () => {
+    let finish!: (value: ReturnType<typeof snapshotFrom>) => void
+    purchaseStoreProductMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    renderStore()
+    fireEvent.click(screen.getByRole('button', { name: 'Explore VIP' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock for $19.99' }))
+    await waitFor(() => expect(purchaseStoreProductMock).toHaveBeenCalledOnce())
+    expect(requestCinematicPackMock).not.toHaveBeenCalled()
+    finish(snapshotFrom(makeVipState({ vip: true })))
+    await waitFor(() => expect(requestCinematicPackMock).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('offers cinematic scenes after restoring VIP without leaving a purchase dialog underneath', async () => {
+    loadVipStoreSnapshotMock.mockResolvedValue(snapshotFrom(makeVipState({ vip: true })))
+    renderStore()
+    fireEvent.click(screen.getByRole('button', { name: 'Explore VIP' }))
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Restore Purchases' })
+    )
+    await waitFor(() => expect(requestCinematicPackMock).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('reports a purchase failure and keeps the action available for retry', async () => {
+    purchaseStoreProductMock.mockRejectedValue(new Error('The store could not be reached.'))
+    renderStore()
+    openDramaMode()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock for $4.99' }))
+
+    expect(await screen.findByText('The store could not be reached.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Unlock for $4.99' })).toBeEnabled()
+  })
+
+  it('restores ownership inside the modal and switches to the owned state', async () => {
+    const restoredState = makeVipState({ owned: ['dramaMode'] })
+    loadVipStoreSnapshotMock.mockResolvedValue(snapshotFrom(restoredState))
+    renderStore()
+    openDramaMode()
+
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Restore Purchases' })
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: 'Reality Mode is unlocked' })
+    ).toBeInTheDocument()
+    expect(loadVipStoreSnapshotMock).toHaveBeenCalledWith({ restore: true })
+  })
+
+  it('lets an Android player reconnect after startup billing fails', async () => {
+    platform.native = true
+    loadVipStoreSnapshotMock.mockResolvedValue(snapshotFrom(makeVipState()))
+    const store = renderStore({
+      ...makeVipState({ billingAvailable: false }),
+      status: 'error',
+      error: 'SERVICE_DISCONNECTED',
+    })
+    const reconnect = screen.getByRole('button', { name: 'Reconnect to Store' })
+    expect(reconnect).toBeEnabled()
+    fireEvent.click(reconnect)
+    await waitFor(() => expect(store.getState().vip.billingAvailable).toBe(true))
+    expect(screen.getByText('Store connected. Available purchases are ready.')).toBeInTheDocument()
+    platform.native = false
+  })
+
+  it('shows a disabled unavailable state when platform pricing is absent', () => {
+    renderStore(makeVipState({ billingAvailable: false }))
+    openDramaMode()
+
+    expect(within(screen.getByRole('dialog')).getByText('Price unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Currently unavailable' })).toBeDisabled()
+  })
+
+  it('closes with Escape when no purchase is in progress', () => {
+    renderStore()
+    openDramaMode()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})

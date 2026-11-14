@@ -1,0 +1,150 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { getBackendConfig } from './config'
+
+export type BackendPurpose = 'profile_backup' | 'analytics' | 'audience_admin' | 'player_account'
+const clients = new Map<BackendPurpose, Promise<SupabaseClient>>()
+const authentications = new Map<
+  BackendPurpose,
+  Promise<{ client: SupabaseClient; ownerId: string }>
+>()
+const authListeners = new Map<BackendPurpose, Set<(ownerId: string | null) => void>>()
+const authOperations = new Map<BackendPurpose, Promise<unknown>>()
+
+export function subscribeBackendAuth(
+  purpose: BackendPurpose,
+  listener: (ownerId: string | null) => void
+): () => void {
+  let listeners = authListeners.get(purpose)
+  if (!listeners) {
+    listeners = new Set()
+    authListeners.set(purpose, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+export async function getBackendClient(purpose: BackendPurpose): Promise<SupabaseClient> {
+  const config = getBackendConfig()
+  if (!config) throw new Error('Supabase is not configured.')
+  let pending = clients.get(purpose)
+  if (!pending) {
+    pending = import('@supabase/supabase-js').then(({ createClient }) => {
+      const storageKey = `bbmobilenew:supabase:${purpose}:v1`
+      const playerAccount = purpose === 'player_account'
+      const client = createClient(config.url, config.key, {
+        auth: {
+          storageKey,
+          persistSession: true,
+          autoRefreshToken: !playerAccount,
+          detectSessionInUrl: false,
+          flowType: playerAccount ? 'pkce' : 'implicit',
+          ...(playerAccount && {
+            storage: {
+              getItem: (key: string) => localStorage.getItem(key),
+              removeItem: (key: string) => localStorage.removeItem(key),
+              setItem(key: string, value: string | undefined) {
+                if (value === undefined) {
+                  localStorage.removeItem(key)
+                  return
+                }
+                if (key !== storageKey) {
+                  localStorage.setItem(key, value)
+                  return
+                }
+                // The OAuth callback can use provider credentials in memory. Only the
+                // Supabase session belongs in the app's persistent storage.
+                const session = JSON.parse(value)
+                if (session) {
+                  delete session.provider_token
+                  delete session.provider_refresh_token
+                }
+                localStorage.setItem(key, JSON.stringify(session))
+              },
+            },
+          }),
+        },
+        global: {
+          fetch: async (input, init) => {
+            const controller = new AbortController()
+            const forwardAbort = () => controller.abort()
+            const timeout = setTimeout(() => controller.abort(), 15_000)
+            if (init?.signal?.aborted) controller.abort()
+            init?.signal?.addEventListener('abort', forwardAbort, { once: true })
+            try {
+              return await fetch(input, { ...init, signal: controller.signal })
+            } finally {
+              clearTimeout(timeout)
+              init?.signal?.removeEventListener('abort', forwardAbort)
+            }
+          },
+        },
+      })
+      client.auth.onAuthStateChange((_event, session) => {
+        // Keep this callback synchronous to avoid taking Auth's session lock twice.
+        authListeners.get(purpose)?.forEach((listener) => listener(session?.user.id ?? null))
+      })
+      return client
+    })
+    clients.set(purpose, pending)
+    void pending.catch(() => clients.delete(purpose))
+  }
+  return pending
+}
+
+/**
+ * All automatic and explicit Auth mutations for one identity share this queue.
+ * The app lock deliberately differs from Supabase's internal session/storage
+ * lock, so SDK methods can safely acquire their own lock inside the operation.
+ */
+export function withBackendAuthLock<T>(
+  purpose: BackendPurpose,
+  operation: (client: SupabaseClient) => Promise<T>
+): Promise<T> {
+  const previous = authOperations.get(purpose) ?? Promise.resolve()
+  const pending = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const client = await getBackendClient(purpose)
+      const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
+      if (typeof locks?.request === 'function')
+        return locks.request(
+          `bbmobilenew:app-auth-operation:${purpose}:v1`,
+          { mode: 'exclusive' },
+          () => operation(client)
+        )
+      // Web Locks are not available in every native webview. This queue still
+      // prevents races between the background service and UI in this instance.
+      return operation(client)
+    })
+  authOperations.set(purpose, pending)
+  void pending
+    .finally(() => {
+      if (authOperations.get(purpose) === pending) authOperations.delete(purpose)
+    })
+    .catch(() => undefined)
+  return pending
+}
+
+/** Player backup/analytics stay anonymous; audience administration uses a separate explicit session. */
+export async function authenticatedBackend(purpose: 'profile_backup' | 'analytics') {
+  let pending = authentications.get(purpose)
+  if (!pending) {
+    pending = withBackendAuthLock(purpose, async (client) => {
+      const current = await client.auth.getSession()
+      if (current.error) throw current.error
+      let session = current.data.session
+      if (!session) {
+        const signedIn = await client.auth.signInAnonymously()
+        if (signedIn.error) throw signedIn.error
+        session = signedIn.data.session
+      }
+      if (!session) throw new Error('Could not start a Supabase session.')
+      return { client, ownerId: session.user.id }
+    })
+    authentications.set(purpose, pending)
+    void pending.finally(() => authentications.delete(purpose)).catch(() => undefined)
+  }
+  return pending
+}

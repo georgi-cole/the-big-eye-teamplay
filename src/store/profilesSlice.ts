@@ -1,0 +1,1206 @@
+// src/store/profilesSlice.ts
+//
+// Multi-profile system.
+//
+// Key behaviours:
+//  - Up to MAX_PROFILES profiles can be created on a device, signed in or out.
+//  - "Login" = selecting an active profile (no password/auth).
+//  - Guest mode: no stats/archives saved, warning displayed.
+//  - Switching profiles always prompts a season-reset confirmation (handled in UI).
+//  - Stand-alone helpers (loadProfilesState, loadActiveProfile,
+//    archiveKeyForActiveProfile) are safe to call from gameSlice without
+//    creating circular Redux dependencies.
+
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
+import {
+  coerceAppearanceSelection,
+  getAppearanceLook,
+  type AppearanceSelection,
+} from '../appearance/catalog'
+import { coerceContestantDefaults, type SeasonContestant } from '../appearance/seasonContestant'
+import { PUBLIC_FAVORITE_FORECAST_EYEOLEANS, type EyeoleanRewardLine } from '../economy/eyeoleans'
+import {
+  EYEOLEAN_STORE_PRODUCT_KEYS,
+  getEyeoleanStoreProduct,
+  getEyeoleanStorePurchasePrice,
+  type EyeoleanStoreProductKey,
+} from '../economy/storeCatalog'
+import type { RootState } from './store'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+export const MAX_PROFILES = 3
+const PROFILES_STORAGE_KEY = 'bbmobilenew:profiles:v1'
+/** Prefix for per-profile season-archive localStorage keys. */
+export const DEFAULT_ARCHIVE_KEY_PREFIX = 'bbmobilenew:seasonArchives:'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface ProfileBio {
+  /** Short personal story / bio paragraph. */
+  story?: string
+  location?: string
+  profession?: string
+  /** Age or age range (stored as string so user can write "25" or "mid-20s"). */
+  age?: string
+  /** Canonical sex used by sex-specific Reality story eligibility. */
+  sex?: string
+  /** Optional explicit adult-story reproductive capabilities. */
+  reproductiveProfile?: {
+    canBecomePregnant?: boolean
+    canCausePregnancy?: boolean
+  }
+  /** Personal motto. */
+  motto?: string
+  funFact?: string
+  zodiac?: string
+  education?: string
+  familyStatus?: string
+  kids?: string
+  pets?: string
+  /** Religion (optional/sensitive). */
+  religion?: string
+  /** Sexuality (optional/sensitive). */
+  sexuality?: string
+}
+
+export interface BellaProgress {
+  /** Permanent marker used to unlock Bella's post-Twin casting cadence. */
+  twinShockConsumedEver: boolean
+  /** Permanent Hubmates unlock; never inferred solely from the capped season archive. */
+  unlocked: boolean
+  /** True once Bella has actually appeared in a non-debug cast. */
+  hasAppeared: boolean
+  /** True once the one required compatible Classic season after her first appearance is completed. */
+  mandatorySkipConsumed: boolean
+}
+
+const DEFAULT_BELLA_PROGRESS: BellaProgress = {
+  twinShockConsumedEver: false,
+  unlocked: false,
+  hasAppeared: false,
+  mandatorySkipConsumed: false,
+}
+
+function coerceBellaProgress(raw: unknown): BellaProgress | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Partial<BellaProgress>
+  return {
+    twinShockConsumedEver: value.twinShockConsumedEver === true,
+    unlocked: value.unlocked === true,
+    hasAppeared: value.hasAppeared === true,
+    mandatorySkipConsumed: value.mandatorySkipConsumed === true,
+  }
+}
+
+export type EyeoleanTransactionSource =
+  | 'season_reward'
+  | 'forecast_reward'
+  | 'store_purchase'
+  | 'purchase_credit'
+  | 'adjustment'
+
+export interface EyeoleanPowerReservation {
+  productKey: EyeoleanStoreProductKey
+  gameId: string
+  season: number
+  armedWeek: number
+  armedAt: string
+  /** Optional selected recipient for a targeted Protection power. */
+  targetId?: string
+}
+
+export interface EyeoleanPowerSeasonProgress {
+  gameId: string
+  season: number
+  purchases: number
+  uses: number
+}
+
+export interface EyeoleanTransaction {
+  /** Stable idempotency key. Duplicate IDs are never applied twice. */
+  id: string
+  /** Positive = credit, negative = spend. */
+  amount: number
+  source: EyeoleanTransactionSource
+  label: string
+  createdAt: string
+  seasonId?: string
+}
+
+export interface StoredProfile {
+  /** Stable unique identifier; new profiles use UUIDs when supported. */
+  id: string
+  /** Local association with an optional sign-in. Never included in backup snapshots. */
+  playerAccountId?: string
+  /** Timestamp used to resolve edits to account-synced profile details. */
+  accountProfileUpdatedAt?: string
+  /** In-game display name. */
+  name: string
+  /** Emoji fallback avatar. */
+  avatar: string
+  /** IndexedDB key for the uploaded photo blob; undefined when no photo set. */
+  photoId?: string
+  /** Default visual identity for newly started seasons. */
+  appearanceSelection?: AppearanceSelection
+  /** First chosen look, retained when repairing an adopted guest's unselected silhouette. */
+  initialAppearanceSelection?: AppearanceSelection
+  /** Extended biography fields. */
+  bio?: ProfileBio
+  /** Optional next-season choice; existing saves own independent snapshots. */
+  contestantDefaults?: SeasonContestant
+  /** ISO timestamp when the profile was created. */
+  createdAt: string
+  /**
+   * @deprecated Legacy XP is retained only so old profiles can be read safely.
+   * New progression uses the Eyeolean wallet.
+   */
+  lifetimeXp?: number
+  /** Persistent soft-currency balance carried across seasons. */
+  eyeoleans?: number
+  /** Recent wallet ledger entries for auditability and future Store UI. */
+  eyeoleanTransactions?: EyeoleanTransaction[]
+  /** Persistent quantities of soft-currency consumables bought from the Store. */
+  eyeoleanInventory?: Partial<Record<EyeoleanStoreProductKey, number>>
+  /** One reserved unit per power, bound to the active season until used or returned. */
+  eyeoleanPowerReservations?: Partial<Record<EyeoleanStoreProductKey, EyeoleanPowerReservation>>
+  /** Purchase/use counters for the current season of each Store power. */
+  eyeoleanPowerSeasonProgress?: Partial<
+    Record<EyeoleanStoreProductKey, EyeoleanPowerSeasonProgress>
+  >
+  /**
+   * Long-lived idempotency keys. Kept separately from the trimmed display ledger so
+   * an old purchase callback cannot become payable again after enough transactions.
+   */
+  processedEyeoleanTransactionIds?: string[]
+  /** Season settlement IDs already paid; prevents finale reload/replay duplication. */
+  settledEyeoleanSeasonIds?: string[]
+  /** Permanent achievement identifiers unlocked by this profile. */
+  achievements?: string[]
+  /** Reward-event keys already paid, preventing a reload from duplicating Eyeoleans. */
+  forecastRewardEventIds?: string[]
+  /** Permanent Bella discovery/casting cadence state. */
+  bellaProgress?: BellaProgress
+}
+
+export const PUBLIC_FAVORITE_FORECAST_ACHIEVEMENT = 'public_favorite_oracle'
+
+const MAX_EYEOLEAN_TRANSACTIONS = 500
+const MAX_PROCESSED_EYEOLEAN_TRANSACTION_IDS = 5000
+const MAX_SETTLED_EYEOLEAN_SEASONS = 1000
+
+export interface ProfilesState {
+  profiles: StoredProfile[]
+  /** ID of the currently active profile, or null (guest / no selection). */
+  activeProfileId: string | null
+  /** When true the user is playing as guest — no stats/archives are saved. */
+  isGuest: boolean
+}
+
+// ─── Defaults ────────────────────────────────────────────────────────────────
+
+const DEFAULT_PROFILES_STATE: ProfilesState = {
+  profiles: [],
+  activeProfileId: null,
+  isGuest: false,
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Collision-resistant profile ID using the Web Crypto API (falls back to timestamp+random). */
+function generateId(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    // Fallback for environments where crypto.randomUUID is unavailable.
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
+  }
+}
+
+function nextAccountProfileTimestamp(profile: StoredProfile): string {
+  const previous = Date.parse(profile.accountProfileUpdatedAt ?? profile.createdAt)
+  return new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString()
+}
+
+// ─── Standalone persistence helpers ──────────────────────────────────────────
+// These functions do NOT import the Redux store, so they are safe to call from
+// gameSlice.ts (or any module that runs before the store is created).
+
+/**
+ * Coerce a raw parsed value into a valid StoredProfile, normalizing any
+ * missing/invalid fields to safe defaults so corrupted localStorage entries
+ * do not cause runtime errors downstream (e.g. new Date(createdAt) crashes,
+ * rendering undefined name, etc.).
+ */
+function coerceEyeoleanTransaction(raw: unknown): EyeoleanTransaction | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Partial<EyeoleanTransaction>
+  const allowedSources: EyeoleanTransactionSource[] = [
+    'season_reward',
+    'forecast_reward',
+    'store_purchase',
+    'purchase_credit',
+    'adjustment',
+  ]
+  if (
+    typeof value.id !== 'string' ||
+    !value.id ||
+    typeof value.amount !== 'number' ||
+    !Number.isFinite(value.amount) ||
+    value.amount === 0 ||
+    typeof value.source !== 'string' ||
+    !allowedSources.includes(value.source as EyeoleanTransactionSource) ||
+    typeof value.label !== 'string' ||
+    !value.label ||
+    typeof value.createdAt !== 'string' ||
+    !value.createdAt
+  ) {
+    return null
+  }
+
+  return {
+    id: value.id,
+    amount: Math.trunc(value.amount),
+    source: value.source as EyeoleanTransactionSource,
+    label: value.label,
+    createdAt: value.createdAt,
+    seasonId: typeof value.seasonId === 'string' && value.seasonId ? value.seasonId : undefined,
+  }
+}
+
+function coerceEyeoleanInventory(raw: unknown): Partial<Record<EyeoleanStoreProductKey, number>> {
+  if (!raw || typeof raw !== 'object') return {}
+  const source = raw as Record<string, unknown>
+  const inventory: Partial<Record<EyeoleanStoreProductKey, number>> = {}
+  EYEOLEAN_STORE_PRODUCT_KEYS.forEach((key) => {
+    const quantity = source[key]
+    if (typeof quantity === 'number' && Number.isFinite(quantity) && quantity > 0) {
+      inventory[key] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(quantity))
+    }
+  })
+  return inventory
+}
+
+function coerceEyeoleanPowerReservations(
+  raw: unknown
+): Partial<Record<EyeoleanStoreProductKey, EyeoleanPowerReservation>> {
+  if (!raw || typeof raw !== 'object') return {}
+  const source = raw as Record<string, unknown>
+  const reservations: Partial<Record<EyeoleanStoreProductKey, EyeoleanPowerReservation>> = {}
+  EYEOLEAN_STORE_PRODUCT_KEYS.forEach((key) => {
+    const value = source[key]
+    if (!value || typeof value !== 'object') return
+    const reservation = value as Partial<EyeoleanPowerReservation>
+    if (
+      reservation.productKey !== key ||
+      typeof reservation.gameId !== 'string' ||
+      !reservation.gameId ||
+      typeof reservation.season !== 'number' ||
+      !Number.isFinite(reservation.season) ||
+      typeof reservation.armedWeek !== 'number' ||
+      !Number.isFinite(reservation.armedWeek) ||
+      typeof reservation.armedAt !== 'string' ||
+      !reservation.armedAt
+    ) {
+      return
+    }
+    reservations[key] = {
+      productKey: key,
+      gameId: reservation.gameId,
+      season: Math.max(1, Math.floor(reservation.season)),
+      armedWeek: Math.max(1, Math.floor(reservation.armedWeek)),
+      armedAt: reservation.armedAt,
+      ...(typeof reservation.targetId === 'string' && reservation.targetId
+        ? { targetId: reservation.targetId }
+        : {}),
+    }
+  })
+  return reservations
+}
+
+function coerceEyeoleanPowerSeasonProgress(
+  raw: unknown
+): Partial<Record<EyeoleanStoreProductKey, EyeoleanPowerSeasonProgress>> {
+  if (!raw || typeof raw !== 'object') return {}
+  const source = raw as Record<string, unknown>
+  const progress: Partial<Record<EyeoleanStoreProductKey, EyeoleanPowerSeasonProgress>> = {}
+
+  EYEOLEAN_STORE_PRODUCT_KEYS.forEach((key) => {
+    const value = source[key]
+    if (!value || typeof value !== 'object') return
+    const entry = value as Partial<EyeoleanPowerSeasonProgress>
+    if (
+      typeof entry.gameId !== 'string' ||
+      !entry.gameId ||
+      typeof entry.season !== 'number' ||
+      !Number.isFinite(entry.season)
+    ) {
+      return
+    }
+    progress[key] = {
+      gameId: entry.gameId,
+      season: Math.max(1, Math.floor(entry.season)),
+      purchases:
+        typeof entry.purchases === 'number' && Number.isFinite(entry.purchases)
+          ? Math.max(0, Math.floor(entry.purchases))
+          : 0,
+      uses:
+        typeof entry.uses === 'number' && Number.isFinite(entry.uses)
+          ? Math.max(0, Math.floor(entry.uses))
+          : 0,
+    }
+  })
+
+  return progress
+}
+
+export function getEyeoleanPowerSeasonProgress(
+  profile: StoredProfile | null | undefined,
+  productKey: EyeoleanStoreProductKey,
+  gameId: string,
+  season: number
+): EyeoleanPowerSeasonProgress {
+  const normalizedSeason = Math.max(1, Math.floor(season))
+  const current = profile?.eyeoleanPowerSeasonProgress?.[productKey]
+  if (!current || current.gameId !== gameId || current.season !== normalizedSeason) {
+    return {
+      gameId,
+      season: normalizedSeason,
+      purchases: 0,
+      uses: 0,
+    }
+  }
+
+  return {
+    gameId,
+    season: normalizedSeason,
+    purchases: Math.max(0, Math.floor(current.purchases)),
+    uses: Math.max(0, Math.floor(current.uses)),
+  }
+}
+
+function appendEyeoleanTransaction(
+  profile: StoredProfile,
+  transaction: EyeoleanTransaction
+): boolean {
+  const transactions = profile.eyeoleanTransactions ?? []
+  const processedIds =
+    profile.processedEyeoleanTransactionIds ?? transactions.map((entry) => entry.id)
+  if (processedIds.includes(transaction.id)) return false
+
+  profile.eyeoleanTransactions = [...transactions, transaction].slice(-MAX_EYEOLEAN_TRANSACTIONS)
+  profile.processedEyeoleanTransactionIds = [...processedIds, transaction.id].slice(
+    -MAX_PROCESSED_EYEOLEAN_TRANSACTION_IDS
+  )
+  return true
+}
+
+function creditEyeoleans(
+  profile: StoredProfile,
+  transaction: Omit<EyeoleanTransaction, 'amount'> & { amount: number }
+): number {
+  if (!Number.isFinite(transaction.amount)) return 0
+  const requested = Math.max(0, Math.floor(transaction.amount))
+  if (requested <= 0) return 0
+
+  const current = Math.max(0, Math.floor(profile.eyeoleans ?? 0))
+  const next = Math.min(Number.MAX_SAFE_INTEGER, current + requested)
+  const credited = next - current
+  if (credited <= 0) return 0
+
+  if (!appendEyeoleanTransaction(profile, { ...transaction, amount: credited })) return 0
+  profile.eyeoleans = next
+  return credited
+}
+
+export function coerceStoredProfile(raw: unknown): StoredProfile | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  // id and createdAt are required; discard the entry if either is missing.
+  if (typeof r.id !== 'string' || !r.id) return null
+  if (typeof r.createdAt !== 'string' || !r.createdAt) return null
+
+  const forecastRewardEventIds = Array.isArray(r.forecastRewardEventIds)
+    ? r.forecastRewardEventIds.filter(
+        (eventId): eventId is string => typeof eventId === 'string' && eventId.length > 0
+      )
+    : []
+  const storedEyeoleanBalance =
+    typeof r.eyeoleans === 'number' && Number.isFinite(r.eyeoleans)
+      ? Math.max(0, Math.floor(r.eyeoleans))
+      : null
+  // The only shipped XP award was the Public Favorite forecast. Preserve those
+  // earned rewards when an old profile first enters the Eyeolean economy.
+  const migratedForecastBalance =
+    storedEyeoleanBalance == null
+      ? forecastRewardEventIds.length * PUBLIC_FAVORITE_FORECAST_EYEOLEANS
+      : storedEyeoleanBalance
+  const initialAppearance = coerceAppearanceSelection(
+    r.initialAppearanceSelection ?? r.appearanceSelection
+  )
+
+  return {
+    id: r.id,
+    ...(typeof r.playerAccountId === 'string' && r.playerAccountId
+      ? { playerAccountId: r.playerAccountId }
+      : {}),
+    ...(typeof r.accountProfileUpdatedAt === 'string' &&
+    Number.isFinite(Date.parse(r.accountProfileUpdatedAt))
+      ? { accountProfileUpdatedAt: r.accountProfileUpdatedAt }
+      : {}),
+    name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : 'You',
+    avatar: typeof r.avatar === 'string' && r.avatar ? r.avatar : '👤',
+    photoId: typeof r.photoId === 'string' && r.photoId ? r.photoId : undefined,
+    appearanceSelection: coerceAppearanceSelection(r.appearanceSelection),
+    ...(initialAppearance.kind === 'catalog'
+      ? { initialAppearanceSelection: initialAppearance }
+      : {}),
+    bio: r.bio && typeof r.bio === 'object' ? (r.bio as ProfileBio) : undefined,
+    contestantDefaults: coerceContestantDefaults(r.contestantDefaults),
+    createdAt: r.createdAt,
+    lifetimeXp:
+      typeof r.lifetimeXp === 'number' && Number.isFinite(r.lifetimeXp)
+        ? Math.max(0, Math.floor(r.lifetimeXp))
+        : 0,
+    eyeoleans: migratedForecastBalance,
+    eyeoleanInventory: coerceEyeoleanInventory(r.eyeoleanInventory),
+    eyeoleanPowerReservations: coerceEyeoleanPowerReservations(r.eyeoleanPowerReservations),
+    eyeoleanPowerSeasonProgress: coerceEyeoleanPowerSeasonProgress(r.eyeoleanPowerSeasonProgress),
+    eyeoleanTransactions: Array.isArray(r.eyeoleanTransactions)
+      ? r.eyeoleanTransactions
+          .map(coerceEyeoleanTransaction)
+          .filter((entry): entry is EyeoleanTransaction => entry !== null)
+          .slice(-MAX_EYEOLEAN_TRANSACTIONS)
+      : [],
+    processedEyeoleanTransactionIds: Array.isArray(r.processedEyeoleanTransactionIds)
+      ? r.processedEyeoleanTransactionIds
+          .filter(
+            (transactionId): transactionId is string =>
+              typeof transactionId === 'string' && transactionId.length > 0
+          )
+          .slice(-MAX_PROCESSED_EYEOLEAN_TRANSACTION_IDS)
+      : Array.isArray(r.eyeoleanTransactions)
+        ? r.eyeoleanTransactions
+            .map(coerceEyeoleanTransaction)
+            .filter((entry): entry is EyeoleanTransaction => entry !== null)
+            .map((entry) => entry.id)
+            .slice(-MAX_PROCESSED_EYEOLEAN_TRANSACTION_IDS)
+        : [],
+    settledEyeoleanSeasonIds: Array.isArray(r.settledEyeoleanSeasonIds)
+      ? r.settledEyeoleanSeasonIds
+          .filter(
+            (seasonId): seasonId is string => typeof seasonId === 'string' && seasonId.length > 0
+          )
+          .slice(-MAX_SETTLED_EYEOLEAN_SEASONS)
+      : [],
+    achievements: Array.isArray(r.achievements)
+      ? r.achievements.filter(
+          (achievement): achievement is string => typeof achievement === 'string'
+        )
+      : [],
+    forecastRewardEventIds,
+    bellaProgress: coerceBellaProgress(r.bellaProgress),
+  }
+}
+
+/** Load profiles state from localStorage. Returns DEFAULT_PROFILES_STATE on error/miss. */
+export function loadProfilesState(): ProfilesState {
+  try {
+    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
+    if (!raw) return DEFAULT_PROFILES_STATE
+    const parsed = JSON.parse(raw) as Partial<ProfilesState>
+    const profiles: StoredProfile[] = Array.isArray(parsed.profiles)
+      ? (parsed.profiles as unknown[]).reduce<StoredProfile[]>((acc, p) => {
+          const coerced = coerceStoredProfile(p)
+          if (coerced) acc.push(coerced)
+          return acc
+        }, [])
+      : []
+    return {
+      profiles,
+      activeProfileId: typeof parsed.activeProfileId === 'string' ? parsed.activeProfileId : null,
+      isGuest: typeof parsed.isGuest === 'boolean' ? parsed.isGuest : false,
+    }
+  } catch {
+    return DEFAULT_PROFILES_STATE
+  }
+}
+
+/** Persist profiles state to localStorage. Silently ignores errors. */
+export function saveProfilesState(state: ProfilesState): void {
+  try {
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // Ignore quota / private-browsing errors.
+  }
+}
+
+/**
+ * Return the active profile's name and avatar (for use in gameSlice.buildUserPlayer).
+ * Falls back through the legacy userProfile storage, then to the hardcoded default.
+ */
+export function loadActiveProfile(): {
+  name: string
+  avatar: string
+  photoId?: string
+  appearanceSelection?: AppearanceSelection
+  bio?: ProfileBio
+} {
+  const state = loadProfilesState()
+  if (!state.isGuest && state.activeProfileId) {
+    const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+    if (profile) {
+      return {
+        name: profile.name,
+        avatar: profile.avatar,
+        photoId: profile.photoId,
+        appearanceSelection: profile.appearanceSelection,
+        bio: profile.bio,
+      }
+    }
+  }
+  // Legacy fallback: read from old userProfile storage key.
+  try {
+    const raw = localStorage.getItem('bbmobilenew_user_profile_v1')
+    if (raw) {
+      const parsed = JSON.parse(raw) as { name?: string; avatar?: string }
+      return {
+        name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'You',
+        avatar: typeof parsed.avatar === 'string' && parsed.avatar ? parsed.avatar : '👤',
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { name: 'You', avatar: '👤' }
+}
+
+/**
+ * Build the localStorage key for a specific profile's season archives.
+ * The profile ID is encoded with encodeURIComponent to prevent storage-key
+ * injection in the unlikely event that an ID contains special characters.
+ */
+export function archiveKeyForProfile(profileId: string): string {
+  return `${DEFAULT_ARCHIVE_KEY_PREFIX}${encodeURIComponent(profileId)}`
+}
+
+/**
+ * Build the localStorage key under which season archives are stored for the
+ * currently active profile.  Guest mode → returns the global fallback key.
+ */
+export function archiveKeyForActiveProfile(): string {
+  const state = loadProfilesState()
+  if (!state.isGuest && state.activeProfileId) {
+    return archiveKeyForProfile(state.activeProfileId)
+  }
+  return 'bbmobilenew:seasonArchives'
+}
+
+// ─── Slice ───────────────────────────────────────────────────────────────────
+
+const profilesSlice = createSlice({
+  name: 'profiles',
+  initialState: DEFAULT_PROFILES_STATE as ProfilesState,
+  reducers: {
+    /** Replace the full profiles state (used to hydrate from localStorage on boot). */
+    initProfiles(_state, action: PayloadAction<ProfilesState>) {
+      return action.payload
+    },
+
+    /**
+     * Create a new profile and make it active.
+     * No-op (slice unchanged) if the profile limit is reached or the ID already exists.
+     */
+    createProfile(
+      state,
+      action: PayloadAction<{
+        id?: string
+        playerAccountId?: string
+        name: string
+        avatar: string
+        photoId?: string
+        appearanceSelection?: AppearanceSelection
+        bio?: ProfileBio
+      }>
+    ) {
+      const accountId = action.payload.playerAccountId
+      if (state.profiles.length >= MAX_PROFILES) return
+      const id = action.payload.id ?? generateId()
+      if (!id.trim() || state.profiles.some((profile) => profile.id === id)) return
+      const appearance = coerceAppearanceSelection(action.payload.appearanceSelection)
+      const profile: StoredProfile = {
+        id,
+        ...(accountId ? { playerAccountId: accountId } : {}),
+        ...(accountId ? { accountProfileUpdatedAt: new Date().toISOString() } : {}),
+        name: action.payload.name.trim() || 'You',
+        avatar: action.payload.avatar || '👤',
+        photoId: action.payload.photoId,
+        appearanceSelection: appearance,
+        ...(appearance.kind === 'catalog' ? { initialAppearanceSelection: appearance } : {}),
+        createdAt: new Date().toISOString(),
+        bio: action.payload.bio,
+        eyeoleans: 0,
+        eyeoleanTransactions: [],
+        eyeoleanInventory: {},
+        eyeoleanPowerReservations: {},
+        processedEyeoleanTransactionIds: [],
+        settledEyeoleanSeasonIds: [],
+      }
+      state.profiles.push(profile)
+      state.activeProfileId = profile.id
+      state.isGuest = false
+    },
+
+    /** Switch the active profile.  No-op if the ID does not exist. */
+    selectActiveProfile(state, action: PayloadAction<string>) {
+      if (!state.profiles.some((p) => p.id === action.payload)) return
+      state.activeProfileId = action.payload
+      state.isGuest = false
+    },
+
+    linkActiveProfileToPlayerAccount(
+      state,
+      action: PayloadAction<{ profileId: string; accountId: string }>
+    ) {
+      const { profileId, accountId } = action.payload
+      if (state.isGuest || state.activeProfileId !== profileId || !accountId) return
+      const profile = state.profiles.find((entry) => entry.id === profileId)
+      if (!profile || (profile.playerAccountId && profile.playerAccountId !== accountId)) return
+      if (
+        profile.playerAccountId !== accountId &&
+        state.profiles.filter((entry) => entry.playerAccountId === accountId).length >= MAX_PROFILES
+      )
+        return
+      profile.playerAccountId = accountId
+      profile.accountProfileUpdatedAt = nextAccountProfileTimestamp(profile)
+    },
+
+    /** Attach all unclaimed local profiles to the verified account together. */
+    linkLocalProfilesToPlayerAccount(
+      state,
+      action: PayloadAction<{ accountId: string; profileIds?: string[] }>
+    ) {
+      const { accountId } = action.payload
+      if (!accountId) return
+      const local = state.profiles.filter(
+        (profile) =>
+          !profile.playerAccountId &&
+          (!action.payload.profileIds || action.payload.profileIds.includes(profile.id))
+      )
+      const owned = state.profiles.filter((profile) => profile.playerAccountId === accountId)
+      if (owned.length + local.length > MAX_PROFILES) return
+      for (const profile of local) {
+        profile.playerAccountId = accountId
+        profile.accountProfileUpdatedAt = nextAccountProfileTimestamp(profile)
+      }
+    },
+
+    mergePlayerAccountProfiles(
+      state,
+      action: PayloadAction<{ accountId: string; profiles: unknown[] }>
+    ) {
+      const { accountId, profiles } = action.payload
+      if (!accountId) return
+      for (const raw of profiles) {
+        const profile = coerceStoredProfile(raw)
+        if (!profile) continue
+        const existing = state.profiles.find((entry) => entry.id === profile.id)
+        if (existing?.playerAccountId && existing.playerAccountId !== accountId) continue
+        if (existing) {
+          existing.playerAccountId = accountId
+          existing.accountProfileUpdatedAt = profile.accountProfileUpdatedAt
+          existing.name = profile.name
+          existing.avatar = profile.avatar
+          existing.appearanceSelection = profile.appearanceSelection
+          existing.initialAppearanceSelection = profile.initialAppearanceSelection
+          existing.bio = profile.bio
+          existing.createdAt = profile.createdAt
+          continue
+        }
+        if (
+          state.profiles.filter((entry) => entry.playerAccountId === accountId).length >=
+          MAX_PROFILES
+        )
+          continue
+        state.profiles.push({
+          ...profile,
+          playerAccountId: accountId,
+          accountProfileUpdatedAt: profile.accountProfileUpdatedAt ?? profile.createdAt,
+        })
+      }
+    },
+
+    unlinkProfileFromPlayerAccount(
+      state,
+      action: PayloadAction<{ profileId: string; accountId: string }>
+    ) {
+      const { profileId, accountId } = action.payload
+      const profile = state.profiles.find((entry) => entry.id === profileId)
+      if (profile?.playerAccountId === accountId) delete profile.playerAccountId
+    },
+
+    /**
+     * Update mutable fields on the currently-active profile.
+     * `id` and `createdAt` are immutable.
+     */
+    updateProfile(
+      state,
+      action: PayloadAction<Partial<Omit<StoredProfile, 'id' | 'createdAt' | 'playerAccountId'>>>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      if (profile.playerAccountId)
+        profile.accountProfileUpdatedAt = nextAccountProfileTimestamp(profile)
+      const { name, avatar, photoId, bio, appearanceSelection } = action.payload
+      // Explicit profile edits become the defaults for the next season.
+      if (
+        name !== undefined ||
+        avatar !== undefined ||
+        photoId !== undefined ||
+        bio !== undefined ||
+        appearanceSelection !== undefined
+      )
+        delete profile.contestantDefaults
+      if (name !== undefined) profile.name = name.trim() || profile.name
+      if (avatar !== undefined) profile.avatar = avatar
+      if (photoId !== undefined) profile.photoId = photoId
+      if (bio !== undefined) profile.bio = { ...profile.bio, ...bio }
+      if (appearanceSelection !== undefined) {
+        const normalized = coerceAppearanceSelection(appearanceSelection)
+        if (
+          normalized.kind === 'legacy' ||
+          getAppearanceLook(normalized.lookId, normalized.revision)?.selectable
+        ) {
+          if (normalized.kind === 'catalog' && !profile.initialAppearanceSelection) {
+            profile.initialAppearanceSelection =
+              profile.appearanceSelection?.kind === 'catalog'
+                ? { ...profile.appearanceSelection }
+                : { ...normalized }
+          }
+          profile.appearanceSelection = normalized
+        }
+      }
+    },
+
+    rememberContestant(
+      state,
+      action: PayloadAction<{ profileId: string; contestant: SeasonContestant }>
+    ) {
+      const profile = state.profiles.find((entry) => entry.id === action.payload.profileId)
+      const defaults = coerceContestantDefaults(action.payload.contestant)
+      if (profile && defaults) profile.contestantDefaults = defaults
+    },
+
+    /** Persist the fact that this profile has consumed the Lia/Ali Twin Shock. */
+    recordBellaTwinShockConsumed(state) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      profile.bellaProgress = {
+        ...DEFAULT_BELLA_PROGRESS,
+        ...profile.bellaProgress,
+        twinShockConsumedEver: true,
+      }
+    },
+
+    /** Unlock Bella immediately when she enters a real cast. */
+    recordBellaEncountered(state) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      profile.bellaProgress = {
+        ...DEFAULT_BELLA_PROGRESS,
+        ...profile.bellaProgress,
+        unlocked: true,
+        hasAppeared: true,
+      }
+    },
+
+    /**
+     * Consume Bella's one mandatory post-debut skip only when a compatible
+     * Classic season actually completes without Bella.
+     */
+    recordBellaCompatibleClassicCompleted(state, action: PayloadAction<{ bellaCast: boolean }>) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      const progress = {
+        ...DEFAULT_BELLA_PROGRESS,
+        ...profile.bellaProgress,
+      }
+      if (action.payload.bellaCast) {
+        progress.unlocked = true
+        progress.hasAppeared = true
+      } else if (progress.hasAppeared && !progress.mandatorySkipConsumed) {
+        progress.mandatorySkipConsumed = true
+      }
+      profile.bellaProgress = progress
+    },
+
+    /**
+     * Settle a completed season into the active profile wallet exactly once.
+     * Guest mode has no active profile, so nothing is banked.
+     */
+    settleSeasonEyeoleans(
+      state,
+      action: PayloadAction<{ seasonId: string; rewards: EyeoleanRewardLine[] }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      const seasonId = action.payload.seasonId.trim()
+      if (!profile || !seasonId) return
+
+      const settled = profile.settledEyeoleanSeasonIds ?? []
+      if (settled.includes(seasonId)) return
+
+      const createdAt = new Date().toISOString()
+      action.payload.rewards.forEach((reward) => {
+        const amount = Math.max(0, Math.floor(reward.amount))
+        if (amount <= 0) return
+        creditEyeoleans(profile, {
+          id: `${seasonId}:${reward.code}`,
+          amount,
+          source: 'season_reward',
+          label: reward.quantity > 1 ? `${reward.label} ×${reward.quantity}` : reward.label,
+          createdAt,
+          seasonId,
+        })
+      })
+
+      profile.settledEyeoleanSeasonIds = [...settled, seasonId].slice(-MAX_SETTLED_EYEOLEAN_SEASONS)
+    },
+
+    /**
+     * Store-ready debit. A duplicate transaction or insufficient balance is a no-op,
+     * preventing double purchases and negative balances.
+     */
+    spendEyeoleans(
+      state,
+      action: PayloadAction<{ transactionId: string; amount: number; label: string }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      const transactionId = action.payload.transactionId.trim()
+      const label = action.payload.label.trim()
+      if (!profile || !transactionId || !label || !Number.isFinite(action.payload.amount)) return
+      const amount = Math.max(0, Math.floor(action.payload.amount))
+      if (amount <= 0) return
+
+      const processedIds =
+        profile.processedEyeoleanTransactionIds ??
+        (profile.eyeoleanTransactions ?? []).map((entry) => entry.id)
+      if (processedIds.includes(transactionId)) return
+
+      const balance = Math.max(0, Math.floor(profile.eyeoleans ?? 0))
+      if (balance < amount) return
+
+      if (
+        appendEyeoleanTransaction(profile, {
+          id: transactionId,
+          amount: -amount,
+          source: 'store_purchase',
+          label,
+          createdAt: new Date().toISOString(),
+        })
+      ) {
+        profile.eyeoleans = balance - amount
+      }
+    },
+
+    /** Debug-panel grant for QA wallet testing; never shown in player-facing UI. */
+    debugGrantEyeoleans(state, action: PayloadAction<{ grantId: string; amount: number }>) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      const grantId = action.payload.grantId.trim()
+      if (!profile || !grantId || !Number.isFinite(action.payload.amount)) return
+      const amount = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(action.payload.amount))
+      if (amount <= 0) return
+      creditEyeoleans(profile, {
+        id: `qa-grant:${grantId}`,
+        amount,
+        source: 'adjustment',
+        label: 'QA wallet grant',
+        createdAt: new Date().toISOString(),
+      })
+    },
+
+    /**
+     * Purchase one soft-currency consumable from the canonical Eyeolean catalog.
+     * The reducer resolves the price internally so callers cannot spoof a cheaper amount.
+     */
+    purchaseEyeoleanStoreProduct(
+      state,
+      action: PayloadAction<{
+        transactionId: string
+        productKey: EyeoleanStoreProductKey
+        gameId: string
+        season: number
+      }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      const transactionId = action.payload.transactionId.trim()
+      const gameId = action.payload.gameId.trim()
+      const season = Math.max(1, Math.floor(action.payload.season))
+      if (!profile || !transactionId || !gameId || !Number.isFinite(action.payload.season)) {
+        return
+      }
+
+      const product = getEyeoleanStoreProduct(action.payload.productKey)
+      const progress = getEyeoleanPowerSeasonProgress(profile, product.key, gameId, season)
+      if (
+        progress.purchases >= product.maxSeasonPurchases ||
+        progress.uses >= product.maxSeasonUses
+      ) {
+        return
+      }
+      const price = getEyeoleanStorePurchasePrice(product.key, progress.purchases)
+      if (price == null) return
+
+      const processedIds =
+        profile.processedEyeoleanTransactionIds ??
+        (profile.eyeoleanTransactions ?? []).map((entry) => entry.id)
+      if (processedIds.includes(transactionId)) return
+
+      const balance = Math.max(0, Math.floor(profile.eyeoleans ?? 0))
+      if (balance < price) return
+
+      if (
+        !appendEyeoleanTransaction(profile, {
+          id: transactionId,
+          amount: -price,
+          source: 'store_purchase',
+          label: product.title,
+          createdAt: new Date().toISOString(),
+        })
+      ) {
+        return
+      }
+
+      profile.eyeoleans = balance - price
+      const inventory = profile.eyeoleanInventory ?? {}
+      const currentQuantity = Math.max(0, Math.floor(inventory[product.key] ?? 0))
+      profile.eyeoleanInventory = {
+        ...inventory,
+        [product.key]: Math.min(Number.MAX_SAFE_INTEGER, currentQuantity + 1),
+      }
+      profile.eyeoleanPowerSeasonProgress = {
+        ...(profile.eyeoleanPowerSeasonProgress ?? {}),
+        [product.key]: {
+          ...progress,
+          purchases: progress.purchases + 1,
+        },
+      }
+    },
+
+    /**
+     * Reserve one purchased consumable for this season. The unit leaves ordinary
+     * inventory immediately, but is returned if it never reaches a valid trigger.
+     */
+    armEyeoleanStorePower(
+      state,
+      action: PayloadAction<{
+        productKey: EyeoleanStoreProductKey
+        gameId: string
+        season: number
+        week: number
+        targetId?: string
+      }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile || state.isGuest) return
+      const { productKey } = action.payload
+      const gameId = action.payload.gameId.trim()
+      if (
+        !gameId ||
+        !Number.isFinite(action.payload.season) ||
+        !Number.isFinite(action.payload.week)
+      ) {
+        return
+      }
+
+      const reservations = profile.eyeoleanPowerReservations ?? {}
+      if (reservations[productKey]) return
+
+      const product = getEyeoleanStoreProduct(productKey)
+      const progress = getEyeoleanPowerSeasonProgress(
+        profile,
+        productKey,
+        gameId,
+        action.payload.season
+      )
+      if (progress.uses >= product.maxSeasonUses) return
+
+      const inventory = profile.eyeoleanInventory ?? {}
+      const quantity = Math.max(0, Math.floor(inventory[productKey] ?? 0))
+      if (quantity <= 0) return
+
+      profile.eyeoleanInventory = {
+        ...inventory,
+        [productKey]: quantity - 1,
+      }
+      profile.eyeoleanPowerReservations = {
+        ...reservations,
+        [productKey]: {
+          productKey,
+          gameId,
+          season: Math.max(1, Math.floor(action.payload.season)),
+          armedWeek: Math.max(1, Math.floor(action.payload.week)),
+          armedAt: new Date().toISOString(),
+          ...(typeof action.payload.targetId === 'string' && action.payload.targetId
+            ? { targetId: action.payload.targetId }
+            : {}),
+        },
+      }
+    },
+
+    /** Return a reserved power to inventory without consuming it. */
+    returnEyeoleanStorePower(
+      state,
+      action: PayloadAction<{ productKey: EyeoleanStoreProductKey; gameId?: string }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      const reservation = profile.eyeoleanPowerReservations?.[action.payload.productKey]
+      if (!reservation) return
+      if (action.payload.gameId && reservation.gameId !== action.payload.gameId) return
+
+      const inventory = profile.eyeoleanInventory ?? {}
+      const current = Math.max(0, Math.floor(inventory[action.payload.productKey] ?? 0))
+      profile.eyeoleanInventory = {
+        ...inventory,
+        [action.payload.productKey]: Math.min(Number.MAX_SAFE_INTEGER, current + 1),
+      }
+      const nextReservations = { ...(profile.eyeoleanPowerReservations ?? {}) }
+      delete nextReservations[action.payload.productKey]
+      profile.eyeoleanPowerReservations = nextReservations
+    },
+
+    /** Consume a reservation after its gameplay effect has actually been applied. */
+    consumeEyeoleanStorePower(
+      state,
+      action: PayloadAction<{ productKey: EyeoleanStoreProductKey; gameId: string }>
+    ) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile) return
+      const reservation = profile.eyeoleanPowerReservations?.[action.payload.productKey]
+      if (!reservation || reservation.gameId !== action.payload.gameId) return
+
+      const product = getEyeoleanStoreProduct(action.payload.productKey)
+      const progress = getEyeoleanPowerSeasonProgress(
+        profile,
+        action.payload.productKey,
+        reservation.gameId,
+        reservation.season
+      )
+      profile.eyeoleanPowerSeasonProgress = {
+        ...(profile.eyeoleanPowerSeasonProgress ?? {}),
+        [action.payload.productKey]: {
+          ...progress,
+          uses: Math.min(product.maxSeasonUses, progress.uses + 1),
+        },
+      }
+
+      const nextReservations = { ...(profile.eyeoleanPowerReservations ?? {}) }
+      delete nextReservations[action.payload.productKey]
+      profile.eyeoleanPowerReservations = nextReservations
+    },
+
+    /** Award a correct Public Favorite forecast once per season event. */
+    awardPublicFavoriteForecast(state, action: PayloadAction<{ eventId: string }>) {
+      const profile = state.profiles.find((p) => p.id === state.activeProfileId)
+      if (!profile || !action.payload.eventId) return
+
+      const rewardedEvents = profile.forecastRewardEventIds ?? []
+      if (rewardedEvents.includes(action.payload.eventId)) return
+
+      profile.forecastRewardEventIds = [...rewardedEvents, action.payload.eventId].slice(-100)
+      creditEyeoleans(profile, {
+        id: `forecast:${action.payload.eventId}`,
+        amount: PUBLIC_FAVORITE_FORECAST_EYEOLEANS,
+        source: 'forecast_reward',
+        label: 'Public Favorite forecast',
+        createdAt: new Date().toISOString(),
+      })
+      if (!profile.achievements?.includes(PUBLIC_FAVORITE_FORECAST_ACHIEVEMENT)) {
+        profile.achievements = [
+          ...(profile.achievements ?? []),
+          PUBLIC_FAVORITE_FORECAST_ACHIEVEMENT,
+        ]
+      }
+    },
+
+    /**
+     * Delete a profile by ID.
+     * If the deleted profile was active, the first remaining profile becomes
+     * active (or null if the list is now empty).
+     */
+    deleteProfile(state, action: PayloadAction<string>) {
+      state.profiles = state.profiles.filter((p) => p.id !== action.payload)
+      if (state.activeProfileId === action.payload) {
+        state.activeProfileId = state.profiles[0]?.id ?? null
+      }
+    },
+
+    /** Enter guest mode — clears active profile selection. */
+    enterGuestMode(state) {
+      state.isGuest = true
+      state.activeProfileId = null
+    },
+
+    /** Exit guest mode — caller must then select or create a profile. */
+    exitGuestMode(state) {
+      state.isGuest = false
+    },
+  },
+})
+
+// ─── Actions ─────────────────────────────────────────────────────────────────
+
+export const {
+  initProfiles,
+  createProfile,
+  selectActiveProfile,
+  linkActiveProfileToPlayerAccount,
+  linkLocalProfilesToPlayerAccount,
+  mergePlayerAccountProfiles,
+  unlinkProfileFromPlayerAccount,
+  updateProfile,
+  rememberContestant,
+  recordBellaTwinShockConsumed,
+  recordBellaEncountered,
+  recordBellaCompatibleClassicCompleted,
+  settleSeasonEyeoleans,
+  spendEyeoleans,
+  debugGrantEyeoleans,
+  purchaseEyeoleanStoreProduct,
+  armEyeoleanStorePower,
+  returnEyeoleanStorePower,
+  consumeEyeoleanStorePower,
+  awardPublicFavoriteForecast,
+  deleteProfile,
+  enterGuestMode,
+  exitGuestMode,
+} = profilesSlice.actions
+
+// ─── Selectors ────────────────────────────────────────────────────────────────
+
+export const selectAllProfiles = (state: RootState) => state.profiles.profiles
+export const selectActiveProfileId = (state: RootState) => state.profiles.activeProfileId
+export const selectIsGuest = (state: RootState) => state.profiles.isGuest
+
+/** Returns the active StoredProfile or null (guest / no profile selected). */
+export const selectCurrentProfile = (state: RootState): StoredProfile | null => {
+  const { profiles, activeProfileId, isGuest } = state.profiles
+  if (isGuest || !activeProfileId) return null
+  return profiles.find((p) => p.id === activeProfileId) ?? null
+}
+
+export const selectEyeoleanBalance = (state: RootState) =>
+  selectCurrentProfile(state)?.eyeoleans ?? 0
+
+const EMPTY_EYEOLEAN_INVENTORY: Partial<Record<EyeoleanStoreProductKey, number>> = {}
+const EMPTY_EYEOLEAN_POWER_RESERVATIONS: Partial<
+  Record<EyeoleanStoreProductKey, EyeoleanPowerReservation>
+> = {}
+
+export const selectEyeoleanInventory = (state: RootState) =>
+  selectCurrentProfile(state)?.eyeoleanInventory ?? EMPTY_EYEOLEAN_INVENTORY
+
+export const selectEyeoleanPowerReservations = (state: RootState) =>
+  selectCurrentProfile(state)?.eyeoleanPowerReservations ?? EMPTY_EYEOLEAN_POWER_RESERVATIONS
+
+export default profilesSlice.reducer

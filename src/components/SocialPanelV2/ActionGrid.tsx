@@ -1,0 +1,486 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useI18n } from '../../i18n'
+import {
+  isRealityExclusiveAction,
+  resolveActionTargetMode,
+  type SocialActionDefinition,
+} from '../../social/socialActions'
+import {
+  buildEffectiveSocialActions,
+  isActionAllowedForRealityPreset,
+} from '../../social/socialActionManager'
+import { isHumanSocialActionVisible } from '../../social/socialActionCatalog'
+import { normalizeActionCosts } from '../../social/smExecNormalize'
+import { evaluateSocialActionEligibility } from '../../social/socialActionEligibility'
+import { closeSocialPanel } from '../../social/socialSlice'
+import ActionCard from './ActionCard'
+import ConfirmExitModal from '../ConfirmExitModal/ConfirmExitModal'
+import type { Player, PlayerStatus } from '../../types'
+import type { DramaSocialNetwork, RelationshipsMap } from '../../social/types'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { selectHasDramaModeAccess } from '../../store/vipSlice'
+import { getCupidPartnerId } from '../../features/twists/cupidArrow'
+import { isLohReplacementPending } from '../../social/lohReplacementWindow'
+import { getPendingNominationPawnOffer } from '../../social/nominationPawnOffer'
+
+export interface ActionGridProps {
+  allianceContext?: boolean
+  onActionClick?: (actionId: string) => void
+  onPreview?: (actionId: string) => void
+  onPremiumLockedClick?: (actionId: string) => void
+  disabledIds?: ReadonlySet<string>
+  selectedId?: string | null
+  selectedTargetIds?: ReadonlySet<string>
+  /** A valid group member keeps alliance consultation discoverable without a selected housemate. */
+  consultationTargetIds?: ReadonlySet<string>
+  players?: readonly Player[]
+  actorId?: string
+  actorEnergy?: number
+  actorInfluence?: number
+  actorInfo?: number
+  relationships?: RelationshipsMap
+  primaryTargetStatus?: PlayerStatus | null
+  dramaMode?: boolean
+  currentPhase?: string
+  dramaNetwork?: DramaSocialNetwork
+  hiddenActionIds?: ReadonlySet<string>
+  energyCostOverrides?: Readonly<Record<string, number>>
+  categoryFilter?: 'all' | 'connect' | 'strategy' | 'drama' | 'alliances'
+  supplementalActions?: readonly {
+    action: SocialActionDefinition
+    costs?: { energy: number; influence: number; info: number }
+    allowWithoutTarget?: boolean
+    disabled?: boolean
+    availabilityReason?: string
+  }[]
+}
+
+/**
+ * Stable action catalogue. Normal Mode exposes the complete strategy toolkit;
+ * Reality Mode adds its higher-density story actions. Affordability changes
+ * styling and feedback rather than card position, preserving muscle memory.
+ */
+export default function ActionGrid({
+  allianceContext = false,
+  onActionClick,
+  onPreview,
+  onPremiumLockedClick,
+  disabledIds = new Set(),
+  selectedId = null,
+  selectedTargetIds,
+  consultationTargetIds,
+  players,
+  actorId = '',
+  actorEnergy,
+  actorInfluence,
+  actorInfo,
+  relationships,
+  primaryTargetStatus,
+  dramaMode = false,
+  currentPhase,
+  dramaNetwork,
+  hiddenActionIds = new Set(),
+  energyCostOverrides,
+  categoryFilter = 'all',
+  supplementalActions = [],
+}: ActionGridProps) {
+  const { t } = useI18n()
+  const dispatch = useAppDispatch()
+  const containerRef = useRef<HTMLDivElement>(null)
+  const appliedInvitationRef = useRef<string | null>(null)
+  const [realityModePromptOpen, setRealityModePromptOpen] = useState(false)
+  const game = useAppSelector((state) => state.game)
+  const reality = useAppSelector((state) => state.social.reality)
+  const inquiryHistory = useAppSelector((state) => state.social.inquiryHistory)
+  const hasRealityAccess = useAppSelector(selectHasDramaModeAccess)
+  const realityModePreset = useAppSelector((state) => state.settings.gameUX.realityModePreset)
+  const actionOverrides = useAppSelector((state) => state.settings?.social?.actionOverrides ?? {})
+  const actions = useMemo(() => buildEffectiveSocialActions(actionOverrides), [actionOverrides])
+  const invitation = game.tvFeed.find(
+    (event) =>
+      event.meta?.socialInvitation === true &&
+      event.meta?.week === game.week &&
+      typeof event.meta?.suggestedActionId === 'string' &&
+      typeof event.meta?.suggestedTargetId === 'string'
+  )
+  const suggestedActionId =
+    typeof invitation?.meta?.suggestedActionId === 'string'
+      ? invitation.meta.suggestedActionId
+      : null
+  const suggestedTargetId =
+    typeof invitation?.meta?.suggestedTargetId === 'string'
+      ? invitation.meta.suggestedTargetId
+      : null
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const cards = Array.from(
+      containerRef.current?.querySelectorAll<HTMLElement>('[data-action-id][tabindex="0"]') ?? []
+    )
+    if (cards.length === 0) return
+    const activeCard = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
+      '[data-action-id]'
+    )
+    const index = activeCard ? cards.indexOf(activeCard) : -1
+    const next =
+      index === -1
+        ? event.key === 'ArrowRight'
+          ? 0
+          : cards.length - 1
+        : event.key === 'ArrowRight'
+          ? Math.min(index + 1, cards.length - 1)
+          : Math.max(index - 1, 0)
+    cards[next]?.focus()
+  }
+
+  const actorResources = {
+    energy: actorEnergy ?? 0,
+    influence: actorInfluence ?? Infinity,
+    info: actorInfo ?? Infinity,
+  }
+
+  function isActionAffordable(costs: { energy: number; influence: number; info: number }): boolean {
+    return (
+      costs.energy <= actorResources.energy &&
+      costs.influence <= actorResources.influence &&
+      costs.info <= actorResources.info
+    )
+  }
+
+  function getActionCosts(action: SocialActionDefinition) {
+    const costs = normalizeActionCosts(action, selectedTargetIds?.size, dramaMode)
+    const energyOverride = energyCostOverrides?.[action.id]
+    return energyOverride === undefined ? costs : { ...costs, energy: energyOverride }
+  }
+
+  function getContextEligibility(action: SocialActionDefinition) {
+    const targetIds =
+      action.id === 'consult_alliance'
+        ? (consultationTargetIds ?? new Set<string>())
+        : selectedTargetIds
+    return evaluateSocialActionEligibility({
+      action,
+      actorId,
+      targetIds: targetIds ? Array.from(targetIds) : [],
+      phase: currentPhase,
+      week: game.week,
+      players: game.players.length > 0 ? game.players : players,
+      nomineeIds: game.nomineeIds,
+      primaryTargetStatus,
+      relationships,
+      dramaNetwork,
+      reality,
+      pregnancyStory: game.pregnancyStory,
+      dramaMode,
+    })
+  }
+
+  function hasContextVisibility(action: SocialActionDefinition): boolean {
+    return (
+      (!allianceContext || action.id === 'consult_alliance') &&
+      (action.id !== 'consult_alliance' || (consultationTargetIds?.size ?? 0) > 0) &&
+      action.enabled !== false &&
+      isActionAllowedForRealityPreset(action, realityModePreset) &&
+      isHumanSocialActionVisible(action, dramaMode ? 'drama' : 'normal') &&
+      !hiddenActionIds.has(action.id)
+    )
+  }
+
+  function isContextEligible(action: SocialActionDefinition): boolean {
+    return hasContextVisibility(action) && getContextEligibility(action).eligible
+  }
+
+  function isVisiblePregnancyPrerequisite(action: SocialActionDefinition): boolean {
+    if (action.id !== 'try_for_baby' || !hasContextVisibility(action)) return false
+    const eligibility = getContextEligibility(action)
+    return (
+      !eligibility.eligible &&
+      eligibility.reason === 'Both hubmates must be 18 or older.' &&
+      (selectedTargetIds?.size ?? 0) === 1
+    )
+  }
+
+  function isRelevantRealityPreview(action: SocialActionDefinition): boolean {
+    return (
+      (!allianceContext || action.id === 'consult_alliance') &&
+      action.enabled !== false &&
+      !dramaMode &&
+      isActionAllowedForRealityPreset(action, realityModePreset) &&
+      isRealityExclusiveAction(action) &&
+      !action.aiOnly &&
+      !hiddenActionIds.has(action.id) &&
+      evaluateSocialActionEligibility({
+        action,
+        actorId,
+        targetIds: selectedTargetIds ? Array.from(selectedTargetIds) : [],
+        phase: currentPhase,
+        week: game.week,
+        players: game.players.length > 0 ? game.players : players,
+        nomineeIds: game.nomineeIds,
+        primaryTargetStatus,
+        relationships,
+        dramaNetwork,
+        reality,
+        pregnancyStory: game.pregnancyStory,
+        dramaMode: false,
+        ignoreRealityModeGate: true,
+      }).eligible
+    )
+  }
+
+  // The Social panel passes the non-human roster into ActionGrid, so looking up
+  // the actor in `players` misses the human POS holder. Read the authoritative
+  // winner from game state instead, including Cupid's shared-holder rule.
+  const actorHasSafety = Boolean(
+    actorId &&
+    (game.posWinnerId === actorId || getCupidPartnerId(game, game.posWinnerId) === actorId)
+  )
+  const safetyConsultationOpen =
+    actorHasSafety &&
+    Boolean(game.lohId) &&
+    game.lohId !== actorId &&
+    game.nomineeIds.length > 0 &&
+    (currentPhase === 'pos_results' || currentPhase === 'pos_ceremony')
+  const replacementConsultationOpen =
+    !actorHasSafety &&
+    (currentPhase === 'pos_results' ||
+      currentPhase === 'pos_ceremony' ||
+      isLohReplacementPending(game))
+  const [singleTargetId] = selectedTargetIds ?? []
+  const hasPawnOffer =
+    selectedTargetIds?.size === 1 &&
+    singleTargetId &&
+    getPendingNominationPawnOffer(game, { reality, inquiryHistory }, actorId, singleTargetId)
+
+  function contextualizeAction(action: SocialActionDefinition) {
+    if (action.id === 'consult_alliance')
+      return { ...action, availabilityHint: allianceContext ? undefined : 'Choose an alliance' }
+    if (action.id !== 'ask_loh_target') return action
+    if (safetyConsultationOpen) {
+      return {
+        ...action,
+        title: t('social.action.askLohSafety.title'),
+        description: t('social.action.askLohSafety.description'),
+      }
+    }
+    if (replacementConsultationOpen) {
+      return {
+        ...action,
+        title: t('social.action.askReplacementPlan.title'),
+        description: t('social.action.askReplacementPlan.description'),
+      }
+    }
+    if (
+      currentPhase &&
+      [
+        'nomination_results',
+        'pre_veto_public_save',
+        'pos_comp_announcement',
+        'pos_comp',
+        'pos_ceremony_results',
+        'social_2',
+        'live_vote',
+      ].includes(currentPhase)
+    ) {
+      return {
+        ...action,
+        title: t('social.action.askWhoGoes.title'),
+        description: t('social.action.askWhoGoes.description'),
+      }
+    }
+    return {
+      ...action,
+      title: t('social.action.askLohPlan.title'),
+      description: t('social.action.askLohPlan.description'),
+    }
+  }
+
+  const isRealityPreview = (action: SocialActionDefinition) => isRelevantRealityPreview(action)
+
+  function matchesCategoryFilter(action: SocialActionDefinition): boolean {
+    if (categoryFilter === 'all') return true
+    // A huddle belongs with alliance management in the UI while retaining its
+    // strategic category for AI response and Reality simulation rules.
+    const category = action.id === 'consult_alliance' ? 'alliance' : action.category
+    if (categoryFilter === 'connect') return category === 'friendly'
+    if (categoryFilter === 'strategy') return category === 'strategic'
+    if (categoryFilter === 'alliances') return category === 'alliance'
+    return category === 'aggressive'
+  }
+
+  function handlePremiumLockedAction(actionId: string) {
+    if (hasRealityAccess) {
+      setRealityModePromptOpen(true)
+      return
+    }
+    onPremiumLockedClick?.(actionId)
+  }
+
+  function openRealitySettings() {
+    setRealityModePromptOpen(false)
+    dispatch(closeSocialPanel())
+    if (typeof window !== 'undefined') window.location.hash = '/settings'
+  }
+
+  const explicitlyNoTargetSelected = selectedTargetIds !== undefined && selectedTargetIds.size === 0
+  const orderedVisibleActions = actions
+    .filter(
+      (action) =>
+        isRealityPreview(action) ||
+        isContextEligible(action) ||
+        isVisiblePregnancyPrerequisite(action)
+    )
+    .filter((action) => {
+      if (action.id === 'group_chat') return selectedId === 'group_chat' || !selectedTargetIds?.size
+      if (!explicitlyNoTargetSelected) return true
+      const actionMode = resolveActionTargetMode(
+        action,
+        dramaMode || isRealityExclusiveAction(action)
+      )
+      return (
+        actionMode === 'none' ||
+        (action.id === 'consult_alliance' && (consultationTargetIds?.size ?? 0) > 0)
+      )
+    })
+    .filter((action) => action.id === suggestedActionId || matchesCategoryFilter(action))
+    .sort((left, right) => {
+      const leftPreview = isRealityPreview(left)
+      const rightPreview = isRealityPreview(right)
+      if (leftPreview !== rightPreview) return leftPreview ? 1 : -1
+      if (!safetyConsultationOpen) return 0
+      if (left.id === 'ask_loh_target') return -1
+      if (right.id === 'ask_loh_target') return 1
+      return 0
+    })
+  // Selecting a move should only change its visual state. Keep the catalogue
+  // order fixed so cards never jump, expand into a featured row, or appear to
+  // disappear when the player compares actions.
+  const visibleActions = orderedVisibleActions
+  const visibleSupplementalActions = supplementalActions.filter(
+    ({ action, allowWithoutTarget }) => {
+      if (!matchesCategoryFilter(action)) return false
+      if (!explicitlyNoTargetSelected) return true
+      return allowWithoutTarget || resolveActionTargetMode(action, dramaMode) === 'none'
+    }
+  )
+
+  useEffect(() => {
+    if (!invitation || appliedInvitationRef.current === invitation.id) return
+    if (!suggestedActionId || !suggestedTargetId || !onActionClick) return
+    if (!selectedTargetIds?.has(suggestedTargetId)) return
+
+    // If the player already picked another move, respect that decision instead
+    // of snapping the UI back to the recommendation.
+    if (selectedId && selectedId !== suggestedActionId) {
+      appliedInvitationRef.current = invitation.id
+      return
+    }
+
+    const actionAvailable = orderedVisibleActions.some((action) => action.id === suggestedActionId)
+    if (!actionAvailable) return
+
+    appliedInvitationRef.current = invitation.id
+    if (selectedId !== suggestedActionId) onActionClick(suggestedActionId)
+  }, [
+    invitation,
+    onActionClick,
+    orderedVisibleActions,
+    selectedId,
+    selectedTargetIds,
+    suggestedActionId,
+    suggestedTargetId,
+  ])
+
+  function getAvailabilityReason(costs: {
+    energy: number
+    influence: number
+    info: number
+  }): string {
+    if (actorEnergy === undefined) return ''
+    if (costs.energy > actorResources.energy) {
+      return `Need ⚡${costs.energy} (have ${actorResources.energy})`
+    }
+    if (costs.influence > actorResources.influence) {
+      return `Need 🤝${costs.influence} (have ${actorResources.influence})`
+    }
+    if (costs.info > actorResources.info) {
+      return `Need 💡${costs.info} (have ${actorResources.info})`
+    }
+    return ''
+  }
+
+  function renderAction(action: SocialActionDefinition) {
+    const contextualAction = contextualizeAction(action)
+    const costs = getActionCosts(action)
+    const contextEligibility = getContextEligibility(action)
+    const contextReason =
+      action.id === 'try_for_baby' && !contextEligibility.eligible ? contextEligibility.reason : ''
+    const availabilityReason = contextReason || getAvailabilityReason(costs)
+    const premiumLocked = isRealityPreview(action)
+    const isDisabled = !premiumLocked && (disabledIds.has(action.id) || Boolean(contextReason))
+    const isAvailable = actorEnergy !== undefined && isActionAffordable(costs)
+    return (
+      <ActionCard
+        key={action.id}
+        action={contextualAction}
+        description={
+          action.id === 'reassure' && hasPawnOffer
+            ? 'Confirm their offer to go on the block as a pawn.'
+            : undefined
+        }
+        costs={costs}
+        selected={selectedId === action.id}
+        disabled={isDisabled}
+        premiumLocked={premiumLocked}
+        availabilityReason={availabilityReason}
+        available={actorEnergy !== undefined ? isAvailable : undefined}
+        onClick={onActionClick}
+        onPremiumLockedClick={handlePremiumLockedAction}
+        onPreview={onPreview}
+        costOverride={costs}
+      />
+    )
+  }
+
+  return (
+    <>
+      <div
+        ref={containerRef}
+        className="sp2-action-grid"
+        role="group"
+        aria-label="Action grid"
+        onKeyDown={handleKeyDown}
+      >
+        {visibleActions.filter((action) => action.id !== 'ask_player_opinion').map(renderAction)}
+        {visibleSupplementalActions.map(
+          ({ action, costs, disabled = false, availabilityReason }) => {
+            const resolvedCosts = costs ?? getActionCosts(action)
+            return (
+              <ActionCard
+                key={action.id}
+                action={action}
+                costs={resolvedCosts}
+                selected={selectedId === action.id}
+                disabled={disabled}
+                availabilityReason={availabilityReason || getAvailabilityReason(resolvedCosts)}
+                available={!disabled && isActionAffordable(resolvedCosts)}
+                onClick={onActionClick}
+              />
+            )
+          }
+        )}
+        {visibleActions.filter((action) => action.id === 'ask_player_opinion').map(renderAction)}
+      </div>
+      <ConfirmExitModal
+        open={realityModePromptOpen}
+        title="Reality Mode is off"
+        description="This action requires Reality Mode. Turn it on in Settings to use Reality actions."
+        confirmLabel="Open Settings"
+        cancelLabel="Not now"
+        onConfirm={openRealitySettings}
+        onCancel={() => setRealityModePromptOpen(false)}
+      />
+    </>
+  )
+}

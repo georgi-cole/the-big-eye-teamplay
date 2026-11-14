@@ -1,0 +1,22 @@
+{
+  "game": {
+    "teaser": "🎮 Something went DOWN in that competition…",
+    "full": "🎮 The Hubmates battled it out — someone just levelled up their threat level!"
+  },
+  "social": {
+    "teaser": "💬 Whispers in the hallway — this is getting spicy…",
+    "full": "💬 The social game is heating up. Alliances are shifting, loyalties are crumbling, and nobody is safe."
+  },
+  "vote": {
+    "teaser": "🗳️ The votes are IN. Host is shook.",
+    "full": "🗳️ The Hub voted, and someone's game just ended. Grab your suitcase, honey — it's time to go."
+  },
+  "twist": {
+    "teaser": "🌀 Host just said 'expect the unexpected'… again.",
+    "full": "🌀 A SHOCK has rocked the Hub! Nothing will ever be the same. (Until next week.)"
+  },
+  "diary": {
+    "teaser": "📖 Someone vented into the Confessional camera…",
+    "full": "📖 In the Confessional, feelings were felt, tears were shed, and strategy was whispered dramatically."
+  }
+}

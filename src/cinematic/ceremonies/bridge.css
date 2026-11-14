@@ -1,0 +1,62 @@
+.vip-film-prelude {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 48%, rgb(45 24 57 / 58%), transparent 49%),
+    linear-gradient(155deg, #08060d, #130b1c 52%, #05040a);
+  pointer-events: none;
+}
+
+.vip-film-prelude::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+}
+
+.vip-film-prelude::after {
+  background: radial-gradient(ellipse, transparent 32%, rgb(2 1 5 / 72%) 100%);
+}
+
+.vip-film-prelude__eye {
+  position: relative;
+  z-index: 1;
+  width: clamp(72px, 21vw, 126px);
+  height: auto;
+  overflow: visible;
+  color: #d8bd85;
+  filter: drop-shadow(0 0 17px rgb(166 115 211 / 35%));
+  animation: vip-film-eye-breathe 1.8s ease-in-out infinite alternate;
+}
+
+.vip-film-prelude__eye path,
+.vip-film-prelude__eye circle {
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.vip-film-prelude__eye .vip-film-prelude__iris {
+  fill: #b993d0;
+  stroke: #eed6a5;
+}
+
+@keyframes vip-film-eye-breathe {
+  from {
+    opacity: 0.28;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 0.62;
+    transform: scale(1.02);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vip-film-prelude__eye {
+    animation: none;
+  }
+}

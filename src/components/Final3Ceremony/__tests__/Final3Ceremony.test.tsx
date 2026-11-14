@@ -1,0 +1,275 @@
+import { configureStore } from '@reduxjs/toolkit'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { Provider } from 'react-redux'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import Final3Ceremony from '../Final3Ceremony'
+import gameReducer, { createInitialGameState } from '../../../store/gameSlice'
+import settingsReducer, { DEFAULT_SETTINGS } from '../../../store/settingsSlice'
+import vipReducer, { loadVipState } from '../../../store/vipSlice'
+import type { Player } from '../../../types'
+
+vi.mock('../../Eviction/SpotlightEvictionOverlay', () => ({
+  default: ({
+    evictee,
+    contextLabel,
+    onDone,
+  }: {
+    evictee: Player
+    contextLabel: string
+    onDone: () => void
+  }) => (
+    <button
+      data-testid="bronze-eviction"
+      data-context={contextLabel}
+      data-player-id={evictee.id}
+      onClick={onDone}
+    >
+      Finish bronze eviction
+    </button>
+  ),
+}))
+
+function renderPleaCeremony(onPlayAvailabilityChange = vi.fn()) {
+  const initial = createInitialGameState({ seed: 111 })
+  const loh = initial.players.find((player) => player.isUser)
+  const nominees = initial.players.filter((player) => !player.isUser).slice(0, 2)
+  if (!loh || nominees.length !== 2)
+    throw new Error('Expected a Final Power holder and two nominees')
+
+  const players = initial.players.map((player) => {
+    if (player.id === loh.id) return { ...player, status: 'active' as const }
+    if (player.id === nominees[0].id) {
+      return {
+        ...player,
+        status: 'active' as const,
+        stats: {
+          ...player.stats,
+          lohWins: 2,
+          posWins: player.stats?.posWins ?? 0,
+          timesNominated: player.stats?.timesNominated ?? 0,
+        },
+      }
+    }
+    if (player.id === nominees[1].id) return { ...player, status: 'active' as const }
+    return { ...player, status: 'jury' as const }
+  })
+  const game = {
+    ...initial,
+    phase: 'final3_decision' as const,
+    lohId: loh.id,
+    nomineeIds: nominees.map((player) => player.id),
+    awaitingFinal3Plea: true,
+    awaitingFinal3Eviction: false,
+    players,
+    strategicRelationships: {
+      ...initial.strategicRelationships,
+      [loh.id]: {
+        [nominees[0].id]: { affinity: 30, tags: ['romance', 'alliance'] },
+        [nominees[1].id]: { affinity: -25, tags: ['betrayal'] },
+      },
+    },
+    strategicAlliances: [
+      {
+        id: 'final-three-core-pact',
+        memberIds: [loh.id, nominees[0].id],
+        leaderIds: [loh.id],
+        status: 'ACTIVE' as const,
+        cohesion: 0.9,
+        fractureRisk: 0.05,
+        currentTargetIds: [],
+        fallbackTargetIds: [],
+        memberCommitment: { [loh.id]: 0.9, [nominees[0].id]: 0.9 },
+        memberPerceivedStatus: { [loh.id]: 'CORE' as const, [nominees[0].id]: 'CORE' as const },
+        memberPlanBeliefs: { [loh.id]: [], [nominees[0].id]: [] },
+        infiltratorIds: [],
+      },
+    ],
+    finalThree: {
+      mode: 'classic' as const,
+      stage: 'ceremony' as const,
+      openingSeen: true,
+      blockRevealSeen: true,
+      spectatorFinalPowerRevealSeen: true,
+      participantIds: [loh.id, ...nominees.map((player) => player.id)],
+      part1: null,
+      part2: null,
+      part3: null,
+      finalPowerHolderId: loh.id,
+      nomineeIds: nominees.map((player) => player.id),
+      evicteeId: null,
+    },
+  }
+  const store = configureStore({
+    reducer: { game: gameReducer, settings: settingsReducer, vip: vipReducer },
+    preloadedState: {
+      game,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        gameUX: { ...DEFAULT_SETTINGS.gameUX, animationMode: 'standard' as const },
+      },
+      vip: { ...loadVipState(), isActive: false, debugUnlocked: false },
+    },
+  })
+
+  render(
+    <Provider store={store}>
+      <Final3Ceremony onPlayAvailabilityChange={onPlayAvailabilityChange} />
+    </Provider>
+  )
+  return { store, loh, nominees, onPlayAvailabilityChange }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe('Final3Ceremony plea dialogue', () => {
+  it('uses the original bronze eviction presentation and retains the deferred Final Two commit', async () => {
+    vi.useFakeTimers()
+    const { store, nominees, onPlayAvailabilityChange } = renderPleaCeremony()
+    act(() => vi.advanceTimersByTime(12000))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    act(() => vi.advanceTimersByTime(400))
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nominees[0].name, 'i') }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: new RegExp(`Eliminate ${nominees[0].name} · Keep ${nominees[1].name}`, 'i'),
+      })
+    )
+    act(() => vi.advanceTimersByTime(900))
+    act(() => vi.advanceTimersByTime(12000))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    const film = screen.getByTestId('bronze-eviction')
+    expect(film).toHaveAttribute('data-context', 'FINAL THREE · BRONZE EXIT')
+    expect(film).toHaveAttribute('data-player-id', nominees[0].id)
+    expect(
+      store.getState().game.players.find((player) => player.id === nominees[0].id)?.status
+    ).toBe('active')
+    await act(async () => {
+      fireEvent.click(film)
+    })
+    const finalTwo = screen.getByRole('dialog', { name: 'The Final Two' })
+    expect(finalTwo).toBeInTheDocument()
+    expect(
+      finalTwo.querySelector('[data-finale-set="garden"][data-scene="final-two"]')
+    ).toBeTruthy()
+    expect(finalTwo.querySelectorAll('.f3c-final-two__podium')).toHaveLength(2)
+    expect(finalTwo.querySelectorAll('.f3c-final-two__name')).toHaveLength(2)
+    expect(finalTwo.querySelector('.f3-venue__screen')?.textContent).toContain('THE FINAL TWO')
+    expect(finalTwo.querySelector('.f3-venue__screen')?.textContent).toContain('Tribunal chooses')
+    expect(onPlayAvailabilityChange).toHaveBeenLastCalledWith(false)
+    expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass('game-btn')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(
+      store.getState().game.players.find((player) => player.id === nominees[0].id)?.seasonPlacement
+    ).toBe(3)
+    expect(store.getState().game.finalThree?.evicteeId).toBe(nominees[0].id)
+  })
+  it('always gives the holder and both nominees a dialogue with Final 4-style chat controls', () => {
+    vi.useFakeTimers()
+    const onPlayAvailabilityChange = vi.fn()
+    const { loh, nominees } = renderPleaCeremony(onPlayAvailabilityChange)
+
+    expect(screen.getByRole('dialog', { name: 'The Finale plea chat' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Skip to end' })).toBeDefined()
+    expect(onPlayAvailabilityChange).toHaveBeenLastCalledWith(false)
+    expect(screen.queryByText(/Press Play/)).toBeNull()
+
+    act(() => window.dispatchEvent(new CustomEvent('ui:playPressed', { cancelable: true })))
+    expect(screen.getByRole('dialog', { name: 'The Finale plea chat' })).toBeDefined()
+
+    act(() => vi.advanceTimersByTime(12_000))
+
+    const conversation = screen.getByRole('log').textContent ?? ''
+    expect(conversation).toContain(loh.name)
+    expect(conversation).toContain(nominees[0].name)
+    expect(conversation).toContain(nominees[1].name)
+    expect(conversation).toContain('competition wins')
+    expect(screen.getByRole('button', { name: 'Continue →' })).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.queryByRole('dialog', { name: 'The Finale plea chat' })).toBeNull()
+  })
+
+  it('makes the eviction consequence explicit and shows relationship history instead of a résumé', () => {
+    vi.useFakeTimers()
+    const { nominees } = renderPleaCeremony()
+
+    act(() => vi.advanceTimersByTime(12_000))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    act(() => vi.advanceTimersByTime(400))
+
+    expect(
+      screen.getByText(
+        /choose who you are eliminating\. the other finalist stays and faces you in the final two/i
+      )
+    ).toBeTruthy()
+    expect(screen.getByText(/romance — this became more than a game relationship/i)).toBeTruthy()
+    expect(screen.getByText(/betrayal — trust between you was broken/i)).toBeTruthy()
+    expect(screen.queryByText(/competition wins/i)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nominees[0].name, 'i') }))
+
+    expect(
+      screen.getByText(
+        new RegExp(
+          `You will eliminate ${nominees[0].name}\\. ${nominees[1].name} will join you in the Final Two\\.`,
+          'i'
+        )
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: new RegExp(`Eliminate ${nominees[0].name} · Keep ${nominees[1].name}`, 'i'),
+      })
+    ).toBeTruthy()
+  })
+
+  it('lets the evicted finalist react to a broken expectation or accept the decision', () => {
+    vi.useFakeTimers()
+    const { nominees } = renderPleaCeremony()
+
+    act(() => vi.advanceTimersByTime(12_000))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    act(() => vi.advanceTimersByTime(400))
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nominees[1].name, 'i') }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: new RegExp(`Eliminate ${nominees[1].name} · Keep ${nominees[0].name}`, 'i'),
+      })
+    )
+    act(() => vi.advanceTimersByTime(900))
+    act(() => vi.advanceTimersByTime(12_000))
+
+    const announcement = screen.getByRole('log').textContent ?? ''
+    expect(announcement).toContain('The Tribunal will hear exactly how this ended.')
+    expect(announcement).toContain(nominees[1].name)
+  })
+
+  it('acknowledges a strong bond or active alliance when the finalist accepts the bronze exit', () => {
+    vi.useFakeTimers()
+    const { nominees } = renderPleaCeremony()
+
+    act(() => vi.advanceTimersByTime(12_000))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue →' }))
+    act(() => vi.advanceTimersByTime(400))
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nominees[0].name, 'i') }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: new RegExp(`Eliminate ${nominees[0].name} · Keep ${nominees[1].name}`, 'i'),
+      })
+    )
+    act(() => vi.advanceTimersByTime(900))
+    act(() => vi.advanceTimersByTime(12_000))
+
+    expect(screen.getByRole('log').textContent).toContain(
+      'I thought our history would carry me beside you'
+    )
+  })
+})
