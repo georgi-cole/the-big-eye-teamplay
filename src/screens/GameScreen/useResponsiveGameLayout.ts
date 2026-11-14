@@ -459,7 +459,7 @@ function isLayoutDebugEnabled() {
   const params = new URLSearchParams(window.location.search)
   if (params.has('debugLayout')) return true
   try {
-    return window.localStorage.getItem('bbmobile:debugLayout') === '1'
+    return window.localStorage.getItem('the-big-eye-teamplay:debugLayout') === '1'
   } catch {
     return false
   }

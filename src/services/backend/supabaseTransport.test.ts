@@ -104,7 +104,7 @@ describe('backend Auth operation coordination', () => {
       expect.any(String),
       expect.objectContaining({
         auth: expect.objectContaining({
-          storageKey: 'bbmobilenew:supabase:audience_admin:v1',
+          storageKey: 'the-big-eye-teamplay:supabase:audience_admin:v1',
         }),
       })
     )
@@ -187,7 +187,7 @@ describe('backend Auth operation coordination', () => {
     await expect(first).resolves.toBe('first')
     await expect(second).resolves.toBe('second')
     expect(request).toHaveBeenCalledWith(
-      'bbmobilenew:app-auth-operation:profile_backup:v1',
+      'the-big-eye-teamplay:app-auth-operation:profile_backup:v1',
       { mode: 'exclusive' },
       expect.any(Function)
     )

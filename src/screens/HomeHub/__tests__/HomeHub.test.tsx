@@ -166,10 +166,13 @@ vi.mock('../../../components/GameButton/GameButton', () => ({
   ),
 }))
 
-function renderHomeHub(initialEntry: string | { pathname: string; state?: unknown } = '/') {
+function renderHomeHub(
+  initialEntry: string | { pathname: string; state?: unknown } = '/',
+  classicOnly = false
+) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <HomeHub />
+      <HomeHub classicOnly={classicOnly} />
     </MemoryRouter>
   )
 }
@@ -183,10 +186,23 @@ async function waitForMenuReady() {
 }
 
 describe('HomeHub', () => {
+  it('offers only the Classic baseline in the Teamplay product launcher', async () => {
+    renderHomeHub('/', true)
+    fireEvent.click(screen.getByTestId('kolequant-splash'))
+    await waitForMenuReady()
+    expect(screen.queryByRole('button', { name: 'Market' })).toBeNull()
+    expect(screen.getByText('Development baseline · Classic engine')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    expect(screen.getByRole('button', { name: 'Play Classic baseline' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Vox Populi|Cupid|Surveyeval|Surprise Me/ })
+    ).toBeNull()
+  })
+
   beforeEach(() => {
     sessionStorage.clear()
     localStorage.clear()
-    localStorage.setItem('bb:locationPermissionRequested', 'true')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
     delete (window as Window & { game?: Record<string, unknown> }).game
     mockState.game = {
       gameId: 'game-A',
@@ -200,7 +216,7 @@ describe('HomeHub', () => {
     mockDispatch.mockReset()
     mockNavigate.mockReset()
     mockRequestWeatherLocation.mockReset().mockImplementation(() => {
-      localStorage.setItem('bb:locationPermissionRequested', 'true')
+      localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
       return Promise.resolve()
     })
     preloadImageMock.mockReset()
@@ -232,7 +248,7 @@ describe('HomeHub', () => {
 
   it('explains local weather and waits for a player action before requesting permission', async () => {
     vi.useFakeTimers()
-    localStorage.removeItem('bb:locationPermissionRequested')
+    localStorage.removeItem('the-big-eye-teamplay:locationPermissionRequested')
     expect(shouldShowWeatherPermissionRationale()).toBe(true)
     renderHomeHub()
 
@@ -259,7 +275,7 @@ describe('HomeHub', () => {
     mockRequestWeatherLocation.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
-          localStorage.setItem('bb:locationPermissionRequested', 'true')
+          localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
           finishLocationRequest = resolve
         })
     )
@@ -277,7 +293,7 @@ describe('HomeHub', () => {
 
   it('lets a player defer local weather without opening the Android permission dialog', async () => {
     vi.useFakeTimers()
-    localStorage.removeItem('bb:locationPermissionRequested')
+    localStorage.removeItem('the-big-eye-teamplay:locationPermissionRequested')
     const view = renderHomeHub()
 
     fireEvent.click(screen.getByTestId('kolequant-splash'))
@@ -320,7 +336,7 @@ describe('HomeHub', () => {
   })
 
   it('opens the return menu without repeating launch artwork after quitting', async () => {
-    sessionStorage.setItem('bb:homeHubSplashShownThisSession', 'true')
+    sessionStorage.setItem('the-big-eye-teamplay:homeHubSplashShownThisSession', 'true')
 
     renderHomeHub()
 
@@ -329,7 +345,7 @@ describe('HomeHub', () => {
   })
 
   it('still shows the five-second launch splash when the current game was seen previously', () => {
-    localStorage.setItem('bb:homeHubSplashLastGameId', 'game-A')
+    localStorage.setItem('the-big-eye-teamplay:homeHubSplashLastGameId', 'game-A')
 
     renderHomeHub()
 

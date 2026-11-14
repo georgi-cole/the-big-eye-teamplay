@@ -4,7 +4,7 @@
 // Falls back gracefully when IndexedDB is unavailable (private browsing,
 // security restrictions, quota exceeded, etc.).
 
-const DB_NAME = 'bbmobilenew_db'
+const DB_NAME = 'the-big-eye-teamplay_db'
 const DB_VERSION = 1
 const STORE_NAME = 'images'
 

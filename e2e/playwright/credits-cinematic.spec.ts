@@ -5,9 +5,9 @@ test.describe('Credits cinematic @core-journey', () => {
 
   test('starts the pre-rendered cinematic immediately with live credits', async ({ page }) => {
     await page.addInitScript(() => {
-      sessionStorage.setItem('bb:homeHubSplashShownThisSession', 'true')
+      sessionStorage.setItem('the-big-eye-teamplay:homeHubSplashShownThisSession', 'true')
       localStorage.setItem(
-        'bbmobilenew_settings_v1',
+        'the-big-eye-teamplay_settings_v1',
         JSON.stringify({
           audio: { musicOn: false, sfxOn: false },
           gameUX: { animations: true },

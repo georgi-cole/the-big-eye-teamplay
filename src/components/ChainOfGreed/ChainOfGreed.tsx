@@ -226,7 +226,7 @@ const SKIP_TO_RESULTS_STEP_MS = 8
 function emitSoundCue(cue: string) {
   if (typeof window === 'undefined') return
   window.dispatchEvent(
-    new CustomEvent('bb:minigame-sound', {
+    new CustomEvent('the-big-eye-teamplay:minigame-sound', {
       detail: { source: 'ChainOfGreed', cue },
     })
   )

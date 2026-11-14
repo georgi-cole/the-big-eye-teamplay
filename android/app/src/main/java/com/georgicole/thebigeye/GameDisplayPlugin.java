@@ -1,4 +1,4 @@
-package com.georgicole.thebigeye;
+package com.georgicole.thebigeyeteamplay;
 
 import android.content.pm.ActivityInfo;
 import android.view.Window;

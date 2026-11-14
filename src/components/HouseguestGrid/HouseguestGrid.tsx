@@ -528,7 +528,7 @@ export default function HouseguestGrid({
                   }
                   showName={showNames}
                   animateNameReveal={showNames && game.week === 1}
-                  evictionMarkKey={`bbmobilenew:eviction-mark:${game.gameId}:${hg.id}`}
+                  evictionMarkKey={`the-big-eye-teamplay:eviction-mark:${game.gameId}:${hg.id}`}
                 />
               </li>
             )

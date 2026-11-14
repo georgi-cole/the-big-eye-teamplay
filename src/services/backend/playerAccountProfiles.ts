@@ -12,7 +12,7 @@ import { getBackendConfig } from './config'
 import { getBackendClient, subscribeBackendAuth } from './supabaseTransport'
 
 const PURPOSE = 'player_account'
-const DELETED_PROFILES_KEY = 'bbmobilenew:player-account-profile-deletions:v1'
+const DELETED_PROFILES_KEY = 'the-big-eye-teamplay:player-account-profile-deletions:v1'
 const SYNC_DELAY_MS = 400
 
 type AccountProfileSnapshot = {

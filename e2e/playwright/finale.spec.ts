@@ -11,12 +11,12 @@ import {
 
 const PROFILE_ID = 'e2e-finale-profile'
 const PROFILE_NAME = 'Finale Journey Player'
-const FIXTURE_SENTINEL_KEY = 'bbmobilenew:e2e:finale-fixture'
-const PROFILES_STORAGE_KEY = 'bbmobilenew:profiles:v1'
-const SETTINGS_STORAGE_KEY = 'bbmobilenew_settings_v1'
-const ARCHIVE_KEY = `bbmobilenew:seasonArchives:${encodeURIComponent(PROFILE_ID)}`
-const CLASSIC_RUN_KEY = `bbmobilenew:savedRunSlot:${encodeURIComponent(PROFILE_ID)}:classic`
-const LEGACY_SAVED_STATE_KEY = `bbmobilenew:savedSeason:${encodeURIComponent(PROFILE_ID)}`
+const FIXTURE_SENTINEL_KEY = 'the-big-eye-teamplay:e2e:finale-fixture'
+const PROFILES_STORAGE_KEY = 'the-big-eye-teamplay:profiles:v1'
+const SETTINGS_STORAGE_KEY = 'the-big-eye-teamplay_settings_v1'
+const ARCHIVE_KEY = `the-big-eye-teamplay:seasonArchives:${encodeURIComponent(PROFILE_ID)}`
+const CLASSIC_RUN_KEY = `the-big-eye-teamplay:savedRunSlot:${encodeURIComponent(PROFILE_ID)}:classic`
+const LEGACY_SAVED_STATE_KEY = `the-big-eye-teamplay:savedSeason:${encodeURIComponent(PROFILE_ID)}`
 
 interface FixtureRoster {
   finalists: Array<{ id: string; name: string }>
@@ -89,7 +89,7 @@ async function installDeterministicFinaleFixture(page: Page): Promise<void> {
         })
       )
       localStorage.setItem(fixtureSentinelKey, 'installed')
-      localStorage.setItem(`bbmobilenew_season_tutorial_v1:${profileId}`, 'done')
+      localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${profileId}`, 'done')
     },
     {
       fixtureSentinelKey: FIXTURE_SENTINEL_KEY,

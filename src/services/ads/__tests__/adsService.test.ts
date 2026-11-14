@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../../config/appIdentity', async (original) => ({
+  ...(await original<typeof import('../../../config/appIdentity')>()),
+  EXTERNAL_SERVICES_ENABLED: true,
+}))
 import { installSafetyFixture } from '../../../safety/__tests__/safetyFixture'
 import { declarePlayerAge, setOptionalPlayerFeature } from '../../../safety/playerSafety'
 import type { RootState } from '../../../store/store'

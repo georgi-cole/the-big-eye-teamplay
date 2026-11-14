@@ -2,12 +2,12 @@ import { Capacitor } from '@capacitor/core'
 import type { PermissionState } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 
-const LOCATION_CHOICE_KEY = 'bb:allowLocation'
-const LOCATION_REQUESTED_KEY = 'bb:locationPermissionRequested'
-const LOCATION_RATIONALE_DEFERRED_AT_KEY = 'bb:locationRationaleDeferredAt'
+const LOCATION_CHOICE_KEY = 'the-big-eye-teamplay:allowLocation'
+const LOCATION_REQUESTED_KEY = 'the-big-eye-teamplay:locationPermissionRequested'
+const LOCATION_RATIONALE_DEFERRED_AT_KEY = 'the-big-eye-teamplay:locationRationaleDeferredAt'
 // Keep provider denials separate from the legacy, explicit in-app opt-out.
-const LOCATION_PROVIDER_DENIED_KEY = 'bb:locationPermissionDenied'
-const LOCATION_FAILED_ATTEMPT_KEY = 'bb:locationPermissionFailedAt'
+const LOCATION_PROVIDER_DENIED_KEY = 'the-big-eye-teamplay:locationPermissionDenied'
+const LOCATION_FAILED_ATTEMPT_KEY = 'the-big-eye-teamplay:locationPermissionFailedAt'
 const PERMISSION_RETRY_COOLDOWN_MS = 60 * 60 * 1000
 const RATIONALE_RETRY_DELAY_MS = 24 * 60 * 60 * 1000
 

@@ -20,7 +20,7 @@ export function contextualGuideStorageKey(
   guide: ContextualGuideId,
   profileId: string | null
 ): string {
-  return `bbmobilenew_contextual_guide_${CONTEXTUAL_GUIDE_VERSION}:${guide}:${profileId ?? 'guest'}`
+  return `the-big-eye-teamplay_contextual_guide_${CONTEXTUAL_GUIDE_VERSION}:${guide}:${profileId ?? 'guest'}`
 }
 
 export function hasSeenContextualGuide(

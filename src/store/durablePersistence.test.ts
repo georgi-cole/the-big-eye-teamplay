@@ -34,9 +34,9 @@ describe('durablePersistence', () => {
   })
 
   it('migrates legacy saves, batches durable writes, and rolls back a failed flush', async () => {
-    const legacyKey = 'bbmobilenew:savedRunSlot:profile-1:classic'
+    const legacyKey = 'the-big-eye-teamplay:savedRunSlot:profile-1:classic'
     localStorage.setItem(legacyKey, '{"version":1}')
-    localStorage.setItem('bbmobilenew:settings', '{"audio":true}')
+    localStorage.setItem('the-big-eye-teamplay:settings', '{"audio":true}')
 
     const backend = new FakeBackend()
     await initializeDurablePersistence(backend)
@@ -44,9 +44,9 @@ describe('durablePersistence', () => {
     expect(backend.values.get(legacyKey)).toBe('{"version":1}')
     expect(getDurableItem(legacyKey)).toBe('{"version":1}')
     expect(localStorage.getItem(legacyKey)).toBeNull()
-    expect(localStorage.getItem('bbmobilenew:settings')).toBe('{"audio":true}')
+    expect(localStorage.getItem('the-big-eye-teamplay:settings')).toBe('{"audio":true}')
 
-    const secondKey = 'bbmobilenew:savedRuns:profile-1'
+    const secondKey = 'the-big-eye-teamplay:savedRuns:profile-1'
     expect(setDurableItem(secondKey, '{"version":2}')).toBe(true)
     expect(getDurableItem(secondKey)).toBe('{"version":2}')
     expect(await flushDurablePersistence()).toBe(true)
@@ -59,7 +59,7 @@ describe('durablePersistence', () => {
     const failure = vi.fn()
     setDurablePersistenceFailureListener(failure)
     backend.failWrites = true
-    const newKey = 'bbmobilenew:savedRunSlot:profile-1:voxPopuli'
+    const newKey = 'the-big-eye-teamplay:savedRunSlot:profile-1:voxPopuli'
     expect(setDurableItem(legacyKey, '{"version":2}')).toBe(true)
     expect(setDurableItem(newKey, '{"step":1}')).toBe(true)
     expect(setDurableItem(newKey, '{"step":2}')).toBe(true)

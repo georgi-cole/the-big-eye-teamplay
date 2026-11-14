@@ -1,17 +1,18 @@
 import { Capacitor } from '@capacitor/core'
+import { APP_IDENTITY } from '../config/appIdentity'
 
-const DB_NAME = 'big-eye-persistence'
+const DB_NAME = APP_IDENTITY.databaseName
 const DB_VERSION = 1
 const KV_STORE = 'kv'
 const SQLITE_TABLE = 'durable_kv'
 const FLUSH_DELAY_MS = 25
 
 const LEGACY_DURABLE_PREFIXES = [
-  'bbmobilenew:savedSeason:',
-  'bbmobilenew:savedRuns:',
-  'bbmobilenew:savedRunSlot:',
-  'bbmobilenew:seasonArchives',
-  'bbmobilenew:allianceRecovery:',
+  'the-big-eye-teamplay:savedSeason:',
+  'the-big-eye-teamplay:savedRuns:',
+  'the-big-eye-teamplay:savedRunSlot:',
+  'the-big-eye-teamplay:seasonArchives',
+  'the-big-eye-teamplay:allianceRecovery:',
 ] as const
 
 export type DurablePersistenceBackendKind =

@@ -1,4 +1,7 @@
+import { EXTERNAL_SERVICES_ENABLED } from '../../config/appIdentity'
+
 export function getBackendConfig(): { url: string; key: string } | null {
+  if (!EXTERNAL_SERVICES_ENABLED) return null
   if (import.meta.env.VITE_SUPABASE_ENABLED !== 'true') return null
   const url = import.meta.env.VITE_SUPABASE_URL?.trim()
   const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()

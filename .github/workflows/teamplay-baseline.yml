@@ -1,0 +1,31 @@
+name: Teamplay baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teamplay-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:pr
+      - run: npx vitest run tests/teamplayFoundation.test.ts
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
+      - run: npm run build:mobile

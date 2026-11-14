@@ -1,4 +1,4 @@
-package com.georgicole.thebigeye;
+package com.georgicole.thebigeyeteamplay;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;

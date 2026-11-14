@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../config/appIdentity', async (original) => ({
+  ...(await original<typeof import('../../config/appIdentity')>()),
+  EXTERNAL_SERVICES_ENABLED: true,
+}))
 import {
   finishPlayerOAuth,
   NATIVE_PLAYER_SIGN_IN_REDIRECT,

@@ -12,8 +12,8 @@ import { serializeProfileBackup } from './profileBackup'
 import { authenticatedBackend, subscribeBackendAuth } from './supabaseTransport'
 import { initializePlayerAccountProfiles } from './playerAccountProfiles'
 
-const PREFERENCES_KEY = 'bbmobilenew:supabase-profiles:v1'
-const EVENTS_KEY = 'bbmobilenew:supabase-events:v1'
+const PREFERENCES_KEY = 'the-big-eye-teamplay:supabase-profiles:v1'
+const EVENTS_KEY = 'the-big-eye-teamplay:supabase-events:v1'
 const MAX_EVENTS = 2000
 const MAX_EVENT_AGE = 7 * 24 * 60 * 60 * 1000
 const APP_ENVIRONMENT = resolveAppEnvironment(

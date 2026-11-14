@@ -63,7 +63,7 @@ test('profile fields scroll below the status bar with Save reachable @mobile', a
   await page.addInitScript(() => {
     window.name = 'phone-preview:iphone'
     localStorage.setItem(
-      'bbmobilenew:profiles:v1',
+      'the-big-eye-teamplay:profiles:v1',
       JSON.stringify({
         profiles: [
           {

@@ -87,7 +87,7 @@ const FINAL_TWO_EXTRA_HOLD_MS = 3500
 const FAST_FORWARD_ELIMINATION_INTERVAL_MS = 850
 const FAST_FORWARD_TICK_INTERVAL_MS = 300
 const MAX_VISIBLE_RANKS = 8
-const FORECAST_STREAK_STORAGE_KEY = 'bbmobilenew:public-favorite-forecast-streak:v1'
+const FORECAST_STREAK_STORAGE_KEY = 'the-big-eye-teamplay:public-favorite-forecast-streak:v1'
 
 function readForecastStreak(): number {
   if (typeof window === 'undefined') return 0

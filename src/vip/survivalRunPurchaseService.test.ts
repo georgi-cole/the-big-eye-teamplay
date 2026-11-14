@@ -1,5 +1,10 @@
 import type { Transaction } from '@capgo/native-purchases'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../config/appIdentity', async (original) => ({
+  ...(await original<typeof import('../config/appIdentity')>()),
+  NATIVE_BILLING_ENABLED: true,
+}))
 import type { DurableStorageBackend } from '../store/durablePersistence'
 
 const native = vi.hoisted(() => ({
@@ -34,7 +39,7 @@ vi.mock('../config/buildTarget', () => ({
 vi.mock('../safety/playerSafety', () => ({ assertAdultServicesAllowed: vi.fn() }))
 
 const productId = 'com.georgicole.thebigeye.survivalrun'
-const ledgerKey = 'bbmobilenew:survival-run-purchases:v1'
+const ledgerKey = 'the-big-eye-teamplay:survival-run-purchases:v1'
 
 function transaction(id: string, overrides: Partial<Transaction> = {}): Transaction {
   return {

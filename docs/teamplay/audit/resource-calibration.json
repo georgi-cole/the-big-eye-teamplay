@@ -1,0 +1,92 @@
+{
+  "normal": {
+    "dailyEnergy": 5,
+    "activeSecondWind": 3,
+    "secondWindSpendThreshold": 4,
+    "energyCap": 20
+  },
+  "drama": {
+    "dailyEnergy": 7,
+    "activeSecondWind": 3,
+    "secondWindSpendThreshold": 4,
+    "energyCap": 30
+  },
+  "competition": {
+    "winnerEnergy": 5,
+    "secondEnergy": 2,
+    "thirdEnergy": 1,
+    "lohInfluence": 15,
+    "posInfluence": 12,
+    "voxImmunityInfluence": 10,
+    "allPowerExtraInfluence": 5,
+    "voxFinalImmunityInfluence": 15
+  },
+  "nomination": {
+    "campaignEnergy": 3,
+    "savedEnergy": 1,
+    "safetyFavorInfluence": 5
+  },
+  "survival": {
+    "normalEnergy": 2,
+    "normalInfluence": 8,
+    "voxInfluence": 12,
+    "doubleEnergy": 6,
+    "doubleInfluence": 20,
+    "voxPublicDarlingInfluence": 5
+  },
+  "relationships": {
+    "allianceInfluence": 20,
+    "allianceBreakInfluence": -25,
+    "promiseKeptInfluence": 15,
+    "promiseBrokenInfluence": -25
+  },
+  "publicSaveInfluence": 15,
+  "voxUnderTheRadarInfluence": 5,
+  "incoming": {
+    "credibleInfo": 50,
+    "strongInfo": 100
+  },
+  "battleBack": {
+    "normal": {
+      "energy": 10,
+      "influence": 25,
+      "info": 100
+    },
+    "drama": {
+      "energy": 15,
+      "influence": 30,
+      "info": 100
+    }
+  },
+  "ambient": {
+    "sunnyEnergy": 1,
+    "rainbowEnergy": 1,
+    "chocolateEnergy": 1,
+    "easterEggEnergy": 4,
+    "depressionRecoveryEnergy": 3
+  },
+  "twinShock": {
+    "early": {
+      "energy": 2,
+      "influence": 10,
+      "info": 100
+    },
+    "late": {
+      "energy": 1,
+      "influence": 5,
+      "info": 75
+    }
+  },
+  "democracia": {
+    "sole": {
+      "energy": 3,
+      "influence": 20
+    },
+    "coLoh": {
+      "energy": 2,
+      "influence": 12
+    }
+  },
+  "secretMissionInfluence": 75,
+  "rewardedRechargeEnergy": 6
+}

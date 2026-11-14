@@ -1,6 +1,6 @@
 import type { BroadcastOverride, CustomBroadcastMessage } from '../types'
 
-export const BROADCAST_CONFIG_STORAGE_KEY = 'bbmobilenew:broadcast-manager:v2'
+export const BROADCAST_CONFIG_STORAGE_KEY = 'the-big-eye-teamplay:broadcast-manager:v2'
 
 export interface PersistedBroadcastConfig {
   version: 2

@@ -11,9 +11,9 @@ test('a season retains its chosen contestant after player edits and reload @core
 }) => {
   test.setTimeout(180000)
   await page.addInitScript(() => {
-    if (!localStorage.getItem('bbmobilenew:profiles:v1')) {
+    if (!localStorage.getItem('the-big-eye-teamplay:profiles:v1')) {
       localStorage.setItem(
-        'bbmobilenew:profiles:v1',
+        'the-big-eye-teamplay:profiles:v1',
         JSON.stringify({
           profiles: [
             {
@@ -31,7 +31,7 @@ test('a season retains its chosen contestant after player edits and reload @core
         })
       )
     }
-    localStorage.setItem('bbmobilenew_season_tutorial_v1:contestant-owner', 'done')
+    localStorage.setItem('the-big-eye-teamplay_season_tutorial_v1:contestant-owner', 'done')
   })
   await page.goto('./', { waitUntil: 'domcontentloaded' })
   await expect(page.getByRole('navigation', { name: 'Main menu' })).toBeVisible({ timeout: 60000 })
@@ -131,7 +131,7 @@ test('legacy five-profile installs remain usable while new creation is capped at
   test.setTimeout(120000)
   await page.addInitScript(() => {
     localStorage.setItem(
-      'bbmobilenew:profiles:v1',
+      'the-big-eye-teamplay:profiles:v1',
       JSON.stringify({
         profiles: Array.from({ length: 5 }, (_, index) => ({
           id: `legacy-${index}`,

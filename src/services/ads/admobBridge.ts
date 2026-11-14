@@ -7,6 +7,7 @@ import {
   RewardAdPluginEvents,
 } from '@capacitor-community/admob'
 import { IS_MOBILE_DEV_BUILD } from '../../config/buildTarget'
+import { EXTERNAL_SERVICES_ENABLED } from '../../config/appIdentity'
 import {
   canUseAdultServices,
   canUseOptionalFeature,
@@ -108,6 +109,7 @@ async function present(
 
 /** Install the existing game contract without loading ads or prompting at startup. */
 export function installAdMobBridge(isPlacementAllowed?: (placement: AdPlacement) => boolean): void {
+  if (!EXTERNAL_SERVICES_ENABLED) return
   if (!Capacitor.isNativePlatform() || IS_MOBILE_DEV_BUILD || window.GameAds) return
   const config = resolveAdMobConfig(Capacitor.getPlatform(), import.meta.env)
   if (!config) return

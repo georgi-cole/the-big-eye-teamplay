@@ -13,6 +13,7 @@ import AppShell from './components/layout/AppShell'
 import RouteErrorBoundary from './components/RouteErrorBoundary/RouteErrorBoundary'
 import RouteLoadingScreen from './components/RouteLoadingScreen/RouteLoadingScreen'
 import HomeHub from './screens/HomeHub/HomeHub'
+import TeamplayUnavailable from './screens/HomeHub/TeamplayUnavailable'
 import NotFound from './screens/NotFound/NotFound'
 import SettingsAdminRoute from './routes/SettingsAdminRoute'
 import { Suspense, type ReactNode } from 'react'
@@ -40,7 +41,6 @@ const VoxPopuliRules = lazy(() => import('./screens/Rules/VoxPopuliRules'))
 const PublicMeter = lazy(() => import('./screens/PublicMeter/PublicMeter'))
 const AdvertisingPrivacy = lazy(() => import('./services/ads/AdvertisingPrivacy'))
 const Settings = lazy(() => import('./screens/Settings/Settings'))
-const Store = lazy(() => import('./screens/Store/Store'))
 const Legal = lazy(() => import('./screens/Legal/Legal'))
 const CinematicPreview = lazy(() => import('./screens/CinematicPreview/CinematicPreview'))
 const PhonePreviewPage = lazy(() => import('./screens/PhonePreviewPage/PhonePreviewPage'))
@@ -192,7 +192,7 @@ export const router = createHashRouter([
     element: <AppShell />,
     errorElement: <RouteErrorBoundary />,
     children: [
-      { index: true, element: <HomeHub /> },
+      { index: true, element: <HomeHub classicOnly /> },
       { path: 'game', element: load(<GameRoute />) },
       { path: 'new-season', element: <Navigate to="/?menu=play" replace /> },
       { path: 'diary-room', element: load(<ConfessionalRoute />) },
@@ -217,7 +217,7 @@ export const router = createHashRouter([
         path: 'settings',
         element: load(<Settings />),
       },
-      { path: 'store', element: load(<Store />) },
+      { path: 'store', element: <TeamplayUnavailable /> },
       { path: 'legal', element: load(<Legal />) },
       { path: 'settingsatiste', element: <SettingsAdminRoute /> },
       ...(twistsQaEnabled && TwistsTestPage != null

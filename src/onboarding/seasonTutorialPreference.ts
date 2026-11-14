@@ -3,18 +3,18 @@ const TUTORIAL_VERSION = 'v2'
 
 /** Legacy key used before enabled preference and per-season completion diverged. */
 export function seasonTutorialStorageKey(profileId: string | null): string {
-  return `bbmobilenew_season_tutorial_${LEGACY_TUTORIAL_VERSION}:${profileId ?? 'profile'}`
+  return `the-big-eye-teamplay_season_tutorial_${LEGACY_TUTORIAL_VERSION}:${profileId ?? 'profile'}`
 }
 
 export function seasonTutorialEnabledStorageKey(profileId: string | null): string {
-  return `bbmobilenew_season_tutorial_enabled_${TUTORIAL_VERSION}:${profileId ?? 'profile'}`
+  return `the-big-eye-teamplay_season_tutorial_enabled_${TUTORIAL_VERSION}:${profileId ?? 'profile'}`
 }
 
 export function seasonTutorialCompletionStorageKey(
   profileId: string | null,
   gameId: string
 ): string {
-  return `bbmobilenew_season_tutorial_completion_${TUTORIAL_VERSION}:${profileId ?? 'guest'}:${gameId}`
+  return `the-big-eye-teamplay_season_tutorial_completion_${TUTORIAL_VERSION}:${profileId ?? 'guest'}:${gameId}`
 }
 
 /**

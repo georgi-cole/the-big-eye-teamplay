@@ -1,6 +1,6 @@
 import type { RemoteOperations } from '../../remoteConfig/remoteConfigTypes'
 
-const EVENT_BUFFER_KEY = 'bbmobilenew:product-events'
+const EVENT_BUFFER_KEY = 'the-big-eye-teamplay:product-events'
 export type EventProperties = Record<string, string | number | boolean | null | undefined>
 export type ProductEvent = {
   name: string

@@ -576,7 +576,7 @@ describe('DiaryRoom', () => {
       await vi.runAllTimersAsync()
     })
     expect(localStorage.getItem(`big_eye_memory_${game.gameId}_${playerId}`)).toBeNull()
-    expect(sessionStorage.getItem(`bb_dr_chat_${playerId}`)).toBeNull()
+    expect(sessionStorage.getItem(`the-big-eye-teamplay_dr_chat_${playerId}`)).toBeNull()
     expect(
       visit.store.getState().game.tvFeed.filter((event) => /confessional/i.test(event.text))
     ).toHaveLength(1)

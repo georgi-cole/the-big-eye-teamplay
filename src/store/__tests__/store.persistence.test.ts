@@ -19,7 +19,7 @@ describe('store background persistence', () => {
     persistenceMocks.saveRunSnapshot.mockClear()
     localStorage.clear()
     localStorage.setItem(
-      'bbmobilenew:profiles:v1',
+      'the-big-eye-teamplay:profiles:v1',
       JSON.stringify({
         activeProfileId: 'profile-background-save',
         isGuest: false,

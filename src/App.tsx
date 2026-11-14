@@ -40,6 +40,7 @@ import { I18nProvider } from './i18n'
 import './styles/gameCopyPolish.css'
 import './styles/performanceOverrides.css'
 import './styles/majorityRulesFinalDuel.css'
+import { EXTERNAL_SERVICES_ENABLED } from './config/appIdentity'
 
 const IS_PUBLIC_QA_BUILD = import.meta.env.VITE_VIP_DEV_ENTITLEMENT === 'true'
 
@@ -145,7 +146,7 @@ export default function App() {
             QA
           </div>
         )}
-        <LiveOpsController />
+        {EXTERNAL_SERVICES_ENABLED && <LiveOpsController />}
         <FauxTvProgrammingController />
         <WeatherController />
         <WeatherBulletinOverlay />
@@ -154,8 +155,8 @@ export default function App() {
         <DepressionShockController />
         <AudioStateSync hash={hash} />
         <RouteLoopAudioSync hash={hash} />
-        <VipEntitlementSync />
-        <CinematicPackController hash={hash} />
+        {EXTERNAL_SERVICES_ENABLED && <VipEntitlementSync />}
+        {EXTERNAL_SERVICES_ENABLED && <CinematicPackController hash={hash} />}
         <AudioGate />
         <RouterProvider router={router} />
       </I18nProvider>

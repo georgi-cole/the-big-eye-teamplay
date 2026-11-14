@@ -9,7 +9,7 @@ import {
 } from './support/test'
 
 const SCREEN_TIMEOUT_MS = 30_000
-const SAVED_RUNS_KEY_PREFIX = 'bbmobilenew:savedRuns:'
+const SAVED_RUNS_KEY_PREFIX = 'the-big-eye-teamplay:savedRuns:'
 
 async function waitForHome(page: Page): Promise<void> {
   const mainMenu = page.getByRole('navigation', { name: 'Main menu' })
@@ -36,7 +36,7 @@ async function createProfileFromHome(page: Page, playerName: string): Promise<vo
   await page.getByRole('button', { name: 'Save Profile', exact: true }).click()
   const activeProfileId = (await readAppState(page)).profiles.activeProfileId
   await page.evaluate((profileId) => {
-    localStorage.setItem(`bbmobilenew_season_tutorial_v1:${profileId}`, 'done')
+    localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${profileId}`, 'done')
   }, activeProfileId)
   await page.getByRole('button', { name: 'Go back' }).click()
   await waitForHome(page)

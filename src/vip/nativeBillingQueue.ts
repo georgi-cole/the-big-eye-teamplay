@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { NATIVE_BILLING_ENABLED } from '../config/appIdentity'
 
 let androidBillingQueue: Promise<unknown> = Promise.resolve()
 
@@ -22,6 +23,9 @@ export function withNativeBilling<T>(
   operation: () => Promise<T>,
   options: { retryDisconnected?: boolean } = {}
 ): Promise<T> {
+  if (!NATIVE_BILLING_ENABLED) {
+    return Promise.reject(new Error('Purchases are disabled in the Teamplay baseline.'))
+  }
   if (Capacitor.getPlatform() !== 'android') return operation()
   const result = androidBillingQueue.then(async () => {
     try {

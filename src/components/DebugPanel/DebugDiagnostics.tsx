@@ -21,7 +21,7 @@ import {
 } from '../../store/saveStatePersistence'
 import { getDurablePersistenceDiagnostics } from '../../store/durablePersistence'
 
-const CHECKPOINT_KEY = 'bbmobilenew:debug-checkpoint:v1'
+const CHECKPOINT_KEY = 'the-big-eye-teamplay:debug-checkpoint:v1'
 const SNAPSHOT_VERSION = 1
 
 type DebugSnapshot = {
@@ -279,9 +279,9 @@ export default function DebugDiagnostics() {
   }
 
   const toggleLayoutOverlay = () => {
-    const enabled = localStorage.getItem('bbmobile:debugLayout') === '1'
-    if (enabled) localStorage.removeItem('bbmobile:debugLayout')
-    else localStorage.setItem('bbmobile:debugLayout', '1')
+    const enabled = localStorage.getItem('the-big-eye-teamplay:debugLayout') === '1'
+    if (enabled) localStorage.removeItem('the-big-eye-teamplay:debugLayout')
+    else localStorage.setItem('the-big-eye-teamplay:debugLayout', '1')
     setStatus(`Layout overlay ${enabled ? 'disabled' : 'enabled'}; reloading.`)
     window.setTimeout(() => window.location.reload(), 50)
   }

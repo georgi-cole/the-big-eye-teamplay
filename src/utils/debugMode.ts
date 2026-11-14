@@ -1,6 +1,6 @@
 import { IS_ADMIN_BUILD, IS_RELEASE_BUILD } from '../config/buildTarget'
 const LOCAL_DEBUG_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
-export const DEBUG_ACCESS_STORAGE_KEY = 'bbmobilenew:qa-debug-access'
+export const DEBUG_ACCESS_STORAGE_KEY = 'the-big-eye-teamplay:qa-debug-access'
 
 type DebugLocationLike = Pick<Location, 'hostname' | 'search' | 'hash'>
 

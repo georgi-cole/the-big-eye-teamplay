@@ -8,10 +8,10 @@
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>CFBundleURLName</key>
-            <string>com.georgicole.thebigeye.player-sign-in</string>
+            <string>com.georgicole.thebigeyeteamplay.player-sign-in</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.georgicole.thebigeye</string>
+                <string>com.georgicole.thebigeyeteamplay</string>
             </array>
         </dict>
     </array>
@@ -230,7 +230,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>The Big Eye</string>
+        <string>The Big Eye Teamplay</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

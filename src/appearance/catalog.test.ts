@@ -120,6 +120,6 @@ describe('player appearance catalogue', () => {
 
     saveProfilesState(state)
     expect(loadProfilesState().profiles[0]?.appearanceSelection).toEqual(after?.appearanceSelection)
-    localStorage.removeItem('bbmobilenew:profiles:v1')
+    localStorage.removeItem('the-big-eye-teamplay:profiles:v1')
   })
 })

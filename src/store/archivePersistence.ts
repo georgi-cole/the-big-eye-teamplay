@@ -12,7 +12,7 @@ import type { SeasonArchive } from './seasonArchive'
 // eslint-disable-next-line prefer-const
 export let enabled = true
 
-export const DEFAULT_ARCHIVE_KEY = 'bbmobilenew:seasonArchives'
+export const DEFAULT_ARCHIVE_KEY = 'the-big-eye-teamplay:seasonArchives'
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 

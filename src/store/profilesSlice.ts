@@ -30,9 +30,9 @@ import type { RootState } from './store'
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const MAX_PROFILES = 3
-const PROFILES_STORAGE_KEY = 'bbmobilenew:profiles:v1'
+const PROFILES_STORAGE_KEY = 'the-big-eye-teamplay:profiles:v1'
 /** Prefix for per-profile season-archive localStorage keys. */
-export const DEFAULT_ARCHIVE_KEY_PREFIX = 'bbmobilenew:seasonArchives:'
+export const DEFAULT_ARCHIVE_KEY_PREFIX = 'the-big-eye-teamplay:seasonArchives:'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -561,7 +561,7 @@ export function loadActiveProfile(): {
   }
   // Legacy fallback: read from old userProfile storage key.
   try {
-    const raw = localStorage.getItem('bbmobilenew_user_profile_v1')
+    const raw = localStorage.getItem('the-big-eye-teamplay_user_profile_v1')
     if (raw) {
       const parsed = JSON.parse(raw) as { name?: string; avatar?: string }
       return {
@@ -593,7 +593,7 @@ export function archiveKeyForActiveProfile(): string {
   if (!state.isGuest && state.activeProfileId) {
     return archiveKeyForProfile(state.activeProfileId)
   }
-  return 'bbmobilenew:seasonArchives'
+  return 'the-big-eye-teamplay:seasonArchives'
 }
 
 // ─── Slice ───────────────────────────────────────────────────────────────────

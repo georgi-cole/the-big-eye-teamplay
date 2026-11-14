@@ -1,6 +1,6 @@
 import type { BigEyeHistoryTurn, BigEyeWorldContext } from './bigBrother'
 
-const INSTALLATION_ID_KEY = 'bbmobilenew:vip-installation-id:v1'
+const INSTALLATION_ID_KEY = 'the-big-eye-teamplay:vip-installation-id:v1'
 const VIP_TIMEOUT_MS = 24_000
 
 export type BigEyeVipPlan = 'free' | 'subscriber'

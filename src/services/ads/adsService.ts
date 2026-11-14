@@ -14,6 +14,7 @@ import type { AppDispatch, RootState } from '../../store/store'
 import { recordAdShown } from '../../store/adsSlice'
 import { hasEffectiveStoreEntitlement } from '../../vip/effectiveEntitlements'
 import { IS_MOBILE_DEV_BUILD } from '../../config/buildTarget'
+import { EXTERNAL_SERVICES_ENABLED } from '../../config/appIdentity'
 import { setEnergyBankEntry } from '../../social/socialSlice'
 import { canUseOptionalFeature, subscribePlayerSafety } from '../../safety/playerSafety'
 
@@ -118,6 +119,7 @@ export function canShowAd(
   state: RootState,
   options?: { isFinal3Week?: boolean }
 ): boolean {
+  if (!EXTERNAL_SERVICES_ENABLED) return false
   if (!canUseOptionalFeature('ads')) return false
   const hasNoAdsPack =
     (state.ads?.hasNoAdsPack ?? false) || hasEffectiveStoreEntitlement(state.vip, 'noAds')

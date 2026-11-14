@@ -43,8 +43,8 @@ async function installUnhandledRejectionReporter(
     ({ newSeasonFixture, skipUnloadAutosave, showWeatherPrompt }) => {
       if (!showWeatherPrompt) {
         try {
-          if (localStorage.getItem('bb:allowLocation') == null) {
-            localStorage.setItem('bb:allowLocation', 'denied')
+          if (localStorage.getItem('the-big-eye-teamplay:allowLocation') == null) {
+            localStorage.setItem('the-big-eye-teamplay:allowLocation', 'denied')
           }
         } catch {
           // Sandboxed frames can run init scripts without exposing local storage.

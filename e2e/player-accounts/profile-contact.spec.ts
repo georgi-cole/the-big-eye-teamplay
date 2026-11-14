@@ -222,14 +222,23 @@ async function installContactFixture(page: Page, options: FixtureOptions = {}) {
   await page.addInitScript(
     ({ backupSession, analyticsSession, adminSession, emptyProfiles, guest, profileId }) => {
       window.name = 'phone-preview:profile-email-review'
-      if (localStorage.getItem('bb:profile-email-demo')) return
-      localStorage.setItem('bb:profile-email-demo', '1')
-      localStorage.setItem('bbmobilenew:supabase:profile_backup:v1', JSON.stringify(backupSession))
-      localStorage.setItem('bbmobilenew:supabase:analytics:v1', JSON.stringify(analyticsSession))
-      if (adminSession)
-        localStorage.setItem('bbmobilenew:supabase:audience_admin:v1', JSON.stringify(adminSession))
+      if (localStorage.getItem('the-big-eye-teamplay:profile-email-demo')) return
+      localStorage.setItem('the-big-eye-teamplay:profile-email-demo', '1')
       localStorage.setItem(
-        'bbmobilenew:profiles:v1',
+        'the-big-eye-teamplay:supabase:profile_backup:v1',
+        JSON.stringify(backupSession)
+      )
+      localStorage.setItem(
+        'the-big-eye-teamplay:supabase:analytics:v1',
+        JSON.stringify(analyticsSession)
+      )
+      if (adminSession)
+        localStorage.setItem(
+          'the-big-eye-teamplay:supabase:audience_admin:v1',
+          JSON.stringify(adminSession)
+        )
+      localStorage.setItem(
+        'the-big-eye-teamplay:profiles:v1',
         JSON.stringify({
           profiles: emptyProfiles
             ? []
@@ -248,8 +257,8 @@ async function installContactFixture(page: Page, options: FixtureOptions = {}) {
           isGuest: guest,
         })
       )
-      localStorage.setItem(`bbmobilenew_season_tutorial_v1:${profileId}`, 'done')
-      localStorage.setItem('bbmobilenew_season_tutorial_v1:guest', 'done')
+      localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${profileId}`, 'done')
+      localStorage.setItem('the-big-eye-teamplay_season_tutorial_v1:guest', 'done')
     },
     {
       backupSession: demoSession(demoUser(OWNER_ID)),
@@ -522,7 +531,9 @@ for (const provider of ['apple', 'google']) {
     await expect(page.getByText('Signed in as signin@example.com')).toBeVisible()
     await expect(page).toHaveURL(`${APP_URL}#/profile/account`)
     expect(
-      await page.evaluate(() => localStorage.getItem('bbmobilenew:supabase:player_account:v1'))
+      await page.evaluate(() =>
+        localStorage.getItem('the-big-eye-teamplay:supabase:player_account:v1')
+      )
     ).not.toContain(appleToken)
     expect((await readAppState(page)).profiles.profiles).toMatchObject([
       { id: PROFILE_ID, name: 'Maya', eyeoleans: 12500 },
@@ -621,9 +632,9 @@ test('guest season is adopted with an explicit email choice and no authenticatio
     appearanceSelection: appearance,
   })
   expect(JSON.stringify(after)).not.toContain('maya@example.com')
-  expect(await page.evaluate(() => localStorage.getItem('bbmobilenew:profiles:v1'))).not.toContain(
-    'maya@example.com'
-  )
+  expect(
+    await page.evaluate(() => localStorage.getItem('the-big-eye-teamplay:profiles:v1'))
+  ).not.toContain('maya@example.com')
   expect(JSON.stringify(requests.events)).not.toContain('maya@example.com')
   expect(JSON.stringify(requests.backups)).not.toContain('maya@example.com')
   // At the opening Classic phase, autosave has no meaningful progress yet. This
@@ -649,7 +660,7 @@ test('editing the saved email choice preserves the local profile and durable sea
   const saveDialog = page.getByRole('dialog', { name: 'Save and return home?' })
   await saveDialog.getByRole('button', { name: 'Save & Home' }).click()
   await expect(page.getByRole('navigation', { name: 'Main menu' })).toBeVisible()
-  const key = `bbmobilenew:savedRunSlot:${PROFILE_ID}:classic`
+  const key = `the-big-eye-teamplay:savedRunSlot:${PROFILE_ID}:classic`
   await expect.poll(() => readDurableItem(page, key)).not.toBeNull()
   const savedBefore = await readDurableItem(page, key)
   const before = await readAppState(page)
@@ -755,7 +766,8 @@ test('administrator signs in separately and sees subscribed profiles and activit
   await noHorizontalOverflow(page)
   const backupOwner = await page.evaluate(
     () =>
-      JSON.parse(localStorage.getItem('bbmobilenew:supabase:profile_backup:v1') ?? '{}').user?.id
+      JSON.parse(localStorage.getItem('the-big-eye-teamplay:supabase:profile_backup:v1') ?? '{}')
+        .user?.id
   )
   expect(backupOwner).toBe(OWNER_ID)
   await page.getByRole('button', { name: 'Sign out admin' }).click()

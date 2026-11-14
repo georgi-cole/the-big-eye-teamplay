@@ -1,0 +1,2137 @@
+[
+  {
+    "id": "compliment",
+    "title": "Compliment",
+    "icon": "✨",
+    "description": "Give genuine praise to build rapport.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": 1,
+    "targetMode": "primary",
+    "successWeight": 3,
+    "yields": {
+      "influence": 0.02
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 2,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "whisper",
+    "title": "Whisper",
+    "icon": "🤫",
+    "description": "Share private intel to gain trust.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "dramaCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "yields": {
+      "info": 1
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 100
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "observe",
+    "title": "Watch Room",
+    "icon": "👁️",
+    "description": "Watch the Hub without approaching anyone.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "dramaCost": {
+      "energy": 2
+    },
+    "targetMode": "none",
+    "needsTargets": false,
+    "successWeight": 2,
+    "yields": {
+      "info": 1
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 100
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "group_chat",
+    "title": "Group Chat",
+    "icon": "🗣️",
+    "description": "Mingle with the Hub. Build broad goodwill.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "multi",
+    "minTargets": 2,
+    "maxTargets": 8,
+    "energyPerTarget": 1,
+    "successWeight": 2,
+    "yields": {
+      "influence": 0.03
+    },
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 3,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "build_quiet_bond",
+    "title": "Heart-to-Heart",
+    "icon": "☕",
+    "description": "Step away from the noise and deepen a genuine one-to-one bond.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 3,
+    "yields": {
+      "influence": 0.04
+    },
+    "allowedPhases": ["social_1", "social_2"],
+    "voxOnly": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "share_personal_story",
+    "title": "Open Up",
+    "icon": "💭",
+    "description": "Share something personal and give this relationship room to become real.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "yields": {
+      "influence": 0.03
+    },
+    "allowedPhases": ["social_1", "social_2"],
+    "voxOnly": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 3,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "read_the_room",
+    "title": "Read the Room",
+    "icon": "👁️",
+    "description": "Watch the Hub dynamics without discussing nominations or pushing a target.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "none",
+    "needsTargets": false,
+    "successWeight": 3,
+    "yields": {
+      "info": 1
+    },
+    "allowedPhases": ["social_1", "social_2"],
+    "voxOnly": true,
+    "aiOnly": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 100
+    },
+    "teamStageReview": "AI shim: audit caller legality"
+  },
+  {
+    "id": "proposeAlliance",
+    "title": "Propose Personal Pact",
+    "icon": "🤝",
+    "description": "Ask this hubmate for a private two-person protection pact.",
+    "category": "alliance",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 2
+    },
+    "dramaCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "alliance",
+    "realityExclusive": true,
+    "yields": {
+      "influence": 0
+    },
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "consult_alliance",
+    "title": "Consult Alliance",
+    "icon": "🗣️",
+    "description": "Ask your official alliance for a read on the decision in front of you.",
+    "category": "strategic",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "dramaCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 3,
+    "realityExclusive": true,
+    "realityPurposes": ["INFORMATION"],
+    "realityVisibility": "GROUP_VISIBLE",
+    "affinityEffects": {
+      "success": 0,
+      "failure": 0
+    },
+    "realityEffects": {
+      "accepted": {
+        "strategicValue": 2,
+        "secretCloseness": 1,
+        "familiarity": 1
+      },
+      "rejected": {
+        "suspicion": 1
+      }
+    },
+    "allowedPhases": [
+      "loh_results",
+      "social_1",
+      "nominations",
+      "nomination_results",
+      "pos_results",
+      "pos_ceremony",
+      "pos_ceremony_results",
+      "social_2",
+      "live_vote"
+    ],
+    "availabilityHint": "Select a member of one of your active alliances",
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "protect",
+    "title": "Offer Protection",
+    "icon": "🛡️",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": 2,
+    "affinityEffects": {
+      "success": 5,
+      "failure": 0
+    },
+    "scoreEffects": {
+      "success": 0.1,
+      "failure": 0
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "realityExclusive": true,
+    "description": "Promise to use your vote or power to protect a vulnerable player when you can.",
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "betray",
+    "title": "Betray Ally",
+    "icon": "🗡️",
+    "description": "Turn against an ally for personal gain while remaining in the pact.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": 3,
+    "dramaCost": 4,
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "betrayal",
+    "availabilityHint": "High-risk betrayal",
+    "requiredRelationshipTags": ["alliance"],
+    "realityExclusive": true,
+    "yields": {
+      "influence": 0.04
+    },
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "reassure",
+    "title": "Reassure",
+    "icon": "🤗",
+    "description": "Offer emotional support. Builds trust and goodwill.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": 1,
+    "targetMode": "primary",
+    "successWeight": 2,
+    "yields": {
+      "influence": 0.03
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 3,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "apologize",
+    "title": "Clear the Air",
+    "icon": "🕊️",
+    "description": "Own a mistake and sincerely repair tension with this player.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": 1,
+    "dramaCost": 2,
+    "targetMode": "primary",
+    "successWeight": 2,
+    "yields": {
+      "influence": 0.02
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 2,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "share_intel",
+    "title": "Share Intel",
+    "icon": "📋",
+    "description": "Trade your intelligence for social leverage. Converts info into influence.",
+    "category": "strategic",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 1,
+      "info": 2
+    },
+    "dramaCost": {
+      "energy": 2,
+      "info": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "intel",
+    "availabilityHint": "Requires 200 info",
+    "yields": {
+      "influence": 0.06
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 200
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 200
+    },
+    "normalYields": {
+      "influence": 6,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "rumor",
+    "title": "Spread Rumor",
+    "icon": "💬",
+    "description": "Plant a damaging rumor about a player.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": {
+      "energy": 2,
+      "info": 1
+    },
+    "dramaCost": {
+      "energy": 3,
+      "info": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "rumor",
+    "yields": {
+      "influence": 0.05
+    },
+    "realityExclusive": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 5,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "startFight",
+    "title": "Start Fight",
+    "icon": "💥",
+    "description": "Escalate tension. Risky — may backfire.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": 3,
+    "dramaCost": 4,
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "conflict",
+    "availabilityHint": "Risky — may backfire",
+    "yields": {
+      "influence": 0.04
+    },
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "confront",
+    "title": "Confront",
+    "icon": "😤",
+    "description": "Directly challenge someone's behavior or motives.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": 2,
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "conflict",
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "favor_request",
+    "title": "Request Favour",
+    "icon": "🙏",
+    "description": "Call in a favour from your network.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 1,
+      "influence": 2
+    },
+    "dramaCost": {
+      "energy": 2,
+      "influence": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "availabilityHint": "Requires 20 influence",
+    "dramaMinAffinity": 5,
+    "yields": {
+      "influence": 0.03
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 20,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 20,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 3,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "pitch_target",
+    "title": "Pitch Target",
+    "icon": "🎯",
+    "description": "Suggest to the LOH who they should nominate.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 1,
+      "info": 1
+    },
+    "dramaCost": {
+      "energy": 3,
+      "influence": 1,
+      "info": 1
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "houseguests",
+    "successWeight": 1,
+    "outcomeTag": "target",
+    "availabilityHint": "Talk to LOH about a target",
+    "yields": {
+      "influence": 0.04
+    },
+    "requiredTargetStatus": ["loh", "loh+pos"],
+    "dramaAllowedPhases": ["loh_results", "social_1", "nominations"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 10,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 10,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "suggest_replacement",
+    "title": "Suggest Replacement",
+    "icon": "🔄",
+    "description": "Pitch a replacement nominee to the POS holder or LOH.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 1,
+      "info": 1
+    },
+    "dramaCost": {
+      "energy": 3,
+      "influence": 1,
+      "info": 1
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "non_nominees",
+    "successWeight": 1,
+    "outcomeTag": "target",
+    "availabilityHint": "Requires LOH or POS holder",
+    "yields": {
+      "influence": 0.04
+    },
+    "requiredTargetStatus": ["loh", "loh+pos", "pos", "nominated+pos"],
+    "dramaAllowedPhases": [
+      "nomination_results",
+      "pos_comp_announcement",
+      "pos_comp",
+      "pos_results",
+      "pos_ceremony"
+    ],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 10,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 10,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_use_safety",
+    "title": "Ask to Use Safety",
+    "icon": "🛡️",
+    "description": "Ask the POS holder to use safety on a nominee.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 1
+    },
+    "dramaCost": {
+      "energy": 3,
+      "influence": 1
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "nominees",
+    "allowActorAsSubject": true,
+    "successWeight": 1,
+    "outcomeTag": "protection",
+    "realityPurposes": ["PERSUADE", "COMMITMENT"],
+    "availabilityHint": "Talk to POS about a nominee",
+    "requiredTargetStatus": ["pos", "loh+pos", "nominated+pos"],
+    "dramaAllowedPhases": [
+      "social_1",
+      "nomination_results",
+      "pos_comp_announcement",
+      "pos_comp",
+      "pos_results",
+      "pos_ceremony"
+    ],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 10,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 10,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_safety_plan",
+    "title": "Ask Safety Plan",
+    "icon": "🛡️",
+    "description": "Ask the Safety holder what they intend to do. They may be honest or stay vague.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "safety_intel",
+    "realityPurposes": ["INFORMATION"],
+    "availabilityHint": "Available while Safety is still undecided",
+    "requiredTargetStatus": ["pos", "loh+pos", "nominated+pos"],
+    "allowedPhases": ["pos_results", "pos_ceremony"],
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_hold_safety",
+    "title": "Respect Nominations",
+    "icon": "✋",
+    "description": "As LOH, ask the Safety holder not to use Safety and leave your nominations unchanged.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "safety_request",
+    "realityPurposes": ["PERSUADE", "COMMITMENT"],
+    "availabilityHint": "LOH only, before Safety is used",
+    "requiredActorStatus": ["loh", "loh+pos"],
+    "requiredTargetStatus": ["pos", "loh+pos", "nominated+pos"],
+    "allowedPhases": ["pos_results", "pos_ceremony"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 10,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 10,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "warn_about_danger",
+    "title": "Warn About Danger",
+    "icon": "⚠️",
+    "description": "Tell this hubmate the LOH named them as a target. They may appreciate it, but the LOH could find out.",
+    "category": "strategic",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 1,
+      "info": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "warning",
+    "availabilityHint": "Requires target intel from the LOH",
+    "dramaOnly": true,
+    "unavailableInVox": true,
+    "allowedPhases": [
+      "social_1",
+      "nominations",
+      "nomination_results",
+      "pre_veto_public_save",
+      "pos_comp_announcement",
+      "pos_comp",
+      "pos_results",
+      "pos_ceremony"
+    ],
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "ask_nemesis_reason",
+    "title": "Why Betray Me?",
+    "icon": "❔",
+    "description": "Privately ask why this hubmate turned against you.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "dramaCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "ask_why_nominated",
+    "title": "Ask Why You Were Nominated",
+    "icon": "❓",
+    "description": "Press the LOH for a candid explanation of why they put you at risk.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "nomination_reason",
+    "availabilityHint": "Available when you are nominated",
+    "requiredTargetStatus": ["loh", "loh+pos"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_loh_target",
+    "title": "Ask LOH Target",
+    "icon": "🗣️",
+    "description": "Ask the LOH who they currently want out, including a possible backup plan.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "availabilityHint": "Ask the current LOH about their plan",
+    "yields": {
+      "info": 1
+    },
+    "requiredTargetStatus": ["loh", "loh+pos"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 100
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_nomination_advice",
+    "title": "Ask for Nomination Advice",
+    "icon": "🗳️",
+    "description": "As LOH, ask who they would nominate. They may be candid, evasive, strategic, or offer themself as a conditional pawn.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 0,
+      "influence": 0.3
+    },
+    "dramaCost": {
+      "energy": 0,
+      "influence": 0.3
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "nomination_advice",
+    "affinityEffects": {
+      "success": 1,
+      "failure": 0
+    },
+    "yields": {
+      "info": 0.25
+    },
+    "requiredActorStatus": ["loh", "loh+pos"],
+    "allowedPhases": ["loh_results", "social_1", "nominations"],
+    "dramaAllowedPhases": ["loh_results", "social_1", "nominations"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 3,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 3,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 25
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "ask_player_opinion",
+    "title": "Ask About a Player",
+    "icon": "💬",
+    "description": "Ask a houseguest how they really feel about someone else in the Hub.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 1,
+      "influence": 0.2
+    },
+    "dramaCost": {
+      "energy": 1,
+      "influence": 0.2
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "houseguests",
+    "successWeight": 2,
+    "outcomeTag": "player_opinion",
+    "affinityEffects": {
+      "success": 1,
+      "failure": 0
+    },
+    "yields": {
+      "info": 0.5
+    },
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 2,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 2,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 50
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "warn_about_player",
+    "title": "Warn About Player",
+    "icon": "⚠️",
+    "description": "Warn an ally about a player you find suspicious.",
+    "category": "strategic",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 1,
+      "info": 1
+    },
+    "dramaCost": {
+      "energy": 2,
+      "info": 1
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "houseguests",
+    "successWeight": 2,
+    "outcomeTag": "warning",
+    "dramaRequiredRelationshipTags": ["alliance", "bromance", "romance"],
+    "yields": {
+      "influence": 0.02
+    },
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 2,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "rally_votes_against",
+    "title": "Rally Votes Against",
+    "icon": "📣",
+    "description": "Rally a voter to eliminate a specific nominee.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 2
+    },
+    "dramaCost": {
+      "energy": 3,
+      "influence": 2
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "nominees",
+    "successWeight": 1,
+    "outcomeTag": "vote_pressure",
+    "dramaRequiredTargetStatus": ["active", "pos"],
+    "availabilityHint": "Requires nominees on the block",
+    "dramaAllowedPhases": ["pos_ceremony_results", "social_2"],
+    "yields": {
+      "influence": 0.03
+    },
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 20,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 20,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 3,
+      "info": 0
+    },
+    "teamStageReview": "Individual-stage only until adapted"
+  },
+  {
+    "id": "flirt",
+    "title": "Test the Spark",
+    "icon": "💕",
+    "description": "Explore a possible romantic connection.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance_seed",
+    "yields": {
+      "influence": 0.02
+    },
+    "dramaOnly": true,
+    "minAffinity": 12,
+    "excludedArcTypes": ["romance"],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 2,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "private_flirt",
+    "title": "Flirt in Private",
+    "icon": "💋",
+    "description": "Nudge a growing spark away from the group.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["spark", "building"],
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "late_night_talk",
+    "title": "Late-Night Talk",
+    "icon": "🌙",
+    "description": "Open up when the rest of the Hub is asleep.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["spark", "building", "established"],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "cuddle",
+    "title": "Cuddle",
+    "icon": "🤗",
+    "description": "Share a close private moment under the blankets.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["established", "climax"],
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "kiss_under_covers",
+    "title": "Secret Kiss",
+    "icon": "💋",
+    "description": "Risk a kiss where another hubmate might notice.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["established", "climax"],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "pool_makeout",
+    "title": "Pool Makeout",
+    "icon": "🌊",
+    "description": "Turn the chemistry up with very little cover.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 3
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["established", "climax"],
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "spend_night",
+    "title": "Spend the Night",
+    "icon": "🛏️",
+    "description": "Choose intimacy over subtlety and accept the risk.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 4
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["climax"],
+    "normalCostOneTarget": {
+      "energy": 4,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 4,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "try_for_baby",
+    "title": "Try for a Baby",
+    "icon": "🍼",
+    "description": "Make a consensual, life-changing decision with your romantic partner.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 3
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "pregnancy_attempt",
+    "dramaOnly": true,
+    "realityExclusive": true,
+    "allowedRealityPresets": ["adult"],
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["established", "climax"],
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "pregnancy_test",
+    "title": "Ask for Pregnancy Test",
+    "icon": "🧪",
+    "description": "Ask the pregnancy carrier to take a test. The action opens the day after an attempt; early tests are inconclusive.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "pregnancy_test",
+    "dramaOnly": true,
+    "realityExclusive": true,
+    "allowedRealityPresets": ["adult"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "pregnancy_test_self",
+    "title": "Take Pregnancy Test",
+    "icon": "🧪",
+    "description": "Take your own pregnancy test. It opens the day after an attempt; early tests are inconclusive.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "none",
+    "successWeight": 1,
+    "outcomeTag": "pregnancy_test",
+    "dramaOnly": true,
+    "realityExclusive": true,
+    "allowedRealityPresets": ["adult"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "share_pregnancy_news",
+    "title": "Share Pregnancy News",
+    "icon": "🤰",
+    "description": "Tell selected hubmates privately. Their loyalty affects the chance they keep your news secret.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "multi",
+    "minTargets": 1,
+    "maxTargets": 15,
+    "dramaOnly": true,
+    "realityExclusive": true,
+    "allowedRealityPresets": ["adult"],
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "paternity_test_self",
+    "title": "Take Paternity Test",
+    "icon": "🧬",
+    "description": "Privately establish paternity after an ambiguous pregnancy becomes public.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "none",
+    "successWeight": 1,
+    "outcomeTag": "paternity_test",
+    "dramaOnly": true,
+    "realityExclusive": true,
+    "allowedRealityPresets": ["adult"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "go_public",
+    "title": "Go Public",
+    "icon": "📣",
+    "description": "Stop hiding the romance and face the strategic fallout.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 3,
+      "influence": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "romance",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["established", "climax"],
+    "requiredArcPublic": false,
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 10,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 10,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "end_romance",
+    "title": "End It",
+    "icon": "💔",
+    "description": "Break off the relationship before the game does it for you.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "ex",
+    "dramaOnly": true,
+    "requiredArcTypes": ["romance"],
+    "requiredArcStages": ["building", "established", "strained", "climax"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "break_alliance",
+    "title": "Break the Alliance",
+    "icon": "🗡️",
+    "description": "Dissolve this strategic alliance and accept the fallout it leaves behind.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "betrayal",
+    "dramaOnly": true,
+    "requiredRelationshipTags": ["alliance"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "snoop_around",
+    "title": "Snoop Around",
+    "icon": "🕵️",
+    "description": "Look for private deals, hidden chemistry, or loose receipts.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "none",
+    "needsTargets": false,
+    "successWeight": 2,
+    "yields": {
+      "info": 2
+    },
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 200
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "ride_or_die",
+    "title": "Make a Pact",
+    "icon": "🤝",
+    "description": "Turn a close friendship into a ride-or-die bond.",
+    "category": "alliance",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 3,
+      "influence": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "bromance_seed",
+    "yields": {
+      "influence": 0.04
+    },
+    "dramaOnly": true,
+    "minAffinity": 24,
+    "excludedArcTypes": ["bromance"],
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 10,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 10,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "risk_the_vibe",
+    "title": "Risk the Vibe",
+    "icon": "🎲",
+    "description": "See whether a ride-or-die friendship is becoming something more.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "romance_seed",
+    "dramaOnly": true,
+    "requiredArcTypes": ["bromance"],
+    "requiredArcStages": ["building", "established", "climax"],
+    "excludedArcTypes": ["romance"],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "break_bromance",
+    "title": "End the Ride-or-Die",
+    "icon": "✂️",
+    "description": "End this personal ride-or-die bond; it does not dissolve a separate alliance.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": {
+      "energy": 0
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "betrayal",
+    "dramaOnly": true,
+    "requiredArcTypes": ["bromance"],
+    "requiredArcStages": ["building", "established", "strained", "climax"],
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "plant_lie",
+    "title": "Plant a Lie",
+    "icon": "🐍",
+    "description": "Tell one hubmate a calculated lie about another.",
+    "category": "aggressive",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 3,
+      "info": 2
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "houseguests",
+    "successWeight": 1,
+    "outcomeTag": "rumour_source",
+    "yields": {
+      "influence": 0.05
+    },
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 200
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 200
+    },
+    "normalYields": {
+      "influence": 5,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "trade_secrets",
+    "title": "Trade Secrets",
+    "icon": "🤫",
+    "description": "Automatically exchange one fresh lead each way when available.",
+    "category": "strategic",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 2,
+      "info": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "information_bond",
+    "yields": {
+      "influence": 0.05,
+      "info": 0.5
+    },
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 5,
+      "info": 50
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "eavesdrop",
+    "title": "Eavesdrop",
+    "icon": "👂",
+    "description": "Listen for a circulating story without joining in.",
+    "category": "strategic",
+    "kind": "intel_gain",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "none",
+    "needsTargets": false,
+    "successWeight": 2,
+    "yields": {
+      "info": 2
+    },
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 200
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "expose_secret",
+    "title": "Expose a Secret",
+    "icon": "📺",
+    "description": "Take a known story public. A false claim can ruin credibility.",
+    "category": "aggressive",
+    "kind": "intel_spend",
+    "baseCost": {
+      "energy": 4,
+      "info": 3
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "exposed",
+    "yields": {
+      "influence": 0.06
+    },
+    "dramaOnly": true,
+    "requiresKnownSecret": true,
+    "allowedPhases": ["social_1", "nomination_results", "pos_ceremony_results", "social_2"],
+    "normalCostOneTarget": {
+      "energy": 4,
+      "influence": 0,
+      "info": 300
+    },
+    "normalCostThreeTargets": {
+      "energy": 4,
+      "influence": 0,
+      "info": 300
+    },
+    "normalYields": {
+      "influence": 6,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "stir_rivalry",
+    "title": "Pit Them Against",
+    "icon": "⚡",
+    "description": "Use existing tension to push two hubmates apart.",
+    "category": "aggressive",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 3,
+      "influence": 1,
+      "info": 1
+    },
+    "targetMode": "primaryPlusSubject",
+    "subjectPool": "houseguests",
+    "successWeight": 1,
+    "outcomeTag": "rivalry",
+    "yields": {
+      "influence": 0.04
+    },
+    "dramaOnly": true,
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 10,
+      "info": 100
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 10,
+      "info": 100
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "public_callout",
+    "title": "Call Them Out",
+    "icon": "🔥",
+    "description": "Turn private conflict into a public confrontation.",
+    "category": "aggressive",
+    "kind": "aggressive",
+    "baseCost": {
+      "energy": 4,
+      "influence": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "rivalry",
+    "dramaOnly": true,
+    "requiredRelationshipTags": ["rivalry", "betrayal", "target"],
+    "allowedPhases": ["nomination_results", "pos_ceremony_results", "social_2", "eviction_results"],
+    "normalCostOneTarget": {
+      "energy": 4,
+      "influence": 10,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 4,
+      "influence": 10,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "repair_bond",
+    "title": "Private Truce",
+    "icon": "🕊️",
+    "description": "De-escalate a rivalry or repair a damaged alliance.",
+    "category": "friendly",
+    "kind": "rapport",
+    "baseCost": {
+      "energy": 2
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "outcomeTag": "reconciliation",
+    "yields": {
+      "influence": 0.02
+    },
+    "dramaOnly": true,
+    "requiredRelationshipTags": ["rivalry", "betrayal", "strained"],
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 2,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  },
+  {
+    "id": "ally",
+    "title": "Form Alliance",
+    "icon": "🤝",
+    "description": "Propose a formal alliance with another player.",
+    "category": "alliance",
+    "kind": "rapport",
+    "baseCost": 3,
+    "targetMode": "primary",
+    "successWeight": 1,
+    "outcomeTag": "alliance",
+    "aiOnly": true,
+    "dramaMinAffinity": 1,
+    "dramaExcludedRelationshipTags": ["alliance"],
+    "normalCostOneTarget": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 3,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "AI shim: audit caller legality"
+  },
+  {
+    "id": "nominate",
+    "title": "Nominate Player",
+    "icon": "🎯",
+    "description": "Strategically name a target for elimination.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 1
+    },
+    "targetMode": "primary",
+    "successWeight": 2,
+    "dramaRequiredActorStatus": ["loh", "loh+pos"],
+    "dramaAllowedPhases": ["nominations"],
+    "aiOnly": true,
+    "normalCostOneTarget": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 1,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "AI shim: audit caller legality"
+  },
+  {
+    "id": "vote_rally",
+    "title": "Vote Rally",
+    "icon": "📣",
+    "description": "Rally votes using your influence. High influence required.",
+    "category": "strategic",
+    "kind": "political_spend",
+    "baseCost": {
+      "energy": 2,
+      "influence": 5
+    },
+    "targetMode": "primary",
+    "successWeight": 1,
+    "availabilityHint": "Requires 50 influence",
+    "yields": {
+      "influence": 0.04
+    },
+    "aiOnly": true,
+    "dramaRequiredTargetStatus": ["nominated", "nominated+pos"],
+    "dramaAllowedPhases": ["pos_ceremony_results", "social_2", "live_vote"],
+    "unavailableInVox": true,
+    "normalCostOneTarget": {
+      "energy": 2,
+      "influence": 50,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 2,
+      "influence": 50,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 4,
+      "info": 0
+    },
+    "teamStageReview": "AI shim: audit caller legality"
+  },
+  {
+    "id": "idle",
+    "title": "Lay Low",
+    "icon": "😴",
+    "description": "Keep to yourself and make no social move.",
+    "category": "strategic",
+    "baseCost": 0,
+    "targetMode": "none",
+    "needsTargets": false,
+    "successWeight": 1,
+    "normalCostOneTarget": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalCostThreeTargets": {
+      "energy": 0,
+      "influence": 0,
+      "info": 0
+    },
+    "normalYields": {
+      "influence": 0,
+      "info": 0
+    },
+    "teamStageReview": "Requires tribe target validation"
+  }
+]

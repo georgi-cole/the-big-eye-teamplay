@@ -28,7 +28,7 @@ interface WeatherHistoryDocument {
   days: Record<string, WeatherDayState>
 }
 
-const HISTORY_PREFIX = 'bbmobilenew_weather_history_v2:'
+const HISTORY_PREFIX = 'the-big-eye-teamplay_weather_history_v2:'
 const WET_FOR_RAINBOW = new Set<WeatherConditionId>([
   'drizzle',
   'light_showers',

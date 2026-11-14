@@ -10,12 +10,12 @@ import {
 
 const PROFILE_ID = 'e2e-reward-profile'
 const PROFILE_NAME = 'Reward Journey Player'
-const FIXTURE_SENTINEL_KEY = 'bbmobilenew:e2e:reward-fixture'
-const PROFILES_STORAGE_KEY = 'bbmobilenew:profiles:v1'
-const SETTINGS_STORAGE_KEY = 'bbmobilenew_settings_v1'
-const ADS_STORAGE_KEY = 'bbmobilenew_ads_v1'
-const SAVED_RUNS_KEY = `bbmobilenew:savedRuns:${encodeURIComponent(PROFILE_ID)}`
-const CLASSIC_RUN_KEY = `bbmobilenew:savedRunSlot:${encodeURIComponent(PROFILE_ID)}:classic`
+const FIXTURE_SENTINEL_KEY = 'the-big-eye-teamplay:e2e:reward-fixture'
+const PROFILES_STORAGE_KEY = 'the-big-eye-teamplay:profiles:v1'
+const SETTINGS_STORAGE_KEY = 'the-big-eye-teamplay_settings_v1'
+const ADS_STORAGE_KEY = 'the-big-eye-teamplay_ads_v1'
+const SAVED_RUNS_KEY = `the-big-eye-teamplay:savedRuns:${encodeURIComponent(PROFILE_ID)}`
+const CLASSIC_RUN_KEY = `the-big-eye-teamplay:savedRunSlot:${encodeURIComponent(PROFILE_ID)}:classic`
 const SCREEN_TIMEOUT_MS = 30_000
 
 type RewardBridgeWindow = Window & {

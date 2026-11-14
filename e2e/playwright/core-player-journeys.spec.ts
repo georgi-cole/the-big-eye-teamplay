@@ -20,10 +20,10 @@ const SCREEN_TIMEOUT_MS = 30_000
 const COMPLETE_WEEK_TIMEOUT_MS = 240_000
 // External persistence contracts. Keep these literal in Playwright so discovery
 // does not import the browser-only Redux/game module graph into Node.
-const SAVED_RUNS_KEY_PREFIX = 'bbmobilenew:savedRuns:'
-const SAVED_RUN_SLOT_KEY_PREFIX = 'bbmobilenew:savedRunSlot:'
-const SAVED_STATE_KEY_PREFIX = 'bbmobilenew:savedSeason:'
-const CORRUPT_SAVE_RECOVERY_KEY = 'bbmobilenew:recovery:lastCorruptSave'
+const SAVED_RUNS_KEY_PREFIX = 'the-big-eye-teamplay:savedRuns:'
+const SAVED_RUN_SLOT_KEY_PREFIX = 'the-big-eye-teamplay:savedRunSlot:'
+const SAVED_STATE_KEY_PREFIX = 'the-big-eye-teamplay:savedSeason:'
+const CORRUPT_SAVE_RECOVERY_KEY = 'the-big-eye-teamplay:recovery:lastCorruptSave'
 
 async function waitForHome(page: Page): Promise<void> {
   const mainMenu = page.getByRole('navigation', { name: 'Main menu' })
@@ -71,7 +71,7 @@ async function createProfileFromHome(page: Page, playerName: string): Promise<vo
     .toEqual({ activeName: playerName, isGuest: false })
   const activeProfileId = (await readAppState(page)).profiles.activeProfileId
   await page.evaluate((profileId) => {
-    localStorage.setItem(`bbmobilenew_season_tutorial_v1:${profileId}`, 'done')
+    localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${profileId}`, 'done')
   }, activeProfileId)
   await page.getByRole('button', { name: 'Go back' }).click()
   await waitForHome(page)
@@ -942,7 +942,9 @@ test.describe('Real player core journeys', () => {
     await savedDialog.getByRole('button', { name: 'OK' }).click()
     await saveAndReturnHome(page)
 
-    const profilesRaw = await page.evaluate(() => localStorage.getItem('bbmobilenew:profiles:v1'))
+    const profilesRaw = await page.evaluate(() =>
+      localStorage.getItem('the-big-eye-teamplay:profiles:v1')
+    )
     if (!profilesRaw) throw new Error('active profiles record is missing')
     const profiles = JSON.parse(profilesRaw) as { activeProfileId?: string | null }
     const profileId = profiles.activeProfileId

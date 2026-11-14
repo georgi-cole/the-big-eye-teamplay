@@ -4,9 +4,9 @@ import { getPlayerSafety } from '../../safety/playerSafety'
 import { getBackendConfig, isPlayerSignInConfigured, isPlayerSignInPreview } from './config'
 import { getBackendClient, withBackendAuthLock } from './supabaseTransport'
 
-export const NATIVE_PLAYER_SIGN_IN_REDIRECT = 'com.georgicole.thebigeye://player-sign-in'
+export const NATIVE_PLAYER_SIGN_IN_REDIRECT = 'com.georgicole.thebigeyeteamplay://player-sign-in'
 const PURPOSE = 'player_account'
-const ATTEMPT_KEY = 'bbmobilenew:player-sign-in-attempt:v1'
+const ATTEMPT_KEY = 'the-big-eye-teamplay:player-sign-in-attempt:v1'
 const ATTEMPT_LIFETIME = 15 * 60 * 1000
 const RETURN_PARAM = 'player_sign_in'
 

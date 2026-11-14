@@ -2,7 +2,7 @@ import type { StoreEntitlementKey } from './vipConfig'
 import { getSeasonLaunchIntent } from '../modes/seasonLaunchIntent'
 import { hasEffectiveStoreEntitlement, isEffectiveVipActive } from './effectiveEntitlements'
 
-const VIP_STORAGE_KEY = 'bbmobilenew:vip:v2'
+const VIP_STORAGE_KEY = 'the-big-eye-teamplay:vip:v2'
 
 export interface StoreEntitlements {
   survivalMode: boolean

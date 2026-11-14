@@ -1,7 +1,7 @@
 {
-  "name": "The Big Eye",
-  "short_name": "The Big Eye",
-  "description": "The Big Eye mobile companion app",
+  "name": "The Big Eye Teamplay",
+  "short_name": "Teamplay",
+  "description": "The Big Eye Teamplay development baseline",
   "start_url": ".",
   "display": "standalone",
   "orientation": "portrait",
@@ -13,5 +13,6 @@
       "sizes": "any",
       "type": "image/svg+xml"
     }
-  ]
+  ],
+  "id": "./"
 }

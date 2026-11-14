@@ -5,7 +5,7 @@ import {
   setDurableItem,
 } from '../store/durablePersistence'
 
-export const SURVIVAL_RUN_LEDGER_KEY = 'bbmobilenew:survival-run-purchases:v1'
+export const SURVIVAL_RUN_LEDGER_KEY = 'the-big-eye-teamplay:survival-run-purchases:v1'
 
 export interface SurvivalRunPurchaseRecord {
   platform: 'android' | 'ios'

@@ -1,5 +1,10 @@
 import type { Transaction } from '@capgo/native-purchases'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../config/appIdentity', async (original) => ({
+  ...(await original<typeof import('../config/appIdentity')>()),
+  NATIVE_BILLING_ENABLED: true,
+}))
 import { isOwnedStoreTransaction } from './vipPurchaseService'
 import { VIP_UPGRADE_TIERS } from './vipUpgrade'
 
@@ -101,7 +106,7 @@ describe('permanent purchases with manual native finishing', () => {
         entitlements: { noAds: true },
         lastVerifiedAt: '2026-11-10T00:00:00.000Z',
       }
-      localStorage.setItem('bbmobilenew:vip:v2', JSON.stringify(cache))
+      localStorage.setItem('the-big-eye-teamplay:vip:v2', JSON.stringify(cache))
       try {
         const { loadVipStoreSnapshot } = await import('./vipPurchaseService')
         const result = await loadVipStoreSnapshot({ restore: true })
@@ -116,14 +121,14 @@ describe('permanent purchases with manual native finishing', () => {
         expect(native.restorePurchases).not.toHaveBeenCalled()
       } finally {
         online.mockRestore()
-        localStorage.removeItem('bbmobilenew:vip:v2')
+        localStorage.removeItem('the-big-eye-teamplay:vip:v2')
       }
     }
   )
 
   it('preserves cached VIP when billing is unavailable, but reconciles an online empty ownership result', async () => {
     localStorage.setItem(
-      'bbmobilenew:vip:v2',
+      'the-big-eye-teamplay:vip:v2',
       JSON.stringify({
         isActive: true,
         entitlements: {},
@@ -136,7 +141,7 @@ describe('permanent purchases with manual native finishing', () => {
       expect((await loadVipStoreSnapshot()).isActive).toBe(true)
       expect((await loadVipStoreSnapshot()).isActive).toBe(false)
     } finally {
-      localStorage.removeItem('bbmobilenew:vip:v2')
+      localStorage.removeItem('the-big-eye-teamplay:vip:v2')
     }
   })
 

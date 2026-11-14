@@ -5,11 +5,11 @@ import { isCurrentAlliance } from '../../social/reality/allianceIdentity'
  * DiaryRoom — private player confessional / game log screen.
  *
  * Privacy guarantee: verbatim messages exchanged in the Confess tab are stored
- * only in sessionStorage (key: `bb_dr_chat_<playerId>`) and are never dispatched to the
+ * only in sessionStorage (key: `the-big-eye-teamplay_dr_chat_<playerId>`) and are never dispatched to the
  * global tvFeed.  A single generic summary event is emitted to the tvFeed once
  * when the component unmounts after at least one message was sent — the summary
  * does NOT contain any private content.  The summary flag is persisted in
- * sessionStorage (key: `bb_dr_summary_emitted_<playerId>`) so it survives
+ * sessionStorage (key: `the-big-eye-teamplay_dr_summary_emitted_<playerId>`) so it survives
  * tab navigations within the same session. A compact AI-authored memory ledger
  * is kept locally per game so The Big Eye can maintain continuity across visits;
  * it never contains the full transcript and is never shown on the TV feed.
@@ -251,11 +251,11 @@ const REWARD_REVEAL_COPY: Partial<
 // ─── sessionStorage helpers ───────────────────────────────────────────────────
 
 function chatKey(playerId: string): string {
-  return `bb_dr_chat_${playerId}`
+  return `the-big-eye-teamplay_dr_chat_${playerId}`
 }
 
 function summaryKey(playerId: string): string {
-  return `bb_dr_summary_emitted_${playerId}`
+  return `the-big-eye-teamplay_dr_summary_emitted_${playerId}`
 }
 
 function conversationStateKey(gameId: string, playerId: string): string {
@@ -267,7 +267,7 @@ function worldSnapshotKey(gameId: string, playerId: string): string {
 }
 
 function visitCountKey(playerId: string): string {
-  return `bb_dr_visit_count_${playerId}`
+  return `the-big-eye-teamplay_dr_visit_count_${playerId}`
 }
 
 function memoryKey(gameId: string, playerId: string): string {

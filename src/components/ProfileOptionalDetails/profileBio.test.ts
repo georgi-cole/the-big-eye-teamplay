@@ -8,7 +8,7 @@ import profilesReducer, {
 } from '../../store/profilesSlice'
 import { normalizeProfileBio } from './profileBio'
 
-afterEach(() => localStorage.removeItem('bbmobilenew:profiles:v1'))
+afterEach(() => localStorage.removeItem('the-big-eye-teamplay:profiles:v1'))
 
 describe('optional profile biography persistence', () => {
   it('persists all creation categories and exposes the reproductive settings to new seasons', () => {

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Exercise the retained Classic subsystem independently of the disabled product boundary.
+vi.mock('../config/appIdentity', async (original) => ({
+  ...(await original<typeof import('../config/appIdentity')>()),
+  NATIVE_BILLING_ENABLED: true,
+}))
+
 const platform = vi.hoisted(() => ({ current: 'android' }))
 vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => platform.current } }))
 

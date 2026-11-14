@@ -1,4 +1,4 @@
-package com.georgicole.thebigeye;
+package com.georgicole.thebigeyeteamplay;
 
 import android.content.ComponentName;
 import android.content.SharedPreferences;

@@ -1,6 +1,6 @@
 import type { Phase } from '../types'
 
-const STORAGE_KEY = 'bb_eviction_vote_breakdown_v1'
+const STORAGE_KEY = 'the-big-eye-teamplay_eviction_vote_breakdown_v1'
 
 export type EvictionVoteBreakdownStatus = 'available' | 'revealed' | 'declined'
 

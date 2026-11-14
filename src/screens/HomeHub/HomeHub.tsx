@@ -85,6 +85,7 @@ import {
 } from '../../store/vipSlice'
 import { selectDebugExpansionUnlocks } from '../../store/uiSlice'
 import './HomeHub.css'
+import { isBaselineClassicRun } from '../../config/appIdentity'
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
 
@@ -152,6 +153,7 @@ interface PlaySelectionButton {
 }
 
 interface HomeHubAssetLayerProps {
+  classicOnly?: boolean
   splashDone: boolean
   menuVisible: boolean
   backgroundReady: boolean
@@ -165,6 +167,7 @@ interface HomeHubAssetLayerProps {
 }
 
 function HomeHubAssetLayer({
+  classicOnly = false,
   splashDone,
   menuVisible,
   backgroundReady,
@@ -196,7 +199,14 @@ function HomeHubAssetLayer({
   return (
     <>
       <div className="homehub-content home-hub">
-        <div className="home-hub__hero" aria-hidden="true" />
+        <div className="home-hub__hero">
+          {classicOnly && (
+            <>
+              <h1 className="home-hub__title">The Big Eye Teamplay</h1>
+              <p className="homehub-footer">Development baseline · Classic engine</p>
+            </>
+          )}
+        </div>
         {menuVisible && (
           <nav
             className="home-hub__buttons"
@@ -218,39 +228,41 @@ function HomeHubAssetLayer({
               )
             ) : (
               <>
-                {HUB_BUTTONS.map(({ to, label, icon, variant }) => (
-                  <GameButton
-                    key={to}
-                    label={label}
-                    icon={icon ? <HomeHubButtonIcon name={icon} /> : undefined}
-                    variant={variant}
-                    holidayTheme={to === '/game' ? holidayTheme : null}
-                    onClick={
-                      to === '/game'
-                        ? onPlay
-                        : to === '/housemates'
-                          ? onOpenHousemates
-                          : to === '/credits'
-                            ? () => {
-                                SoundManager.unlockFromGesture()
-                                void startCreditsSoundtrackFromGesture().catch(() => {
-                                  // The muted video still starts immediately if a browser rejects
-                                  // soundtrack playback during route navigation.
-                                })
-                                onNavigate(to)
-                              }
-                            : to === '/store'
-                              ? () => onNavigate(to, { state: { returnTo: '/' } })
-                              : () =>
-                                  onNavigate(
-                                    to,
-                                    to === '/profile/account'
-                                      ? { state: { entryFrom: '/' } }
-                                      : undefined
-                                  )
-                    }
-                  />
-                ))}
+                {HUB_BUTTONS.filter(({ to }) => !classicOnly || to !== '/store').map(
+                  ({ to, label, icon, variant }) => (
+                    <GameButton
+                      key={to}
+                      label={label}
+                      icon={icon ? <HomeHubButtonIcon name={icon} /> : undefined}
+                      variant={variant}
+                      holidayTheme={to === '/game' ? holidayTheme : null}
+                      onClick={
+                        to === '/game'
+                          ? onPlay
+                          : to === '/housemates'
+                            ? onOpenHousemates
+                            : to === '/credits'
+                              ? () => {
+                                  SoundManager.unlockFromGesture()
+                                  void startCreditsSoundtrackFromGesture().catch(() => {
+                                    // The muted video still starts immediately if a browser rejects
+                                    // soundtrack playback during route navigation.
+                                  })
+                                  onNavigate(to)
+                                }
+                              : to === '/store'
+                                ? () => onNavigate(to, { state: { returnTo: '/' } })
+                                : () =>
+                                    onNavigate(
+                                      to,
+                                      to === '/profile/account'
+                                        ? { state: { entryFrom: '/' } }
+                                        : undefined
+                                    )
+                      }
+                    />
+                  )
+                )}
               </>
             )}
           </nav>
@@ -260,7 +272,7 @@ function HomeHubAssetLayer({
   )
 }
 
-export default function HomeHub() {
+export default function HomeHub({ classicOnly = false }: { classicOnly?: boolean }) {
   const location = useLocation()
   const routeState = location.state as {
     autoStartGame?: boolean
@@ -558,6 +570,10 @@ export default function HomeHub() {
   }, [navigate, splashDone])
 
   function hydrateSnapshot(snapshot: SavedSeasonSnapshot) {
+    if (classicOnly && !isBaselineClassicRun(snapshot.game)) {
+      setPlaySelectionOpen(true)
+      return
+    }
     if (isSurvivorRunTerminal(snapshot.game)) {
       setSurvivorPrompt('ended')
       setPlaySelectionOpen(true)
@@ -587,6 +603,7 @@ export default function HomeHub() {
   }
 
   function startSeasonRun(ruleset: SeasonRuleset) {
+    if (classicOnly && ruleset !== 'classic') return
     SoundManager.unlockFromGesture()
 
     if (ruleset === 'cupidArrow' && !cupidArrowAvailable) {
@@ -829,6 +846,20 @@ export default function HomeHub() {
     setPlaySelectionOpen(true)
   }
 
+  const visiblePlaySelectionButtons = classicOnly
+    ? playSelectionButtons
+        .filter(({ key }) => ['classic', 'continue-last', 'active-season', 'back'].includes(key))
+        .filter(
+          ({ key }) =>
+            key !== 'continue-last' ||
+            (lastSnapshot != null && isBaselineClassicRun(lastSnapshot.game))
+        )
+        .filter(({ key }) => key !== 'active-season' || activeSeason?.ruleset === 'classic')
+        .map((button) =>
+          button.key === 'classic' ? { ...button, label: 'Play Classic baseline' } : button
+        )
+    : playSelectionButtons
+
   const handleHubAssetStateChange = useCallback((nextState: HubAssetState) => {
     setHubAssetState((current) => {
       if (
@@ -983,7 +1014,8 @@ export default function HomeHub() {
             backgroundReady={backgroundLayers.ready}
             holidayTheme={playButtonHolidayTheme}
             playSelectionOpen={playSelectionOpen}
-            playSelectionButtons={playSelectionButtons}
+            classicOnly={classicOnly}
+            playSelectionButtons={visiblePlaySelectionButtons}
             onPlay={handlePlay}
             onOpenHousemates={() => {
               SoundManager.unlockFromGesture()

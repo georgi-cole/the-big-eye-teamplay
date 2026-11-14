@@ -41,12 +41,12 @@ import {
   setDurablePersistenceFlushListener,
 } from './durablePersistence'
 
-export const SAVED_STATE_KEY_PREFIX = 'bbmobilenew:savedSeason:'
-export const SAVED_RUNS_KEY_PREFIX = 'bbmobilenew:savedRuns:'
-export const SAVED_RUN_SLOT_KEY_PREFIX = 'bbmobilenew:savedRunSlot:'
-export const SAVE_PERSISTENCE_ISSUE_EVENT = 'bb:save-persistence-issue'
-export const CORRUPT_SAVE_RECOVERY_KEY = 'bbmobilenew:recovery:lastCorruptSave'
-export const ALLIANCE_MIGRATION_RECOVERY_PREFIX = 'bbmobilenew:allianceRecovery:'
+export const SAVED_STATE_KEY_PREFIX = 'the-big-eye-teamplay:savedSeason:'
+export const SAVED_RUNS_KEY_PREFIX = 'the-big-eye-teamplay:savedRuns:'
+export const SAVED_RUN_SLOT_KEY_PREFIX = 'the-big-eye-teamplay:savedRunSlot:'
+export const SAVE_PERSISTENCE_ISSUE_EVENT = 'the-big-eye-teamplay:save-persistence-issue'
+export const CORRUPT_SAVE_RECOVERY_KEY = 'the-big-eye-teamplay:recovery:lastCorruptSave'
+export const ALLIANCE_MIGRATION_RECOVERY_PREFIX = 'the-big-eye-teamplay:allianceRecovery:'
 export const SAVE_SNAPSHOT_WARNING_BYTES = 1_500_000
 
 export type SaveFailureReason =

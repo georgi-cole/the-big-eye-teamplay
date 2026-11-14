@@ -1,7 +1,7 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 
 const CHUNK_RECOVERY_QUERY = 'bbmobile-recovery'
-const CHUNK_RECOVERY_STORAGE_KEY = 'bbmobilenew:chunk-recovery'
+const CHUNK_RECOVERY_STORAGE_KEY = 'the-big-eye-teamplay:chunk-recovery'
 const RECOVERY_STATE_VERSION = 1
 const RECOVERY_WINDOW_MS = 2 * 60_000
 const MAX_RECOVERY_ATTEMPTS = 2

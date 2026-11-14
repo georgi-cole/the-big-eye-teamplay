@@ -10,7 +10,7 @@ import {
 } from './support/test'
 
 const APP_URL = 'http://127.0.0.1:4173/bbmobilenew/'
-const SAVED_RUN_SLOT_KEY_PREFIX = 'bbmobilenew:savedRunSlot:'
+const SAVED_RUN_SLOT_KEY_PREFIX = 'the-big-eye-teamplay:savedRunSlot:'
 const SCREEN_TIMEOUT_MS = 30_000
 
 async function waitForHome(page: Page): Promise<void> {
@@ -61,7 +61,7 @@ async function createProfile(page: Page, name: string): Promise<string> {
   const profileId = (await readAppState(page)).profiles.activeProfileId
   if (profileId == null) throw new Error('The competition test profile was not created.')
   await page.evaluate(
-    (id) => localStorage.setItem(`bbmobilenew_season_tutorial_v1:${id}`, 'done'),
+    (id) => localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${id}`, 'done'),
     profileId
   )
   await page.getByRole('button', { name: 'Go back' }).click()

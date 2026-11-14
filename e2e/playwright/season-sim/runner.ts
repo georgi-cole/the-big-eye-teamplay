@@ -230,7 +230,8 @@ async function createFreshProfile(page: Page, name: string): Promise<void> {
   const activeProfileId = (await readAppState(page)).profiles.activeProfileId
   if (activeProfileId) {
     await page.evaluate(
-      (profileId) => localStorage.setItem(`bbmobilenew_season_tutorial_v1:${profileId}`, 'done'),
+      (profileId) =>
+        localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${profileId}`, 'done'),
       activeProfileId
     )
   }

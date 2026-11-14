@@ -300,7 +300,7 @@ describe('guest mode', () => {
 })
 
 describe('loadProfilesState / saveProfilesState', () => {
-  const STORAGE_KEY = 'bbmobilenew:profiles:v1'
+  const STORAGE_KEY = 'the-big-eye-teamplay:profiles:v1'
 
   beforeEach(() => {
     localStorage.removeItem(STORAGE_KEY)
@@ -394,8 +394,8 @@ describe('loadProfilesState / saveProfilesState', () => {
 })
 
 describe('loadActiveProfile', () => {
-  const PROFILES_KEY = 'bbmobilenew:profiles:v1'
-  const LEGACY_KEY = 'bbmobilenew_user_profile_v1'
+  const PROFILES_KEY = 'the-big-eye-teamplay:profiles:v1'
+  const LEGACY_KEY = 'the-big-eye-teamplay_user_profile_v1'
 
   beforeEach(() => {
     localStorage.removeItem(PROFILES_KEY)
@@ -434,15 +434,15 @@ describe('loadActiveProfile', () => {
 
 describe('archiveKeyForProfile', () => {
   it('returns a key with the encoded profile ID', () => {
-    expect(archiveKeyForProfile('p42')).toBe('bbmobilenew:seasonArchives:p42')
+    expect(archiveKeyForProfile('p42')).toBe('the-big-eye-teamplay:seasonArchives:p42')
   })
 
   it('encodes special characters in profile ID', () => {
-    expect(archiveKeyForProfile('a:b')).toBe('bbmobilenew:seasonArchives:a%3Ab')
+    expect(archiveKeyForProfile('a:b')).toBe('the-big-eye-teamplay:seasonArchives:a%3Ab')
   })
 
   it('produces the same key as archiveKeyForActiveProfile when the profile is active', () => {
-    const PROFILES_KEY = 'bbmobilenew:profiles:v1'
+    const PROFILES_KEY = 'the-big-eye-teamplay:profiles:v1'
     const state: ProfilesState = {
       profiles: [{ id: 'p99', name: 'Test', avatar: '🧑', createdAt: '2025-01-01T00:00:00Z' }],
       activeProfileId: 'p99',
@@ -455,7 +455,7 @@ describe('archiveKeyForProfile', () => {
 })
 
 describe('archiveKeyForActiveProfile', () => {
-  const PROFILES_KEY = 'bbmobilenew:profiles:v1'
+  const PROFILES_KEY = 'the-big-eye-teamplay:profiles:v1'
 
   beforeEach(() => {
     localStorage.removeItem(PROFILES_KEY)
@@ -472,7 +472,7 @@ describe('archiveKeyForActiveProfile', () => {
       isGuest: false,
     }
     saveProfilesState(state)
-    expect(archiveKeyForActiveProfile()).toBe('bbmobilenew:seasonArchives:p42')
+    expect(archiveKeyForActiveProfile()).toBe('the-big-eye-teamplay:seasonArchives:p42')
   })
 
   it('returns global fallback key in guest mode', () => {
@@ -482,10 +482,10 @@ describe('archiveKeyForActiveProfile', () => {
       isGuest: true,
     }
     saveProfilesState(state)
-    expect(archiveKeyForActiveProfile()).toBe('bbmobilenew:seasonArchives')
+    expect(archiveKeyForActiveProfile()).toBe('the-big-eye-teamplay:seasonArchives')
   })
 
   it('returns global fallback key when no profile is set', () => {
-    expect(archiveKeyForActiveProfile()).toBe('bbmobilenew:seasonArchives')
+    expect(archiveKeyForActiveProfile()).toBe('the-big-eye-teamplay:seasonArchives')
   })
 })

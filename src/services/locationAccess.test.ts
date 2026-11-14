@@ -77,8 +77,8 @@ describe('weather location access', () => {
     expect(result.coordinates).toEqual(coordinates)
     expect(result.permissionStatus).toBe('granted')
     expect(getCurrentPosition).toHaveBeenCalledOnce()
-    expect(localStorage.getItem('bb:locationPermissionRequested')).toBe('true')
-    expect(localStorage.getItem('bb:allowLocation')).toBe('granted')
+    expect(localStorage.getItem('the-big-eye-teamplay:locationPermissionRequested')).toBe('true')
+    expect(localStorage.getItem('the-big-eye-teamplay:allowLocation')).toBe('granted')
     expect(shouldShowWeatherPermissionRationale()).toBe(false)
   })
 
@@ -98,17 +98,17 @@ describe('weather location access', () => {
     expect(shouldShowWeatherPermissionRationale()).toBe(true)
     deferWeatherPermissionRationale()
     expect(shouldShowWeatherPermissionRationale()).toBe(false)
-    expect(localStorage.getItem('bb:allowLocation')).toBeNull()
+    expect(localStorage.getItem('the-big-eye-teamplay:allowLocation')).toBeNull()
 
     vi.setSystemTime(now + 24 * 60 * 60 * 1000 + 1)
     expect(shouldShowWeatherPermissionRationale()).toBe(true)
-    expect(localStorage.getItem('bb:locationRationaleDeferredAt')).toBeNull()
+    expect(localStorage.getItem('the-big-eye-teamplay:locationRationaleDeferredAt')).toBeNull()
   })
 
   it('automatically recovers an old interrupted attempt instead of treating it as a lifetime block', async () => {
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:locationPermissionRequested', 'true')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
     expect(getCurrentPosition).toHaveBeenCalledOnce()
@@ -117,8 +117,8 @@ describe('weather location access', () => {
   it('automatically renews an expired one-time grant and keeps granted refreshes working', async () => {
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
-    localStorage.setItem('bb:locationPermissionRequested', 'true')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
 
     expect(shouldShowWeatherPermissionRationale()).toBe(false)
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
@@ -135,7 +135,7 @@ describe('weather location access', () => {
   it('renews a later one-time expiry when coordinates were the only confirmation of the prior grant', async () => {
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
 
@@ -147,7 +147,7 @@ describe('weather location access', () => {
   it('does not reopen a dismissed prompt on every foreground event in the same app session', async () => {
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
     getCurrentPosition.mockImplementationOnce(
       (_success: PositionCallback, error: PositionErrorCallback) => {
         error({ code: 1, message: 'Location prompt dismissed' } as GeolocationPositionError)
@@ -165,11 +165,12 @@ describe('weather location access', () => {
     async (requested) => {
       setBrowserPermission('granted')
       const getCurrentPosition = setBrowserGeolocation()
-      localStorage.setItem('bb:allowLocation', 'denied')
-      if (requested) localStorage.setItem('bb:locationPermissionRequested', 'true')
+      localStorage.setItem('the-big-eye-teamplay:allowLocation', 'denied')
+      if (requested)
+        localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
 
       expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
-      expect(localStorage.getItem('bb:allowLocation')).toBe('granted')
+      expect(localStorage.getItem('the-big-eye-teamplay:allowLocation')).toBe('granted')
       expect(getCurrentPosition).toHaveBeenCalledOnce()
     }
   )
@@ -180,7 +181,7 @@ describe('weather location access', () => {
       location: 'prompt',
       coarseLocation: 'prompt',
     })
-    localStorage.setItem('bb:locationPermissionRequested', 'true')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
 
     expect(shouldShowWeatherPermissionRationale()).toBe(true)
     expect((await getWeatherLocation(100)).coordinates).toBeNull()
@@ -191,7 +192,7 @@ describe('weather location access', () => {
   it('does not turn an old remembered decline into a new prompt without a live grant', async () => {
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'denied')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'denied')
 
     expect((await getWeatherLocation(100)).coordinates).toBeNull()
     expect(getCurrentPosition).not.toHaveBeenCalled()
@@ -200,17 +201,17 @@ describe('weather location access', () => {
   it('respects a current browser denial and automatically recovers after permission changes', async () => {
     setBrowserPermission('denied')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
 
     expect((await getWeatherLocation(100)).permissionStatus).toBe('denied')
     expect((await getWeatherLocation(100, true)).permissionStatus).toBe('denied')
     expect(getCurrentPosition).not.toHaveBeenCalled()
-    expect(localStorage.getItem('bb:locationPermissionDenied')).toBe('true')
+    expect(localStorage.getItem('the-big-eye-teamplay:locationPermissionDenied')).toBe('true')
 
     setBrowserPermission('granted')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
-    expect(localStorage.getItem('bb:locationPermissionDenied')).toBe('false')
+    expect(localStorage.getItem('the-big-eye-teamplay:locationPermissionDenied')).toBe('false')
     expect(getCurrentPosition).toHaveBeenCalledOnce()
   })
 
@@ -219,7 +220,7 @@ describe('weather location access', () => {
     const startedAt = Date.now()
     setBrowserPermission('prompt')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:locationPermissionRequested', 'true')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionRequested', 'true')
     getCurrentPosition.mockImplementationOnce(
       (_success: PositionCallback, error: PositionErrorCallback) => {
         error({ code: 3, message: 'Position timed out' } as GeolocationPositionError)
@@ -230,7 +231,7 @@ describe('weather location access', () => {
 
     expect(firstResult.coordinates).toBeNull()
     expect(firstResult.error).toBe('Position timed out')
-    expect(localStorage.getItem('bb:allowLocation')).toBeNull()
+    expect(localStorage.getItem('the-big-eye-teamplay:allowLocation')).toBeNull()
     expect((await getWeatherLocation(100)).coordinates).toBeNull()
 
     vi.resetModules()
@@ -242,24 +243,24 @@ describe('weather location access', () => {
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
     expect(getCurrentPosition).toHaveBeenCalledTimes(2)
-    expect(localStorage.getItem('bb:locationPermissionFailedAt')).toBeNull()
+    expect(localStorage.getItem('the-big-eye-teamplay:locationPermissionFailedAt')).toBeNull()
   })
 
   it('does not let a retry cooldown suppress an actual permission grant', async () => {
     setBrowserPermission('granted')
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:locationPermissionFailedAt', String(Date.now()))
-    localStorage.setItem('bb:locationPermissionDenied', 'true')
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionFailedAt', String(Date.now()))
+    localStorage.setItem('the-big-eye-teamplay:locationPermissionDenied', 'true')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
     expect(getCurrentPosition).toHaveBeenCalledOnce()
-    expect(localStorage.getItem('bb:locationPermissionFailedAt')).toBeNull()
+    expect(localStorage.getItem('the-big-eye-teamplay:locationPermissionFailedAt')).toBeNull()
   })
 
   it('continues using a successful grant when the Permissions API is unavailable', async () => {
     Object.defineProperty(navigator, 'permissions', { configurable: true, value: undefined })
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
@@ -269,7 +270,7 @@ describe('weather location access', () => {
   it('stops repeated prompt attempts after a denial without a Permissions API', async () => {
     Object.defineProperty(navigator, 'permissions', { configurable: true, value: undefined })
     const getCurrentPosition = setBrowserGeolocation()
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
     getCurrentPosition.mockImplementationOnce(
       (_success: PositionCallback, error: PositionErrorCallback) => {
         error({ code: 1, message: 'Location denied' } as GeolocationPositionError)
@@ -324,7 +325,7 @@ describe('weather location access', () => {
       })
       locationMocks.getCurrentPosition.mockResolvedValue({ coords: coordinates })
       const browserPosition = setBrowserGeolocation()
-      if (priorGrant) localStorage.setItem('bb:allowLocation', 'granted')
+      if (priorGrant) localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
 
       expect((await getWeatherLocation(100, !priorGrant)).coordinates).toEqual(coordinates)
       expect(locationMocks.requestPermissions).toHaveBeenCalledWith({
@@ -342,7 +343,7 @@ describe('weather location access', () => {
       coarseLocation: 'prompt',
     })
     locationMocks.getCurrentPosition.mockResolvedValue({ coords: coordinates })
-    localStorage.setItem('bb:allowLocation', 'denied')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'denied')
 
     expect((await getWeatherLocation(100)).coordinates).toEqual(coordinates)
     expect(locationMocks.requestPermissions).not.toHaveBeenCalled()
@@ -354,7 +355,7 @@ describe('weather location access', () => {
       location: 'denied',
       coarseLocation: 'denied',
     })
-    localStorage.setItem('bb:allowLocation', 'granted')
+    localStorage.setItem('the-big-eye-teamplay:allowLocation', 'granted')
 
     expect((await getWeatherLocation(100)).permissionStatus).toBe('denied')
     expect((await getWeatherLocation(100, true)).permissionStatus).toBe('denied')

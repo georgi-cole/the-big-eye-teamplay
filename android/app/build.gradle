@@ -34,10 +34,10 @@ if (automaticVersionCode && (!automaticVersionCode.isInteger() ||
 }
 
 android {
-    namespace = "com.georgicole.thebigeye"
+    namespace = "com.georgicole.thebigeyeteamplay"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.georgicole.thebigeye"
+        applicationId "com.georgicole.thebigeyeteamplay"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode (automaticVersionCode ? automaticVersionCode.toInteger() : 8)

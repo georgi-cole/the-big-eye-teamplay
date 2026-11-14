@@ -22,6 +22,7 @@ import type {
 } from './remoteConfigTypes'
 import type { CompSelectionMode } from '../components/compSelectionUtils'
 import { apiUrl } from '../utils/apiBase'
+import { EXTERNAL_SERVICES_ENABLED } from '../config/appIdentity'
 import { sanitiseSocialRuntimeOverride } from '../social/socialRuntimeConfig'
 import {
   sanitiseMusicConfigOverrides,
@@ -36,7 +37,7 @@ import { sanitiseRemoteConfessionalConfig } from '../bb/confessionalRuntimeConfi
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const REMOTE_CONFIG_STORAGE_KEY = 'bbmobilenew_remote_config_v1'
+export const REMOTE_CONFIG_STORAGE_KEY = 'the-big-eye-teamplay_remote_config_v1'
 export const GITHUB_PAGES_REMOTE_CONFIG_URL =
   'https://georgi-cole.github.io/bbmobilenew/config/live-config.json'
 
@@ -586,6 +587,7 @@ export function saveCachedRemoteConfig(config: RemoteConfig): void {
  *  4. If no cache exists, return null (callers use built-in defaults).
  */
 export async function fetchRemoteConfig(): Promise<RemoteConfig | null> {
+  if (!EXTERNAL_SERVICES_ENABLED) return null
   const url = DEFAULT_REMOTE_CONFIG_URL.trim()
   if (!shouldFetchRemoteConfig(url)) {
     return loadCachedRemoteConfig()

@@ -23,7 +23,7 @@ import {
   type GameManagerConfig,
 } from '../gameManager/gameManager'
 
-export const STORAGE_KEY = 'bbmobilenew_settings_v1'
+export const STORAGE_KEY = 'the-big-eye-teamplay_settings_v1'
 
 export type ThemePreset = 'midnight' | 'neon' | 'sunset' | 'ocean' | 'surveyeval'
 

@@ -1,8 +1,8 @@
 import type { Phase } from '../types'
 
-const STORAGE_KEY = 'bb_vox_nomination_reveal_v1'
-const FIRST_PROMPT_SEEN_KEY = 'bb_vox_nomination_reveal_intro_seen_v1'
-const EDUCATION_PENDING_KEY = 'bb_vox_nomination_reveal_education_pending_v1'
+const STORAGE_KEY = 'the-big-eye-teamplay_vox_nomination_reveal_v1'
+const FIRST_PROMPT_SEEN_KEY = 'the-big-eye-teamplay_vox_nomination_reveal_intro_seen_v1'
+const EDUCATION_PENDING_KEY = 'the-big-eye-teamplay_vox_nomination_reveal_education_pending_v1'
 
 export type VoxNominationRevealStatus = 'ready' | 'available' | 'revealed' | 'declined'
 
@@ -73,13 +73,13 @@ export function isVoxNominationRevealActive(
 ): reveal is VoxNominationReveal {
   return Boolean(
     reveal &&
-      reveal.week === week &&
-      phase !== 'week_start' &&
-      phase !== 'loh_comp_announcement' &&
-      phase !== 'loh_comp' &&
-      phase !== 'loh_results' &&
-      phase !== 'social_1' &&
-      phase !== 'nominations'
+    reveal.week === week &&
+    phase !== 'week_start' &&
+    phase !== 'loh_comp_announcement' &&
+    phase !== 'loh_comp' &&
+    phase !== 'loh_results' &&
+    phase !== 'social_1' &&
+    phase !== 'nominations'
   )
 }
 

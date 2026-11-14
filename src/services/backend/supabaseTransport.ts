@@ -31,7 +31,7 @@ export async function getBackendClient(purpose: BackendPurpose): Promise<Supabas
   let pending = clients.get(purpose)
   if (!pending) {
     pending = import('@supabase/supabase-js').then(({ createClient }) => {
-      const storageKey = `bbmobilenew:supabase:${purpose}:v1`
+      const storageKey = `the-big-eye-teamplay:supabase:${purpose}:v1`
       const playerAccount = purpose === 'player_account'
       const client = createClient(config.url, config.key, {
         auth: {
@@ -110,7 +110,7 @@ export function withBackendAuthLock<T>(
       const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
       if (typeof locks?.request === 'function')
         return locks.request(
-          `bbmobilenew:app-auth-operation:${purpose}:v1`,
+          `the-big-eye-teamplay:app-auth-operation:${purpose}:v1`,
           { mode: 'exclusive' },
           () => operation(client)
         )

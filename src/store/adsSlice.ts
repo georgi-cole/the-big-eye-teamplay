@@ -9,7 +9,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { RootState } from './store'
 import { hasEffectiveStoreEntitlement } from '../vip/effectiveEntitlements'
 
-const STORAGE_KEY = 'bbmobilenew_ads_v1'
+const STORAGE_KEY = 'the-big-eye-teamplay_ads_v1'
 
 export interface AdsState {
   /** True when the user has purchased the No Ads Pack in-game store. */

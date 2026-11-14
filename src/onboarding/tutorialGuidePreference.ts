@@ -24,7 +24,7 @@ const INITIAL_REPLAY_STATE: TutorialReplayState = {
 
 const REPLAY_VERSION = 'v1'
 const SOCIAL_LEVEL_VERSION = 'v1'
-const CHANGE_EVENT = 'bbmobilenew:tutorial-preference-changed'
+const CHANGE_EVENT = 'the-big-eye-teamplay:tutorial-preference-changed'
 
 const LEGACY_SEASON_TUTORIAL_VERSION = 'v1'
 const LEGACY_SEASON_ENABLED_VERSION = 'v2'
@@ -40,23 +40,23 @@ function tutorialStorage(isGuest: boolean): Storage | null {
 }
 
 export function tutorialReplayStorageKey(profileId: string | null): string {
-  return `bbmobilenew_tutorial_replay_${REPLAY_VERSION}:${profileId ?? 'guest'}`
+  return `the-big-eye-teamplay_tutorial_replay_${REPLAY_VERSION}:${profileId ?? 'guest'}`
 }
 
 export function socialGuideLevelStorageKey(profileId: string | null): string {
-  return `bbmobilenew_social_tutorial_level_${SOCIAL_LEVEL_VERSION}:${profileId ?? 'guest'}`
+  return `the-big-eye-teamplay_social_tutorial_level_${SOCIAL_LEVEL_VERSION}:${profileId ?? 'guest'}`
 }
 
 function legacySeasonTutorialStorageKey(profileId: string | null): string {
-  return `bbmobilenew_season_tutorial_${LEGACY_SEASON_TUTORIAL_VERSION}:${profileId ?? 'profile'}`
+  return `the-big-eye-teamplay_season_tutorial_${LEGACY_SEASON_TUTORIAL_VERSION}:${profileId ?? 'profile'}`
 }
 
 function legacySeasonTutorialEnabledStorageKey(profileId: string | null): string {
-  return `bbmobilenew_season_tutorial_enabled_${LEGACY_SEASON_ENABLED_VERSION}:${profileId ?? 'profile'}`
+  return `the-big-eye-teamplay_season_tutorial_enabled_${LEGACY_SEASON_ENABLED_VERSION}:${profileId ?? 'profile'}`
 }
 
 function legacyRealitySocialStorageKey(profileId: string | null): string {
-  return `bbmobilenew_reality_social_tutorial_${LEGACY_REALITY_SOCIAL_VERSION}:${profileId ?? 'guest'}`
+  return `the-big-eye-teamplay_reality_social_tutorial_${LEGACY_REALITY_SOCIAL_VERSION}:${profileId ?? 'guest'}`
 }
 
 function migratedReplayState(

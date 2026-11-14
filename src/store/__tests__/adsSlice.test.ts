@@ -1,17 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadAdsState, saveAdsState, type AdsState } from '../adsSlice';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadAdsState, saveAdsState, type AdsState } from '../adsSlice'
 
-const ADS_STORAGE_KEY = 'bbmobilenew_ads_v1';
+const ADS_STORAGE_KEY = 'the-big-eye-teamplay_ads_v1'
 
 describe('adsSlice persistence', () => {
   beforeEach(() => {
-    localStorage.clear();
-  });
+    localStorage.clear()
+  })
 
   afterEach(() => {
-    vi.restoreAllMocks();
-    localStorage.clear();
-  });
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
 
   it('loadAdsState restores persisted fields but resets transient competition state', () => {
     localStorage.setItem(
@@ -21,16 +21,16 @@ describe('adsSlice persistence', () => {
         dailyUsage: { social_energy_recharge: '2026-04-05' },
         automaticBreaks: { 'season-1:4:live_vote:live_vote_auto': true },
         lastCompLastPlaceType: 'loh',
-      }),
-    );
+      })
+    )
 
     expect(loadAdsState()).toEqual<AdsState>({
       hasNoAdsPack: true,
       dailyUsage: { social_energy_recharge: '2026-04-05' },
       automaticBreaks: { 'season-1:4:live_vote:live_vote_auto': true },
       lastCompLastPlaceType: null,
-    });
-  });
+    })
+  })
 
   it('loads legacy persisted ad state without an automatic-break ledger', () => {
     localStorage.setItem(
@@ -38,11 +38,11 @@ describe('adsSlice persistence', () => {
       JSON.stringify({
         hasNoAdsPack: false,
         dailyUsage: {},
-      }),
-    );
+      })
+    )
 
-    expect(loadAdsState().automaticBreaks).toEqual({});
-  });
+    expect(loadAdsState().automaticBreaks).toEqual({})
+  })
 
   it('saveAdsState omits transient competition state from localStorage', () => {
     saveAdsState({
@@ -50,14 +50,14 @@ describe('adsSlice persistence', () => {
       dailyUsage: { public_meter_audience_insight: '2026-04-05' },
       automaticBreaks: { 'season-1:4:live_vote:live_vote_auto': true },
       lastCompLastPlaceType: 'pos',
-    });
+    })
 
     expect(localStorage.getItem(ADS_STORAGE_KEY)).toBe(
       JSON.stringify({
         hasNoAdsPack: true,
         dailyUsage: { public_meter_audience_insight: '2026-04-05' },
         automaticBreaks: { 'season-1:4:live_vote:live_vote_auto': true },
-      }),
-    );
-  });
-});
+      })
+    )
+  })
+})

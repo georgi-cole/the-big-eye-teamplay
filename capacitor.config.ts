@@ -2,13 +2,13 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   /** Permanent identifier shared by the Android and iOS store records. */
-  appId: 'com.georgicole.thebigeye',
+  appId: 'com.georgicole.thebigeyeteamplay',
 
   /**
    * Display name shown on the iOS home screen.
    * Keep in sync with the apple-mobile-web-app-title meta tag in index.html.
    */
-  appName: 'The Big Eye',
+  appName: 'The Big Eye Teamplay',
 
   /**
    * Where the Vite production build is written.

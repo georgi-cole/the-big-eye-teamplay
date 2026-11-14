@@ -8,9 +8,9 @@ test('decodes credits and releases sources across 20 accelerated End/Skip cycles
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.addInitScript(() => {
-    sessionStorage.setItem('bb:homeHubSplashShownThisSession', 'true')
+    sessionStorage.setItem('the-big-eye-teamplay:homeHubSplashShownThisSession', 'true')
     localStorage.setItem(
-      'bbmobilenew_settings_v1',
+      'the-big-eye-teamplay_settings_v1',
       JSON.stringify({
         audio: { musicOn: false, sfxOn: false },
         gameUX: { animations: true },

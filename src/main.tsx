@@ -51,7 +51,7 @@ if (recoveryUrl.searchParams.has('bbmobile-recovery')) {
 // never expose the responsive-layout overlay in a production build.
 if (!import.meta.env.DEV) {
   try {
-    localStorage.removeItem('bbmobile:debugLayout')
+    localStorage.removeItem('the-big-eye-teamplay:debugLayout')
   } catch {
     // Storage may be blocked; the URL guard below still removes the other path.
   }

@@ -64,12 +64,14 @@ describe('backend event buffering', () => {
         'profile-1'
       )
     expect(
-      writes.mock.calls.filter(([key]) => key === 'bbmobilenew:supabase-events:v1')
+      writes.mock.calls.filter(([key]) => key === 'the-big-eye-teamplay:supabase-events:v1')
     ).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(1200)
-    expect(JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!)).toHaveLength(2000)
     expect(
-      writes.mock.calls.filter(([key]) => key === 'bbmobilenew:supabase-events:v1')
+      JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!)
+    ).toHaveLength(2000)
+    expect(
+      writes.mock.calls.filter(([key]) => key === 'the-big-eye-teamplay:supabase-events:v1')
     ).toHaveLength(1)
     vi.setSystemTime(Date.now() + 7 * 24 * 60 * 60 * 1000 + 1)
     hooks.event?.(
@@ -82,11 +84,15 @@ describe('backend event buffering', () => {
       'profile-1'
     )
     window.dispatchEvent(new Event('pagehide'))
-    expect(JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!)).toHaveLength(1)
+    expect(
+      JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!)
+    ).toHaveLength(1)
     profiles = { ...profiles, profiles: [] }
     hooks.changed?.()
     window.dispatchEvent(new Event('pagehide'))
-    expect(JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!)).toEqual([])
+    expect(JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!)).toEqual(
+      []
+    )
     stop()
     expect(vi.getTimerCount()).toBe(0)
     expect(hooks.event).toBeUndefined()
@@ -124,7 +130,7 @@ describe('backend event buffering', () => {
       properties: { active_seconds: 1 },
     })
     window.dispatchEvent(new Event('pagehide'))
-    let events = JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!)
+    let events = JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!)
     expect(events.map((event: { profileId: string | null }) => event.profileId)).toEqual([
       null,
       'new-profile',
@@ -132,7 +138,7 @@ describe('backend event buffering', () => {
     stop()
     stop = initializeCloudBackend(fakeStore as never)
     window.dispatchEvent(new Event('pagehide'))
-    events = JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!)
+    events = JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!)
     expect(events[0].profileId).toBeNull()
     stop()
   })
@@ -176,7 +182,7 @@ describe('backend event buffering', () => {
       properties: { action_id: 'jury_vote_cast' },
     }
     sessionStorage.setItem(
-      'bbmobilenew:supabase-events:v1',
+      'the-big-eye-teamplay:supabase-events:v1',
       JSON.stringify([{ ...event, id: crypto.randomUUID(), profileId: null }])
     )
     const stop = initializeCloudBackend({
@@ -187,7 +193,7 @@ describe('backend event buffering', () => {
     hooks.event?.({ ...event, name: 'session_active', properties: { active_seconds: 1 } }, null)
     window.dispatchEvent(new Event('pagehide'))
     expect(
-      JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!).map(
+      JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!).map(
         (row: { name: string }) => row.name
       )
     ).toEqual(['session_active'])
@@ -195,7 +201,7 @@ describe('backend event buffering', () => {
     hooks.event?.(event, null)
     window.dispatchEvent(new Event('pagehide'))
     expect(
-      JSON.parse(sessionStorage.getItem('bbmobilenew:supabase-events:v1')!).map(
+      JSON.parse(sessionStorage.getItem('the-big-eye-teamplay:supabase-events:v1')!).map(
         (row: { name: string }) => row.name
       )
     ).toEqual(['session_active', 'tribunal_action'])

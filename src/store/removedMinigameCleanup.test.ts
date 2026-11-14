@@ -17,7 +17,7 @@ import {
   type SavedSeasonSnapshot,
 } from './saveStatePersistence'
 
-const storageKey = 'bbmobilenew:savedSeason:removed-game-test'
+const storageKey = 'the-big-eye-teamplay:savedSeason:removed-game-test'
 const player: Player = {
   id: 'human',
   name: 'Human',

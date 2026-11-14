@@ -12,9 +12,9 @@ test.describe('Housemate biographies @core-journey', () => {
   }) => {
     test.setTimeout(90_000)
     await page.addInitScript(() => {
-      sessionStorage.setItem('bb:homeHubSplashShownThisSession', 'true')
+      sessionStorage.setItem('the-big-eye-teamplay:homeHubSplashShownThisSession', 'true')
       localStorage.setItem(
-        'bbmobilenew_settings_v1',
+        'the-big-eye-teamplay_settings_v1',
         JSON.stringify({
           audio: { musicOn: false, sfxOn: false },
           gameUX: { animations: true },

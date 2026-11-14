@@ -1,5 +1,16 @@
 # Marketplace maintenance
 
+## Teamplay foundation review — 14 November 2026
+
+This repository is an isolated development baseline of The Big Eye Teamplay.
+The original catalog is retained as source reference; it is not an offer in
+this product. Native billing, original store navigation, advertising and
+external services are disabled at the product boundary. No original purchase
+or entitlement is imported. Teamplay's own Remove Ads product, prices,
+restoration, ad placements and store records remain later backlog work.
+Shared paid-feature definitions are preserved for reuse, not silently granted
+or sold under the new app identity. Catalog generation/checking remains active.
+
 Premium Challenges and VIP both unlock every premium minigame version. VIP also
 includes every released standalone product. This covers enhanced
 presentations, alternate premium rules, and replacement remasters.

@@ -66,7 +66,7 @@ for (const platform of ['iphone', 'android'] as const) {
     await expect(page.getByRole('heading', { name: 'My profile', exact: true })).toBeVisible()
     const profileId = (await readAppState(page)).profiles.activeProfileId
     await page.evaluate((id) => {
-      localStorage.setItem(`bbmobilenew_season_tutorial_v1:${id}`, 'done')
+      localStorage.setItem(`the-big-eye-teamplay_season_tutorial_v1:${id}`, 'done')
     }, profileId)
     await page.setViewportSize({ width: 393, height: 852 })
     await page.getByRole('button', { name: 'Go back', exact: true }).click()

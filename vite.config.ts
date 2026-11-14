@@ -30,7 +30,7 @@ const ignoredDevelopmentRoots = [
 ].map((directory) => normalizeWatchPath(resolve(process.cwd(), directory)))
 
 export default defineConfig(({ mode }) => ({
-  base: mobileModes.has(mode) ? './' : process.env.VITE_BASE_PATH || '/bbmobilenew/',
+  base: mobileModes.has(mode) ? './' : process.env.VITE_BASE_PATH || '/the-big-eye-teamplay/',
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
@@ -69,7 +69,7 @@ export default defineConfig(({ mode }) => ({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:4000',
+        target: 'http://127.0.0.1:4401',
         changeOrigin: true,
       },
     },

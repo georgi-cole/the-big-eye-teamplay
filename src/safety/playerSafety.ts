@@ -1,5 +1,5 @@
 /** Local admission decisions are self-declarations, never verified age or parental consent. */
-export const PLAYER_SAFETY_KEY = 'bbmobilenew:player-safety:v1'
+export const PLAYER_SAFETY_KEY = 'the-big-eye-teamplay:player-safety:v1'
 export const PLAYER_SAFETY_POLICY_VERSION = 1
 export type PlayerAgeBand = 'under13' | '13to15' | '16to17' | 'adult'
 export type OptionalPlayerFeature = 'location' | 'analytics' | 'onlineServices' | 'ads'

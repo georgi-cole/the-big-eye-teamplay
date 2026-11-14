@@ -12,7 +12,7 @@ export const DEPRESSION_SHOCK_TALK_REFUSAL_CHANCE = 0.18
 export const DEPRESSION_SHOCK_RANDOM_FIGHT_CHANCE = 0.32
 export const DEPRESSION_SHOCK_SURPRISE_DECISION_CHANCE = 0.35
 
-const STORAGE_PREFIX = 'bbmobilenew:depressionShock:'
+const STORAGE_PREFIX = 'the-big-eye-teamplay:depressionShock:'
 const FAUX_TV_NO_SUFFIX_CHANCE = 0.25
 const FAUX_TV_RECENT_SUFFIX_WINDOW = 3
 

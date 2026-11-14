@@ -10,7 +10,7 @@ import {
   selectVip,
 } from '../../store/vipSlice'
 
-const REALITY_MODE_DEFAULT_APPLIED_KEY = 'bbmobilenew:reality-mode-default-applied:v1'
+const REALITY_MODE_DEFAULT_APPLIED_KEY = 'the-big-eye-teamplay:reality-mode-default-applied:v1'
 
 function hasAppliedRealityModeDefault(): boolean {
   try {

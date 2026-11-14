@@ -59,7 +59,7 @@ const DEFAULT_REVEAL_PAUSE_MS = 1500
 const CONFIRM_MS = 700
 
 const WINNER_SCREEN_DURATION_MS = 4000
-const RECENT_FIGURES_STORAGE_KEY = 'bbmobile:famous-figures:recent-v1'
+const RECENT_FIGURES_STORAGE_KEY = 'the-big-eye-teamplay:famous-figures:recent-v1'
 const RECENT_FIGURE_MEMORY = 36
 
 function readRecentFigureNames(): string[] {

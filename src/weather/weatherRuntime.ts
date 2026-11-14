@@ -95,7 +95,7 @@ const CONDITION_IDS: readonly WeatherConditionId[] = [
   'clearing',
 ]
 const CONDITION_SET = new Set<WeatherConditionId>(CONDITION_IDS)
-const WEATHER_CACHE_KEY = 'bbmobilenew_weather_runtime_v2'
+const WEATHER_CACHE_KEY = 'the-big-eye-teamplay_weather_runtime_v2'
 const CACHE_TTL_MS = 60 * 60 * 1000
 const REMOTE_WEATHER_BASE = 'https://georgi-cole.github.io/bbmobilenew/config'
 

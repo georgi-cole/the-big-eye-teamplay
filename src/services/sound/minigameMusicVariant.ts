@@ -1,6 +1,6 @@
 import type { MusicMinigameVariant } from './musicConfig'
 
-export const MINIGAME_MUSIC_VARIANT_EVENT = 'bb:minigame-music-variant'
+export const MINIGAME_MUSIC_VARIANT_EVENT = 'the-big-eye-teamplay:minigame-music-variant'
 
 export interface MinigameMusicVariantDetail {
   variant: MusicMinigameVariant
