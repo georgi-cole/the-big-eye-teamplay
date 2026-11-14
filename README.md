@@ -28,6 +28,10 @@ No original-app environment file or credential is required. Native billing, adve
 
 Run `npm run check:pr` before publishing a change, as required by AGENTS.md. Foundation-specific checks are in `tests/teamplayFoundation.test.ts`; the Classic-only launcher is covered alongside the inherited HomeHub tests. When package files change, also run `npm audit --omit=dev --audit-level=high`.
 
+After `npm run build:mobile`, run `npx playwright test --config=playwright.bundle.config.ts` to check the real production launcher and closed store at phone and desktop sizes. This fixture serves local build assets through Playwright request interception and does not need an HTTP server. It uses a secure test origin so normal browser APIs remain available. External asset requests are blocked; it does not certify online services.
+
+Native preparation uses `npx cap sync android` or `npx cap sync ios` after the mobile build. Android validation is `cd android` followed by `./gradlew lintDebug assembleDebug` (Windows: `gradlew.bat lintDebug assembleDebug`). Keep both the checkout and Gradle cache in ASCII-only directories on Windows. iOS compilation requires macOS/Xcode. The baseline workflow includes browser, Android debug/lint and unsigned iOS simulator build jobs; these jobs have not run on GitHub yet.
+
 ## Repository publication
 
 A local repository has been initialized. Remote creation and pushing require a working authenticated GitHub connection. No source-repository branch or file should be changed to publish this separate product. Archived inherited deployment workflows are under `docs/teamplay/inherited-workflows/`; they must be reviewed for Teamplay before re-enabling.

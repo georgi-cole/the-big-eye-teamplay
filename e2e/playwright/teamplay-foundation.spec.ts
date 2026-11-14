@@ -6,6 +6,7 @@ test('Teamplay baseline offers one engine and keeps the legacy store closed', as
     timeout: 45000,
   })
   await expect(page.getByText('Development baseline · Classic engine')).toBeVisible()
+  await page.getByRole('button', { name: 'Not now', exact: true }).click()
   await page.getByRole('button', { name: 'Play', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Play Classic baseline' })).toBeVisible()
   await expect(
