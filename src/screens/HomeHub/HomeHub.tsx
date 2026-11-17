@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router'
 import { useAppSelector, useAppDispatch } from '../../store/hooks'
+import { useI18n } from '../../i18n'
 import {
   resetGame,
   hydrateGame,
@@ -273,6 +274,7 @@ function HomeHubAssetLayer({
 }
 
 export default function HomeHub({ classicOnly = false }: { classicOnly?: boolean }) {
+  const { t } = useI18n()
   const location = useLocation()
   const routeState = location.state as {
     autoStartGame?: boolean
@@ -847,17 +849,26 @@ export default function HomeHub({ classicOnly = false }: { classicOnly?: boolean
   }
 
   const visiblePlaySelectionButtons = classicOnly
-    ? playSelectionButtons
-        .filter(({ key }) => ['classic', 'continue-last', 'active-season', 'back'].includes(key))
-        .filter(
-          ({ key }) =>
-            key !== 'continue-last' ||
-            (lastSnapshot != null && isBaselineClassicRun(lastSnapshot.game))
-        )
-        .filter(({ key }) => key !== 'active-season' || activeSeason?.ruleset === 'classic')
-        .map((button) =>
-          button.key === 'classic' ? { ...button, label: 'Play Classic baseline' } : button
-        )
+    ? [
+        {
+          key: 'teamplay',
+          label: t('teamplay.play'),
+          icon: <HomeHubButtonIcon name="campaign" />,
+          variant: 'primary_large' as const,
+          onClick: () => navigate('/teamplay'),
+        },
+        ...playSelectionButtons
+          .filter(({ key }) => ['classic', 'continue-last', 'active-season', 'back'].includes(key))
+          .filter(
+            ({ key }) =>
+              key !== 'continue-last' ||
+              (lastSnapshot != null && isBaselineClassicRun(lastSnapshot.game))
+          )
+          .filter(({ key }) => key !== 'active-season' || activeSeason?.ruleset === 'classic')
+          .map((button) =>
+            button.key === 'classic' ? { ...button, label: 'Play Classic baseline' } : button
+          ),
+      ]
     : playSelectionButtons
 
   const handleHubAssetStateChange = useCallback((nextState: HubAssetState) => {

@@ -70,7 +70,7 @@ The existing Classic run slot name is an internal engine implementation detail i
 | `percentagePanic` | Exclude initially: qualifier/final semantics require a separate contract                                     | Candidate only after feature-owned AI/result audit                                                   | Registry has no direct AI model entry; a generic fallback is not qualification evidence.                  |
 | `snake`           | Authoritative result needs feature audit before averaging                                                    | Candidate after native standings audit                                                               | Preserve human/AI result semantics and ties.                                                              |
 
-**No Teamplay competition pool is runtime-qualified yet.** The minimum next vertical slice should use one verified team-score game and one verified duel game, then add variety after result/save parity passes. A source metadata predicate or generic AI fallback is not enough to certify a game.
+**Development update, 17 November 2026:** a fixed-seed Classic Quick Tap adapter now drives team means and two-player duels through the existing human canvas engine and AI score dispatcher. The tribe-stage prototype includes persisted attempts, replay/priority ties and explicit human delegation. See `CYCLE_ENGINE_STATUS.md` for current evidence and limits. Commercial pool qualification remains open: one game used in two contexts does not meet R067's two-team/two-duel minimum or replace native device parity testing. The remaining entries above are source candidates, not enabled Teamplay games.
 
 ## Social economy findings
 
@@ -88,6 +88,8 @@ See `audit/social-actions.md`, `audit/social-actions.json` and `audit/resource-c
 
 ## Compatibility gates still required
 
+The 17 November tribe-stage prototype addresses items 1-5 inside its isolated controller and limited game/social pool. The initial audit checklist remains below to guide the full adapters and individual endgame; it is not a claim that the original Classic reducers were made tribe-aware. See `CYCLE_ENGINE_STATUS.md` for implementation boundaries.
+
 1. Add explicit stage/tribe/reserve state before changing active contestant counts. Classic often treats everyone not evicted/jury as alive, so a reserve cannot safely be represented by only a badge.
 2. Prevent roster/safety/vote twists at scheduling, manual activation, restore and resource-award paths. Hiding settings alone is insufficient.
 3. Replace both human and AI nomination decisions with the same legal tribe ballot contract; retain secret ballots.
@@ -101,4 +103,4 @@ See `audit/social-actions.md`, `audit/social-actions.json` and `audit/resource-c
 
 Validation evidence is maintained in `FOUNDATION_STATUS.md`. Conceptual roster/ballot checks in the handbook do not replace runtime tests. Baseline tests must include launch, resume, persisted result recovery and existing Classic endgame regressions. A passing web build does not certify an Android/iOS install, purchase flow or store readiness.
 
-Remote repository creation/push is pending: the available GitHub connector can read/update existing repositories but does not expose repository creation; direct Git/CLI connectivity and authentication failed. No write has been made to the original source repository.
+Foundation commit `54da276` was verified on `georgi-cole/the-big-eye-teamplay` on 17 November 2026. No write has been made to the original source repository. Remote build results remain a separate verification gate.

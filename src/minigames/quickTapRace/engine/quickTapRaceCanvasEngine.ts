@@ -343,6 +343,19 @@ export class QuickTapRaceCanvasEngine {
     this.activePointerIds.delete(pointerId);
   }
 
+  /** Accessible controls use the same hit testing/scoring as pointer input. */
+  handleKeyboardTap(): void {
+    const now = performance.now();
+    this.handlePointerDown(-1, { x: this.layout.tapBtnCx, y: this.layout.tapBtnCy }, now, now, 'keyboard');
+    this.handlePointerUp(-1);
+  }
+
+  handleKeyboardBooster(): void {
+    const now = performance.now();
+    this.handlePointerDown(-2, { x: this.layout.boosterX + this.layout.boosterWidth / 2, y: this.layout.boosterY + this.layout.boosterHeight / 2 }, now, now, 'keyboard');
+    this.handlePointerUp(-2);
+  }
+
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   private registerTap(

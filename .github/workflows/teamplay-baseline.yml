@@ -25,7 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:pr
-      - run: npx vitest run tests/teamplayFoundation.test.ts
+      - run: npx vitest run tests/teamplayFoundation.test.ts src/teamplay/ tests/unit/quickTapRace/quickTapRaceCanvasEngine.test.ts
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm run build:mobile

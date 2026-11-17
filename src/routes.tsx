@@ -22,6 +22,7 @@ import { lazyWithChunkRecovery } from './utils/lazyWithChunkRecovery'
 const lazy = lazyWithChunkRecovery
 
 const GameRoute = lazy(() => import('./routes/GameRoute'))
+const TeamplayEntry = lazy(() => import('./teamplay/TeamplayScreen'))
 const ConfessionalRoute = lazy(() => import('./screens/DiaryRoom/ConfessionalRoute'))
 const Houseguests = lazy(() => import('./screens/Houseguests/Houseguests'))
 const Profile = lazy(() => import('./screens/Profile/Profile'))
@@ -144,6 +145,16 @@ const MinigameTurnDemos = import.meta.env.DEV
   : null
 
 export const router = createHashRouter([
+  { path: '/teamplay', element: load(<TeamplayEntry />), errorElement: <RouteErrorBoundary /> },
+  ...(twistsQaEnabled
+    ? [
+        {
+          path: '/teamplay-preview',
+          element: load(<TeamplayEntry preview />),
+          errorElement: <RouteErrorBoundary />,
+        },
+      ]
+    : []),
   {
     path: '/cinematic',
     element: (
