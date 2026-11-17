@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import {
   APP_IDENTITY,
   EXTERNAL_SERVICES_ENABLED,
@@ -24,6 +24,20 @@ describe('isolated Teamplay foundation', () => {
       APP_IDENTITY.appId
     )
     expect(readFileSync('index.html', 'utf8')).toContain(`<title>${APP_IDENTITY.name}</title>`)
+  })
+
+  it('keeps Android native classes in their declared application package', () => {
+    const packageDirectory = `android/app/src/main/java/${APP_IDENTITY.appId.replaceAll('.', '/')}`
+    const nativeClasses = readdirSync(packageDirectory).filter((file) => file.endsWith('.java'))
+    expect(nativeClasses).toContain('MainActivity.java')
+    for (const file of nativeClasses) {
+      expect(readFileSync(`${packageDirectory}/${file}`, 'utf8')).toMatch(
+        new RegExp(`^package ${APP_IDENTITY.appId.replaceAll('.', '\\.')};`, 'm')
+      )
+    }
+    const manifest = readFileSync('android/app/src/main/AndroidManifest.xml', 'utf8')
+    expect(manifest).toContain('android:name=".MainActivity"')
+    expect(manifest).toContain('android:targetActivity=".MainActivity"')
   })
 
   it('cannot open the original app save slots', () => {
