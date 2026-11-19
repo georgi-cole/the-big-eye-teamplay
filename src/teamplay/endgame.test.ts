@@ -23,8 +23,8 @@ function reach(state: TeamplayState, predicate: (state: TeamplayState) => boolea
   throw new Error('The expected scene was not reached')
 }
 
-function season(seed: number) {
-  return createTeamplay(seed, 'finn', 'seed')
+function season(seed: number, id = 'seed') {
+  return createTeamplay(seed, 'finn', id)
 }
 
 describe('Teamplay Classic endgame', () => {
@@ -73,7 +73,7 @@ describe('Teamplay Classic endgame', () => {
   }, 20000)
 
   it('gives a tied Final Five vote to the LOH and bars the outgoing LOH from the next LOH competition', () => {
-    const tied = reach(season(42), (state) => state.endgame?.step === 'tie')
+    const tied = reach(season(5), (state) => state.endgame?.step === 'tie')
     const round = currentRound(tied)!
     expect(Object.values(tallyVotes(round.ballots))).toEqual([1, 1])
     expect(individualDecision(tied)?.actorId).toBe(round.lohId)
@@ -98,7 +98,7 @@ describe('Teamplay Classic endgame', () => {
   }, 20000)
 
   it('carries a human through the three distinct competition rosters and a saved Tribunal decision', () => {
-    const one = reach(season(11), (state) => state.endgame?.step === 'partOne')
+    const one = reach(season(11, 'teamplay-preview'), (state) => state.endgame?.step === 'partOne')
     expect(currentAttempt(one)?.participants).toHaveLength(3)
     expect(currentAttempt(one)?.participants).toContain('finn')
     const two = reach(one, (state) => state.endgame?.step === 'partTwo')
@@ -133,7 +133,7 @@ describe('Teamplay Classic endgame', () => {
   }, 20000)
 
   it('lets a pre-Tribunal spectator watch without casting an additional vote', () => {
-    const tribunal = reach(season(42), (state) => state.phase === 'tribunal')
+    const tribunal = reach(season(1), (state) => state.phase === 'tribunal')
     expect(tribunal.eliminated.slice(0, 5)).toContain('finn')
     expect(individualDecision(tribunal)).toBeUndefined()
     expect(() =>

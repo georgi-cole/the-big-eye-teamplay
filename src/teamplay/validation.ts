@@ -6,6 +6,8 @@ import {
   rankIndividualAttempt,
 } from './competition'
 import { validateTeamplayEndgame } from './endgameValidation'
+import { isPendingAllianceRequest } from '../social/reality/allianceManagement'
+import { isLocalAllianceRequest } from './tribeSocial'
 
 function requireState(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Teamplay checkpoint: ${message}`)
@@ -294,6 +296,17 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
   )
   for (const [id, attempt] of Object.entries(state.attempts)) {
     requireState(
+      !attempt.aiIntents ||
+        (attempt.kind === 'team' &&
+          Object.entries(attempt.aiIntents).every(
+            ([actor, intent]) =>
+              actor !== state.humanId &&
+              attempt.participants.includes(actor) &&
+              ['compete', 'conserve', 'throw'].includes(intent)
+          )),
+      'invalid private competition intention'
+    )
+    requireState(
       attempt.id === id &&
         attempt.game === 'quickTap' &&
         attempt.duration === 30 &&
@@ -432,8 +445,18 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
     )
   }
   for (const [actorId, targetId] of Object.entries(state.ballots)) {
-    const members = Object.values(state.frozenRosters).find((roster) => roster.includes(actorId))
-    requireState(actorId !== targetId && members?.includes(targetId), 'invalid saved secret ballot')
+    const roster = Object.entries(state.frozenRosters).find(([, members]) =>
+      members.includes(actorId)
+    )
+    requireState(
+      roster &&
+        actorId !== targetId &&
+        roster[1].includes(targetId) &&
+        state.teamResults[0] &&
+        roster[0] !== state.teamResults[0].tribeId &&
+        !(Object.keys(state.frozenRosters).length === 2 && roster[1].length === 2),
+      'invalid saved secret ballot'
+    )
   }
   if (state.phase === 'capture')
     requireState(
@@ -455,4 +478,11 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
       'invalid merger draft'
     )
   if (state.endgame) validateTeamplayEndgame(state)
+  for (const request of Object.values(state.reality.allianceManagement.requests)) {
+    if (isPendingAllianceRequest(request))
+      requireState(
+        isLocalAllianceRequest(state, request),
+        'pending social request crosses a roster boundary'
+      )
+  }
 }

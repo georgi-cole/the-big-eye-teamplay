@@ -5,6 +5,8 @@ import {
 } from '../ai/competition'
 import { createInitialRealityDomainState } from '../social/reality/state'
 import { getRealityRelationship } from '../social/reality/relationships'
+import { finalizeRealityVote, recordRealityCeremonyOutcome } from '../social/reality/ceremonies'
+import { getCurrentPact } from '../social/reality/allianceIdentity'
 import { mulberry32, seededPickN } from '../store/rng'
 import { resolveAvatar } from '../utils/avatar'
 import {
@@ -24,8 +26,14 @@ import {
   strategicChoice,
   tribeOf,
 } from './social'
+import { capture, draft, draftTribe, finishForcedDrafts, maintain } from './tribeMaintenance'
+import { resolveTribeBallots } from './tribeBallots'
+import { actTribeSocial, expireSeparatedRequests, openTribeSocial } from './tribeSocial'
+import { recordTribePerformanceReads } from './tribeStrategy'
 import { validateTeamplay } from './validation'
 import type { Attempt, Cutoff, TeamplayAction, TeamplayCommand, TeamplayState } from './types'
+
+export { draftTribe } from './tribeMaintenance'
 
 export const FLAGS = [
   { id: 'ember', name: 'Ember', color: '#f6a772', priority: 1 },
@@ -181,6 +189,7 @@ function enterSocial(state: TeamplayState, second: boolean): void {
     if (!second) grant(state, id, 'socialOne', 5)
     else if ((state.socialOneSpent[id] ?? 0) >= 4) grant(state, id, 'secondWind', 3)
   }
+  openTribeSocial(state)
 }
 
 function enterBallots(state: TeamplayState): void {
@@ -212,6 +221,18 @@ function chooseCutoff(state: TeamplayState, cutoff: Cutoff, selected: string[]):
     selected.some((id) => !cutoff.candidates.includes(id))
   )
     throw new Error('Choose exactly the required number from the tied candidates')
+  const others = selected.filter((id) => id !== cutoff.captainId)
+  if (others.some((id) => getCurrentPact(state.reality, cutoff.captainId, id)))
+    recordRealityCeremonyOutcome(state.reality, {
+      kind: 'NOMINATIONS_LOCKED',
+      actorId: cutoff.captainId,
+      targetIds: others,
+      day: state.cycle,
+      phase: 'nominations',
+      witnessIds: state.frozenRosters[cutoff.tribeId],
+      eligibleAlternativeIds: cutoff.candidates.filter((id) => id !== cutoff.captainId),
+      publicEligible: true,
+    })
   state.nominees.push(...selected)
   state.cutoffs = state.cutoffs.filter((entry) => entry.tribeId !== cutoff.tribeId)
 }
@@ -219,34 +240,27 @@ function chooseCutoff(state: TeamplayState, cutoff: Cutoff, selected: string[]):
 function finishBallots(state: TeamplayState): void {
   if (humanBallotRequired(state)) throw new Error('Your secret ballot is still required')
   for (const tribe of votingTribes(state)) {
-    const slots = state.stage === 'threeTribes' ? 1 : 2
-    if (tribe.members.length === 2 && slots === 2) {
-      state.nominees.push(...tribe.members)
-      continue
-    }
-    const tally: Record<string, number> = Object.fromEntries(tribe.members.map((id) => [id, 0]))
-    for (const actorId of tribe.members) {
-      const target = state.ballots[actorId]
-      if (!target || target === actorId || !tribe.members.includes(target))
-        throw new Error('Invalid or missing secret ballot')
-      tally[target] += actorId === tribe.captainId ? 2 : 1
-    }
-    Object.assign(state.totals, tally)
-    const ordered = [...tribe.members].sort((a, b) => tally[b] - tally[a])
-    const threshold = tally[ordered[slots - 1]]
-    if (threshold <= 0) throw new Error('Invalid zero-vote nomination cutoff')
-    const confirmed = ordered.filter((id) => tally[id] > threshold)
+    const { totals, confirmed, cutoff } = resolveTribeBallots(
+      tribe,
+      state.ballots,
+      state.stage === 'threeTribes' ? 1 : 2
+    )
+    Object.assign(state.totals, totals)
     state.nominees.push(...confirmed)
-    const candidates = ordered.filter((id) => tally[id] === threshold)
-    const needed = slots - confirmed.length
-    if (candidates.length === needed) state.nominees.push(...candidates)
-    else
-      state.cutoffs.push({
-        tribeId: tribe.id,
-        captainId: tribe.captainId!,
-        candidates,
-        slots: needed,
-      })
+    if (cutoff) state.cutoffs.push(cutoff)
+    if (Object.keys(totals).length)
+      for (const actorId of tribe.members) {
+        const target = state.ballots[actorId]
+        finalizeRealityVote(
+          state.reality,
+          actorId,
+          target,
+          { day: state.cycle, phase: 'nominations' },
+          `${state.id}:${state.cycle}:tribe-ballot:${actorId}`,
+          tribe.members.filter((id) => id !== actorId),
+          { revealed: false }
+        )
+      }
   }
   for (const cutoff of [...state.cutoffs])
     if (cutoff.captainId !== state.humanId) {
@@ -339,6 +353,7 @@ function completeAttempt(state: TeamplayState, humanScore?: number, delegated = 
       state.lastExitId = loser
       if (state.eliminated.length > 5) state.jurors.push(loser)
       state.phase = 'reserveResult'
+      expireSeparatedRequests(state)
       state.history.push({
         cycle: state.cycle,
         teamResults: structuredClone(state.teamResults),
@@ -358,104 +373,7 @@ function completeAttempt(state: TeamplayState, humanScore?: number, delegated = 
     winnerId: attempt.kind === 'team' ? state.individualOrder[0] : attempt.winnerId,
     includePlacementBonuses: attempt.kind === 'team',
   })
-}
-
-function maintain(state: TeamplayState): void {
-  const count = activeIds(state).length
-  if (count === 4) {
-    state.individualIds = [...activeIds(state), state.reserveId!]
-    state.reserveId = null
-    state.tribes = []
-    state.stage = 'individual'
-    state.phase = 'fusion'
-    return
-  }
-  if (count === 8 && state.stage === 'threeTribes') {
-    const order = state.teamResults.map((entry) => entry.tribeId)
-    const retired = state.tribes.find((tribe) => tribe.id === order[2])!
-    const surviving = order.slice(0, 2).map((id) => state.tribes.find((tribe) => tribe.id === id)!)
-    state.merge = {
-      retiredId: retired.id,
-      pool: [...retired.members],
-      order: order.slice(0, 2),
-      turn: 0,
-      captains: Object.fromEntries(surviving.map((tribe) => [tribe.id, tribe.captainId!])),
-    }
-    state.tribes = surviving
-    state.stage = 'twoTribes'
-    state.phase = 'merge'
-    finishForcedDrafts(state)
-    return
-  }
-  const sizes = state.tribes.map((tribe) => tribe.members.length)
-  const gap = Math.max(...sizes) - Math.min(...sizes)
-  if (gap > 3) throw new Error('Invalid tribe gap; restore the previous checkpoint')
-  if (gap === 3) {
-    const ordered = state.teamResults.map(
-      (entry) => state.tribes.find((tribe) => tribe.id === entry.tribeId)!
-    )
-    const donor = ordered.find((tribe) => tribe.members.length === Math.max(...sizes))!
-    const recipient = [...ordered]
-      .reverse()
-      .find((tribe) => tribe.members.length === Math.min(...sizes))!
-    state.capture = {
-      donorId: donor.id,
-      recipientId: recipient.id,
-      captainId: recipient.captainId!,
-    }
-    state.phase = 'capture'
-  } else state.phase = 'recap'
-}
-
-function transfer(state: TeamplayState, playerId: string, from: string, to: string): void {
-  state.history.at(-1)!.transfers.push({ playerId, from, to })
-  // No private pending proposals exist in this first-cycle action pool. Personal
-  // relationship/alliance records survive transfers; every action rechecks tribe.
-}
-
-function capture(state: TeamplayState, playerId: string): void {
-  const pending = state.capture!
-  const donor = state.tribes.find((tribe) => tribe.id === pending.donorId)!
-  const recipient = state.tribes.find((tribe) => tribe.id === pending.recipientId)!
-  if (!donor.members.includes(playerId)) throw new Error('Choose a current donor tribe member')
-  donor.members = donor.members.filter((id) => id !== playerId)
-  recipient.members.push(playerId)
-  if (donor.captainId === playerId)
-    donor.captainId = state.individualOrder.find((id) => donor.members.includes(id))!
-  transfer(state, playerId, donor.id, recipient.id)
-  state.capture = null
-  state.phase = 'recap'
-}
-
-export function draftTribe(state: TeamplayState) {
-  if (!state.merge) return null
-  const merge = state.merge
-  for (let offset = 0; offset < 2; offset++) {
-    const tribe = state.tribes.find((entry) => entry.id === merge.order[(merge.turn + offset) % 2])!
-    if (tribe.members.length < 4) return tribe
-  }
-  return null
-}
-
-function draft(state: TeamplayState, playerId: string): void {
-  const merge = state.merge!
-  const tribe = draftTribe(state)
-  if (!tribe || !merge.pool.includes(playerId)) throw new Error('Choose a remaining recruit')
-  merge.pool = merge.pool.filter((id) => id !== playerId)
-  tribe.members.push(playerId)
-  transfer(state, playerId, merge.retiredId, tribe.id)
-  merge.turn = (merge.order.indexOf(tribe.id) + 1) % 2
-}
-
-function finishForcedDrafts(state: TeamplayState): void {
-  const merge = state.merge!
-  if (state.tribes.filter((tribe) => tribe.members.length < 4).length === 1) {
-    while (merge.pool.length) draft(state, merge.pool[0])
-  }
-  if (!merge.pool.length) {
-    state.merge = null
-    state.phase = 'recap'
-  }
+  if (attempt.kind === 'team') recordTribePerformanceReads(state, attempt)
 }
 
 function chooseAutomatic(state: TeamplayState): void {
@@ -537,6 +455,7 @@ function progress(state: TeamplayState): void {
 
 function execute(state: TeamplayState, action: TeamplayAction, eventId: string): void {
   if (action.type === 'individual_choice') return chooseIndividual(state, action.selectedIds)
+  if (action.type === 'tribe_social') return actTribeSocial(state, action.decision, eventId)
   if (action.type === 'skip_to_defence') {
     if (state.reserveId !== state.humanId || state.phase === 'reserveDuel')
       throw new Error('No AI-only interval before your defence')

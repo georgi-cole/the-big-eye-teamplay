@@ -13,7 +13,8 @@ No original-app environment file or credential is required. Native billing, adve
 ## Play and inspect Teamplay
 
 - Play: `/the-big-eye-teamplay/#/teamplay`. Choose an existing contestant and create a season. Every decision is saved before its result appears. A human can play the existing 30-second Classic Quick Tap engine, explicitly delegate a performance to its saved AI skill model, or watch an AI-only competition.
-- Test page: run `npm run dev -- --port 4198`, then open `http://127.0.0.1:4198/the-big-eye-teamplay/#/teamplay-preview`. Jump to actual saved states for fusion, Final Five, Final Four, Final Three, Tribunal, or the completed season. The test route uses a separate save and needs `VITE_ENABLE_QA_ROUTES=true` in a built bundle.
+- Test page: the **teamplay-browser-test** artifact in the GitHub baseline run includes the browser build. Extract it, then double-click `teamplay-inspect.cmd` on Windows with Node installed, or run `node teamplay-inspect.mjs` and open the URL it prints. Keep that window open while playing. Choose Social 1 to try pacts and alliances or jump directly to capture, merger, fusion, the Tribunal, or the completed season. Test saves use their own slot.
+- Development test page: run `npm run dev -- --port 4198` and open `http://127.0.0.1:4198/the-big-eye-teamplay/#/teamplay-preview`. Building the test route needs `VITE_ENABLE_QA_ROUTES=true`.
 - The current season and the Teamplay archive belong to the active profile. Starting another season archives the previous one, including any pending decision. Open the archive from Teamplay to review or resume it.
 - The prototype uses Quick Tap Race for all competitions and five direct social actions. An interrupted race restarts the same challenge. A human reserve can skip AI-only phases to the next defence and retain the public recap.
 - See [cycle implementation, rule trace and remaining gaps](docs/teamplay/CYCLE_ENGINE_STATUS.md).

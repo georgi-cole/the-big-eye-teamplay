@@ -60,6 +60,8 @@ export interface AllianceManagementContext {
   seed: number
   disabled?: boolean
   terminal?: boolean
+  /** Recipients of a unilateral departure notice. Omitted for ordinary Classic. */
+  departureNoticeActorIds?: readonly string[]
 }
 
 export type AllianceManagementCommand =
@@ -125,7 +127,7 @@ function event(
   type: string,
   at: RealityClock,
   targetIds: string[] = [],
-  options: { endReason?: string } = {}
+  options: { endReason?: string; noticeActorIds?: readonly string[] } = {}
 ) {
   return appendRealityEvent(state, {
     ...at,
@@ -133,7 +135,9 @@ function event(
     allianceId: alliance.id,
     actorId,
     targetIds,
-    participantIds: [...alliance.memberIds],
+    participantIds: alliance.memberIds.filter(
+      (id) => !options.noticeActorIds || options.noticeActorIds.includes(id)
+    ),
     witnessIds: [],
     visibility: 'GROUP_VISIBLE',
     outcome: 'SUCCESS',
@@ -163,10 +167,11 @@ function endAlliance(
   alliance: RealityAlliance,
   actorId: string,
   at: RealityClock,
-  reason: string
+  reason: string,
+  noticeActorIds?: readonly string[]
 ): void {
   rememberAllianceRoster(alliance)
-  event(state, alliance, actorId, 'ALLIANCE_ENDED', at, [], { endReason: reason })
+  event(state, alliance, actorId, 'ALLIANCE_ENDED', at, [], { endReason: reason, noticeActorIds })
   alliance.status = 'DISSOLVED'
   alliance.endedAt = { ...at }
   alliance.endReason = reason
@@ -1636,7 +1641,14 @@ export function manageAlliance(
       }
     } else if (command.type === 'LEAVE') {
       if (allianceKind(alliance) === 'PACT')
-        endAlliance(state, alliance, command.actorId, context.at, 'ENDED_BY_PARTNER')
+        endAlliance(
+          state,
+          alliance,
+          command.actorId,
+          context.at,
+          'ENDED_BY_PARTNER',
+          context.departureNoticeActorIds
+        )
       else
         removeRealityAllianceMember(state, {
           allianceId: alliance.id,
@@ -1644,6 +1656,7 @@ export function manageAlliance(
           actorId: command.actorId,
           kind: 'VOLUNTARY',
           at: context.at,
+          noticeActorIds: context.departureNoticeActorIds,
         })
       result = {
         status: 'APPLIED',

@@ -55,6 +55,12 @@ store listings or change configured prices.
 
 ## Review log
 
+- 2026-11-19: Reviewed Teamplay's tribe social verification and its reuse of
+  consent, meetings and voluntary departure in the shared alliance rules.
+  Teamplay's local pacts and groups spend only existing in-game social
+  resources where applicable. The changes do not add a store product or
+  change Classic's paid access, prices, billing or entitlements.
+
 - 2026-11-19: Reviewed Teamplay's Final Five handoff and individual endgame.
   The shared Classic Leader eligibility and Final Four nominee helpers preserve
   the existing Classic rules. Teamplay uses the free Quick Tap Race and a

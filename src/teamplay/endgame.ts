@@ -21,6 +21,7 @@ import {
   type IndividualDecision,
 } from './endgameRules'
 import { realityDecisionView, resolveAiSocial, strategicChoice } from './social'
+import { expireSeparatedRequests, openTribeSocial } from './tribeSocial'
 import type { Attempt, PowerRound, TeamplayState } from './types'
 
 function clock(state: TeamplayState) {
@@ -108,6 +109,7 @@ function startPowerRound(state: TeamplayState, size: 5 | 4) {
   state.phase = size === 5 ? 'finalFive' : 'finalFour'
   state.endgame!.step = 'social'
   state.currentAttemptId = null
+  openTribeSocial(state)
 }
 
 function startEndgame(state: TeamplayState) {
@@ -199,6 +201,7 @@ function evict(state: TeamplayState, actorId: string | undefined, target: string
     state.jurors.push(target)
   state.eliminated.push(target)
   state.individualIds = state.individualIds.filter((id) => id !== target)
+  expireSeparatedRequests(state)
   state.lastExitId = target
   state.endgame!.step = 'departure'
 }

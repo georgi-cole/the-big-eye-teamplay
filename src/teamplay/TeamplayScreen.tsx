@@ -13,7 +13,13 @@ import {
   FLAGS,
   humanBallotRequired,
 } from './engine'
-import { activeIds, socialTargets, TEAMPLAY_SOCIAL_ACTIONS, tribeOf } from './social'
+import {
+  activeIds,
+  socialActionDefinition,
+  socialTargets,
+  TEAMPLAY_SOCIAL_ACTIONS,
+  tribeOf,
+} from './social'
 import { isIndividualCompetition, simulatedScore } from './competition'
 import {
   canContinueIndividual,
@@ -31,6 +37,7 @@ import {
 } from './persistence'
 import { createTeamplayPreview } from './preview'
 import TeamplayRace from './TeamplayRace'
+import TribeSocialPanel from './TribeSocialPanel'
 import type { TeamplayAction, TeamplayPhase, TeamplayState } from './types'
 import './teamplay.css'
 
@@ -197,6 +204,13 @@ function SocialPanel({ state, act, busy }: { state: TeamplayState; act: Act; bus
             })}
           </p>
         ))}
+      {targets.length > 0 && (
+        <TribeSocialPanel
+          state={state}
+          busy={busy}
+          onDecision={(decision) => act({ type: 'tribe_social', decision })}
+        />
+      )}
     </>
   )
 }
@@ -627,6 +641,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
   const [humanId, setHumanId] = useState('finn')
   const [scenario, setScenario] = useState<TeamplayPhase>('opening')
   const [confirmAuto, setConfirmAuto] = useState(false)
+  const [socialNotice, setSocialNotice] = useState<string | null>(null)
   const [archives, setArchives] = useState<ReturnType<typeof listTeamplayArchives>>([])
 
   useEffect(() => {
@@ -661,6 +676,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
       setState(next)
       setError(null)
       setConfirmAuto(false)
+      setSocialNotice(null)
       if (!preview) setArchives(listTeamplayArchives(scope))
     }
     return true
@@ -676,7 +692,15 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
         action.type === 'finish_attempt'
           ? `${action.attemptId}:finish`
           : `${current.id}:ui:${current.revision}:${action.type}`
-      const next = applyTeamplayCommand(current, { id, expectedRevision: current.revision, action })
+      let next: TeamplayState
+      try {
+        next = applyTeamplayCommand(current, { id, expectedRevision: current.revision, action })
+      } catch (failure) {
+        if (action.type !== 'tribe_social') throw failure
+        if (mounted.current)
+          setSocialNotice(failure instanceof Error ? failure.message : String(failure))
+        return false
+      }
       return await commit(next)
     } catch (failure) {
       if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure))
@@ -860,6 +884,11 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
                 </button>
               )}
               <Scene state={state} act={act} busy={busy || !!error} />
+              {socialNotice && (
+                <p className="teamplay-note" role="status">
+                  {socialNotice}
+                </p>
+              )}
               {pendingChoice && (
                 <details>
                   <summary>{t('teamplay.autoChoice')}</summary>
@@ -983,8 +1012,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
                 .filter((entry) => entry.playerId === state.humanId)
                 .map((entry) => {
                   const [kind, actionId] = entry.reason.split(':')
-                  const actionName =
-                    TEAMPLAY_SOCIAL_ACTIONS.find((action) => action.id === actionId)?.title ?? ''
+                  const actionName = socialActionDefinition(actionId)?.title ?? ''
                   const label = actionId
                     ? t(kind === 'cost' ? 'teamplay.socialCost' : 'teamplay.socialYield', {
                         action: actionName,

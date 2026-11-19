@@ -8,7 +8,7 @@ import {
 } from '../social/reality/relationships'
 import { scoreRealityNominationCandidate } from '../social/reality/ceremonies'
 import { getRealityProtectionAlliances } from '../social/reality/relationshipFacts'
-import { allianceKind } from '../social/reality/allianceIdentity'
+import { allianceKind, isCurrentAlliance } from '../social/reality/allianceIdentity'
 import { mulberry32 } from '../store/rng'
 import { seedFor } from './competition'
 import type { Bank, TeamplayState } from './types'
@@ -29,11 +29,25 @@ export function tribeOf(state: TeamplayState, playerId: string) {
   return state.tribes.find((tribe) => tribe.members.includes(playerId))
 }
 
+export function socialCohort(state: TeamplayState, actorId: string): string[] {
+  if (state.stage === 'individual')
+    return state.individualIds.includes(actorId) ? state.individualIds : []
+  return tribeOf(state, actorId)?.members ?? []
+}
+
+export function nominationPlanId(state: TeamplayState, actorId: string, targetId: string) {
+  const stage = state.stage === 'individual' ? state.phase : tribeOf(state, actorId)?.id
+  return `teamplay-nomination:${state.cycle}:${stage}:${targetId}`
+}
+
 export function socialTargets(state: TeamplayState, actorId: string): string[] {
-  if (state.endgame?.step === 'social' && state.individualIds.includes(actorId))
-    return state.individualIds.filter((id) => id !== actorId)
-  if (!['socialOne', 'socialTwo'].includes(state.phase)) return []
-  return (tribeOf(state, actorId)?.members ?? []).filter((id) => id !== actorId)
+  if (state.endgame?.step !== 'social' && !['socialOne', 'socialTwo'].includes(state.phase))
+    return []
+  return socialCohort(state, actorId).filter((id) => id !== actorId)
+}
+
+export function socialActionDefinition(actionId: string) {
+  return SOCIAL_ACTIONS.find((action) => action.id === actionId)
 }
 
 export function resourceChange(
@@ -74,6 +88,30 @@ export function resourceChange(
   })
 }
 
+export function spendSocialAction(
+  state: TeamplayState,
+  actorId: string,
+  actionId: string,
+  numberOfTargets: number,
+  eventId: string
+): void {
+  const action = socialActionDefinition(actionId)
+  if (!action) throw new Error('Unknown social action')
+  const cost = normalizeActionCosts(action, numberOfTargets)
+  const player = state.contestants.find((entry) => entry.id === actorId)!
+  if (Object.entries(cost).some(([key, value]) => player.bank[key as keyof Bank] < value))
+    throw new Error('Insufficient resources')
+  resourceChange(
+    state,
+    actorId,
+    `cost:${actionId}`,
+    { energy: -cost.energy, influence: -cost.influence, info: -cost.info },
+    eventId
+  )
+  if (state.phase === 'socialOne')
+    state.socialOneSpent[actorId] = (state.socialOneSpent[actorId] ?? 0) + cost.energy
+}
+
 export function performSocial(
   state: TeamplayState,
   actorId: string,
@@ -92,19 +130,7 @@ export function performSocial(
     throw new Error(
       state.stage === 'individual' ? 'Choose a remaining contender' : 'Choose a current teammate'
     )
-  const cost = normalizeActionCosts(action, targetId ? 1 : 0)
-  const player = state.contestants.find((entry) => entry.id === actorId)!
-  if (Object.entries(cost).some(([key, value]) => player.bank[key as keyof Bank] < value))
-    throw new Error('Insufficient resources')
-  resourceChange(
-    state,
-    actorId,
-    `cost:${actionId}`,
-    { energy: -cost.energy, influence: -cost.influence, info: -cost.info },
-    eventId
-  )
-  if (state.phase === 'socialOne')
-    state.socialOneSpent[actorId] = (state.socialOneSpent[actorId] ?? 0) + cost.energy
+  spendSocialAction(state, actorId, action.id, targetId ? 1 : 0, eventId)
   const repeats = state.socialActions.filter(
     (entry) =>
       entry.cycle === state.cycle &&
@@ -243,12 +269,38 @@ export function strategicChoice(
       (alliance) => allianceKind(alliance) === 'PACT'
     )
   // Hard pact protection precedes the inherited strategic nomination score.
-  const nonPact = pool.filter((id) => !hasPact(id))
-  const eligible = recruit || !nonPact.length ? pool : nonPact
+  const selectedBetrayal = (targetId: string) =>
+    Object.values(state.reality.relationshipAutonomy.intents).some(
+      (intent) =>
+        intent.ownerId === actorId &&
+        intent.targetId === targetId &&
+        intent.kind === 'UNDERMINE' &&
+        intent.status === 'ACTIVE'
+    )
+  const preferred = pool.filter((id) =>
+    recruit ? hasPact(id) && !selectedBetrayal(id) : !hasPact(id) || selectedBetrayal(id)
+  )
+  const eligible = preferred.length ? preferred : pool
+  const cohort = socialCohort(state, actorId)
+  const knownPlanPressure = (targetId: string) =>
+    !recruit &&
+    cohort.includes(targetId) &&
+    Object.values(state.reality.alliances).some(
+      (alliance) =>
+        isCurrentAlliance(alliance) &&
+        allianceKind(alliance) === 'GROUP' &&
+        alliance.memberIds.includes(actorId) &&
+        alliance.memberIds.some((member) => member !== actorId && cohort.includes(member)) &&
+        alliance.memberPlanBeliefs[actorId]?.includes(nominationPlanId(state, actorId, targetId))
+    )
+      ? 16
+      : 0
   return [...eligible].sort((a, b) => {
     const difference =
-      scoreRealityNominationCandidate(decisionView, actorId, b) -
-      scoreRealityNominationCandidate(decisionView, actorId, a)
+      scoreRealityNominationCandidate(decisionView, actorId, b) +
+      knownPlanPressure(b) -
+      scoreRealityNominationCandidate(decisionView, actorId, a) -
+      knownPlanPressure(a)
     return (
       (recruit ? -difference : difference) ||
       state.contestants.find((player) => player.id === a)!.priority -
