@@ -83,6 +83,14 @@ test('the Pages intro hub starts and resumes a real game under the repository ba
       animations: 'disabled',
       path: test.info().outputPath('teamplay-roster-390.png'),
     })
+    const safeArea = await page.addStyleTag({
+      content: '.teamplay-screen { --tp-safe-top: 47px; --tp-safe-bottom: 34px; }',
+    })
+    await expect(roster).toBeInViewport({ ratio: 1 })
+    await expect(page.getByRole('button', { name: 'Enter the competition' })).toBeInViewport({
+      ratio: 1,
+    })
+    await safeArea.evaluate((style) => style.remove())
     await page.setViewportSize({ width: 320, height: 640 })
     await expect(roster.getByRole('button', { name: /^Inspect / })).toHaveCount(15)
     await expect(roster).toBeInViewport({ ratio: 1 })

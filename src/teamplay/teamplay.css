@@ -14,6 +14,9 @@
   --tp-metal: url('/assets/teamplay/anodized-graphite.webp');
   --tp-tricolor: linear-gradient(90deg, var(--tp-copper), var(--tp-tide) 48%, var(--tp-iris));
   --tp-pad: clamp(12px, 3.6vw, 19px);
+  --tp-safe-top: env(safe-area-inset-top, 0px);
+  --tp-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tp-usable-height: calc(100svh - var(--tp-safe-top) - var(--tp-safe-bottom));
   position: fixed;
   z-index: 50;
   inset: 0;
@@ -46,7 +49,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+  padding-block: var(--tp-safe-top) var(--tp-safe-bottom);
   background:
     linear-gradient(180deg, #0d0c15a8, #0e0c15de 66%, #0e0c16),
     var(--tp-scene-art) center / cover,
@@ -501,7 +504,7 @@
 }
 
 .tp-lobby .teamplay-intro-hero {
-  min-height: clamp(310px, 61svh, 570px);
+  min-height: clamp(250px, calc(var(--tp-usable-height) * 0.61), 570px);
   flex: 1 0 auto;
   padding: clamp(57px, 10.8svh, 112px) var(--tp-pad) 10px;
 }
@@ -878,14 +881,14 @@
 }
 
 .tp-hub-content {
-  --tp-lineup-photo-height: clamp(44px, calc(29svh - 150px), 112px);
+  --tp-lineup-photo-height: clamp(44px, calc(var(--tp-usable-height) * 0.29 - 150px), 112px);
   display: grid;
   align-content: start;
   gap: 9px;
 }
 
 .tp-hub-content .tp-roster-bands[data-count='2'] {
-  --tp-lineup-photo-height: clamp(65px, 16svh, 134px);
+  --tp-lineup-photo-height: clamp(65px, calc(var(--tp-usable-height) * 0.16), 134px);
 }
 
 .tp-monitor {
@@ -1900,7 +1903,7 @@
   }
 
   .tp-hub-content .tp-roster-bands[data-count='2'] {
-    --tp-lineup-photo-height: clamp(54px, 13svh, 84px);
+    --tp-lineup-photo-height: clamp(54px, calc(var(--tp-usable-height) * 0.13), 84px);
   }
 
   .tp-monitor {
