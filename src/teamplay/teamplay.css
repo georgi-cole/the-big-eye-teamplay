@@ -172,6 +172,18 @@
 .teamplay-reserve p {
   margin-bottom: 0;
 }
+.teamplay-individual-roster {
+  grid-column: 1 / -1;
+}
+.teamplay-individual-roster ul {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 18px;
+}
+.teamplay-screen .teamplay-champion {
+  color: #f7cf8f;
+  font-size: clamp(22px, 5vw, 34px);
+}
 .teamplay-result {
   border-bottom: 1px solid #414b65;
   padding: 12px 0;

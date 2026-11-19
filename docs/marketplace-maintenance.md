@@ -55,6 +55,12 @@ store listings or change configured prices.
 
 ## Review log
 
+- 2026-11-19: Reviewed Teamplay's Final Five handoff and individual endgame.
+  The shared Classic Leader eligibility and Final Four nominee helpers preserve
+  the existing Classic rules. Teamplay uses the free Quick Tap Race and a
+  nine-member Tribunal with one vote per member. Store offers, prices, billing,
+  VIP and Premium Challenges access, and paid voting powers do not change.
+
 - 2026-11-17: Reviewed the Teamplay tribe-cycle controller, isolated save slots,
   Classic Quick Tap adapter and accessible engine controls. The first prototype
   uses the existing free Classic rules for both score and duel contexts. Billing,

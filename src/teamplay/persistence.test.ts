@@ -9,7 +9,14 @@ vi.mock('../store/durablePersistence', () => ({
   flushDurablePersistence: async () => storage.flush,
 }))
 import { applyTeamplayCommand, createTeamplay } from './engine'
-import { exportTeamplaySave, loadTeamplay, saveTeamplay } from './persistence'
+import {
+  exportTeamplaySave,
+  listTeamplayArchives,
+  loadTeamplay,
+  readTeamplayArchive,
+  saveTeamplay,
+} from './persistence'
+import { createTeamplayPreview } from './preview'
 
 const scope = 'play:guest'
 const key = 'the-big-eye-teamplay:tribe-season:v1:play%3Aguest'
@@ -19,6 +26,30 @@ beforeEach(() => {
 })
 
 describe('Teamplay durable saves', () => {
+  it('keeps an unfinished Tribunal choice in the profile archive and resumes it without voting', async () => {
+    const pending = await createTeamplayPreview('tribunal')
+    expect(pending.jurors).toContain(pending.humanId)
+    await saveTeamplay(scope, pending, null)
+    const nextSeason = createTeamplay(4, 'finn', 'next-season')
+    await saveTeamplay(scope, nextSeason, pending)
+    expect(listTeamplayArchives(scope)).toEqual([
+      { id: pending.id, contestant: 'Finn', champion: null, phase: 'tribunal' },
+    ])
+    expect(listTeamplayArchives('play:other-profile')).toEqual([])
+    const resumed = readTeamplayArchive(scope, pending.id)
+    await saveTeamplay(scope, resumed, nextSeason)
+    const loaded = (await loadTeamplay(scope)).state!
+    expect(loaded).toEqual(JSON.parse(JSON.stringify(pending)))
+    expect(loaded.endgame?.votes).toEqual({})
+    expect(() =>
+      applyTeamplayCommand(loaded, {
+        id: 'no-implicit-vote',
+        expectedRevision: loaded.revision,
+        action: { type: 'continue' },
+      })
+    ).toThrow('Make your choice')
+  }, 15000)
+
   it('saves and reloads the same frozen attempt and previous checkpoint', async () => {
     const initial = createTeamplay(42, 'finn', 'saved')
     await saveTeamplay(scope, initial, null)

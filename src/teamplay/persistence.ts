@@ -15,6 +15,56 @@ function decode(raw: string): TeamplayState {
   return parsed
 }
 
+export interface TeamplayArchiveEntry {
+  id: string
+  contestant: string
+  champion: string | null
+  phase: TeamplayState['phase']
+}
+
+function archiveKey(scope: string, seasonId: string) {
+  return `${keyFor(scope)}:archive:${seasonId}`
+}
+
+export function listTeamplayArchives(scope: string): TeamplayArchiveEntry[] {
+  try {
+    const entries: unknown = JSON.parse(getDurableItem(`${keyFor(scope)}:archiveIndex`) ?? '[]')
+    if (!Array.isArray(entries)) return []
+    return entries.filter(
+      (entry): entry is TeamplayArchiveEntry =>
+        entry &&
+        typeof entry.id === 'string' &&
+        typeof entry.contestant === 'string' &&
+        (entry.champion === null || typeof entry.champion === 'string') &&
+        typeof entry.phase === 'string'
+    )
+  } catch {
+    return []
+  }
+}
+
+export function readTeamplayArchive(scope: string, seasonId: string): TeamplayState {
+  const raw = getDurableItem(archiveKey(scope, seasonId))
+  if (!raw) throw new Error('This archived season could not be found.')
+  return decode(raw)
+}
+
+function storeTeamplayArchive(scope: string, previous: TeamplayState): boolean {
+  const entries = listTeamplayArchives(scope).filter((entry) => entry.id !== previous.id)
+  const entry: TeamplayArchiveEntry = {
+    id: previous.id,
+    contestant: previous.contestants.find((player) => player.id === previous.humanId)!.name,
+    champion:
+      previous.contestants.find((player) => player.id === previous.endgame?.championId)?.name ??
+      null,
+    phase: previous.phase,
+  }
+  return (
+    setDurableItem(archiveKey(scope, previous.id), JSON.stringify(previous)) &&
+    setDurableItem(`${keyFor(scope)}:archiveIndex`, JSON.stringify([entry, ...entries]))
+  )
+}
+
 export interface LoadedTeamplay {
   state: TeamplayState | null
   recovered: boolean
@@ -99,7 +149,8 @@ export async function saveTeamplay(
     validateTeamplay(previous)
     if (
       previous.id !== state.id &&
-      !setDurableItem(`${key}:archive:${previous.id}`, JSON.stringify(previous))
+      !scope.startsWith('preview:') &&
+      !storeTeamplayArchive(scope, previous)
     )
       throw new Error('The old season could not be archived. Nothing was restarted.')
     if (!setDurableItem(`${key}:checkpoint`, JSON.stringify(previous)))

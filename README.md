@@ -1,6 +1,6 @@
 # The Big Eye Teamplay
 
-Standalone Teamplay adaptation of The Big Eye. This checkout includes a **playable tribe-stage development prototype** and the retained Classic baseline. Teamplay runs three tribes, secret weighted ballots, separate nominee/reserve duels, captures, the eight-player merger and Final Five fusion. The individual Classic endgame handoff and full social/game pools remain later work.
+Standalone Teamplay adaptation of The Big Eye. A playable season runs through three tribes, secret weighted ballots, nominee and reserve duels, captures, the eight-player merger, and Final Five fusion. The five qualifiers continue into the Classic individual rounds and a nine-member Tribunal vote.
 
 Source pin: `georgi-cole/bbmobilenew-source@50676d77b76362b7d8461c23ca7c7473b7b66bdb`.
 
@@ -13,8 +13,9 @@ No original-app environment file or credential is required. Native billing, adve
 ## Play and inspect Teamplay
 
 - Play: `/the-big-eye-teamplay/#/teamplay`. Choose an existing contestant and create a season. Every decision is saved before its result appears. A human can play the existing 30-second Classic Quick Tap engine, explicitly delegate a performance to its saved AI skill model, or watch an AI-only competition.
-- Test page: run `npm run dev -- --port 4198`, then open `http://127.0.0.1:4198/the-big-eye-teamplay/#/teamplay-preview`. Its scene selector reaches actual engine states, including both duel results, capture, merger and fusion. Test saves are separate from playable seasons. The route is omitted from ordinary release builds; `VITE_ENABLE_QA_ROUTES=true` enables it for an intentional QA build.
-- Prototype scope: one existing game in both competition contexts and five direct social actions. There is no fabricated winner, paid revive or Classic endgame jump. An interrupted race can restart the same saved challenge. A human reserve can skip AI-only phases to the next defence and retain the public recap.
+- Test page: run `npm run dev -- --port 4198`, then open `http://127.0.0.1:4198/the-big-eye-teamplay/#/teamplay-preview`. Jump to actual saved states for fusion, Final Five, Final Four, Final Three, Tribunal, or the completed season. The test route uses a separate save and needs `VITE_ENABLE_QA_ROUTES=true` in a built bundle.
+- The current season and the Teamplay archive belong to the active profile. Starting another season archives the previous one, including any pending decision. Open the archive from Teamplay to review or resume it.
+- The prototype uses Quick Tap Race for all competitions and five direct social actions. An interrupted race restarts the same challenge. A human reserve can skip AI-only phases to the next defence and retain the public recap.
 - See [cycle implementation, rule trace and remaining gaps](docs/teamplay/CYCLE_ENGINE_STATUS.md).
 
 ## Review the foundation

@@ -99,6 +99,7 @@ import {
   preTribunalExitCount,
   resolveTribunalSize,
 } from '../rules/tribunalPolicy'
+import { classicFinalFourNominees, classicLohEntrants } from '../rules/classicEndgame'
 import { joinPublicAssetPath, profilePhotoAvatar, resolveAvatar } from '../utils/avatar'
 import { getAppearanceAsset } from '../appearance/catalog'
 import {
@@ -4824,13 +4825,7 @@ function resolveCompetitionParticipants(state: GameState): string[] {
   const alive = getAlivePlayers(state)
   const aliveIds = alive.map((p) => p.id)
   if (state.phase === 'loh_comp' && !isVoxPopuliActive(state)) {
-    const outgoingLohIds = new Set(expandCupidIds(state, getMissionOutgoingIds(state)))
-    const eligible = alive.filter((p) => !outgoingLohIds.has(p.id))
-    if (eligible.length > 0) {
-      return eligible.map((p) => p.id)
-    }
-    // Edge case: only the outgoing LOH remains alive; allow them for updates.
-    return aliveIds
+    return classicLohEntrants(aliveIds, expandCupidIds(state, getMissionOutgoingIds(state)))
   }
   return aliveIds
 }
@@ -4966,12 +4961,13 @@ function applyPosWinner(state: GameState, winnerId: string, alive: Player[]): Ph
   // ── Final 4 bypass (skip ceremony; POS holder has sole eviction vote) ──
   // This rule always applies at Final 4 regardless of any config flags.
   if (alive.length === 4 && !isVoxPopuliActive(state)) {
-    let f4Nominees = alive.filter((pl) => pl.id !== state.lohId && pl.id !== state.posWinnerId)
-    // Edge case: LOH wins POS → same ID excluded twice, leaving 3 candidates.
-    // Fall back to the original nominees from the nominations phase.
-    if (f4Nominees.length !== 2 && state.nomineeIds.length === 2) {
-      f4Nominees = alive.filter((pl) => state.nomineeIds.includes(pl.id))
-    }
+    const nomineeIds = classicFinalFourNominees(
+      alive.map((player) => player.id),
+      state.lohId,
+      winnerId,
+      state.nomineeIds
+    )
+    const f4Nominees = alive.filter((player) => nomineeIds.includes(player.id))
     if (f4Nominees.length === 2) {
       const f4Names = f4Nominees.map((pl) => pl.name).join(' and ')
       state.nomineeIds = f4Nominees.map((pl) => pl.id)
