@@ -2,14 +2,16 @@ name: Teamplay Pages
 
 on:
   push:
-    branches: [main, feat/teamplay-first-cycle-ui]
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: teamplay-pages
+  group: teamplay-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -25,12 +27,13 @@ jobs:
           node-version: 22
           cache: npm
       - uses: actions/configure-pages@v5
+        if: github.ref == 'refs/heads/main'
         id: pages
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Build and test the Teamplay review site
         env:
-          VITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+          VITE_BASE_PATH: ${{ steps.pages.outcome == 'success' && format('{0}/', steps.pages.outputs.base_path) || format('/{0}/', github.event.repository.name) }}
           VITE_TEAMPLAY_REVIEW: 'true'
           VITE_ENABLE_QA_ROUTES: 'false'
           VITE_BUILD_ID: ${{ github.sha }}
@@ -38,10 +41,12 @@ jobs:
           npm run build
           npx playwright test --config=playwright.teamplay-pages.config.ts
       - uses: actions/upload-pages-artifact@v4
+        if: github.ref == 'refs/heads/main'
         with:
           path: dist
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
