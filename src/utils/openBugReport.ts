@@ -10,6 +10,8 @@ type FeedbackWindow = Window & {
   __bigEyeFeedbackContext?: FeedbackGameContext
 }
 
+export const BUG_REPORT_EMAIL = 'kolequant@gmail.com'
+
 /**
  * Allows players to report problems without leaving a running season.
  * The legacy IntroHub script owns the shared feedback dialog; on a direct
@@ -35,7 +37,7 @@ export function openBugReportFromGame(context: FeedbackGameContext): void {
     'error',
     () => {
       // A usable fallback when the feedback runtime itself cannot be loaded.
-      window.location.href = 'mailto:kolequant@gmail.com?subject=The%20Big%20Eye%20bug%20report'
+      window.location.href = `mailto:${BUG_REPORT_EMAIL}?subject=The%20Big%20Eye%20bug%20report`
     },
     { once: true }
   )

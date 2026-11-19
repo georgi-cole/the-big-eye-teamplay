@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { getAll } from '../data/houseguests'
 import { useI18n } from '../i18n'
+import { SoundManager } from '../services/sound/SoundManager'
 import { ContestantPortrait, CyclePath, TeamplayIcon } from './TeamplayPresentation'
 import { nameOf, tribeAccent } from './presentationTheme'
 import { socialTargets, tribeOf } from './social'
@@ -27,7 +28,10 @@ export function GameDock({
           type="button"
           aria-pressed={active === module}
           disabled={disabled}
-          onClick={() => onOpen(module)}
+          onClick={() => {
+            void SoundManager.play('ui:navigate')
+            onOpen(module)
+          }}
         >
           <TeamplayIcon name={module} />
           <span>{t(`teamplay.${module}`)}</span>
@@ -52,26 +56,21 @@ function BroadcastCopy({ entry }: { entry: Broadcast }) {
 export function BroadcastMonitor({ state, onOpen }: { state: TeamplayState; onOpen: () => void }) {
   const { t } = useI18n()
   const latest = publicBroadcasts(state)[0]
+  const headline =
+    typeof latest.title === 'string' ? latest.title : t(latest.title.key, latest.title.values)
   return (
     <section className="tp-monitor" aria-label={t('teamplay.broadcast')}>
-      <div className="tp-monitor-head">
-        <span>{t('teamplay.onAir')}</span>
-        <button className="tp-quiet" type="button" onClick={onOpen}>
-          {t('teamplay.events')} <span aria-hidden="true">›</span>
-        </button>
-      </div>
-      <div className="tp-monitor-title">
-        <span>{t('teamplay.currentEvent')}</span>
-        <h2 tabIndex={-1} data-view-title>
-          {t(`teamplay.phase.${state.phase}`)}
-        </h2>
-      </div>
-      <div className="tp-monitor-message" key={latest.id} data-tone={latest.tone} role="status">
+      <h2 tabIndex={-1} data-view-title>
+        {t(`teamplay.phase.${state.phase}`)}
+      </h2>
+      <button className="tp-monitor-message" data-tone={latest.tone} type="button" onClick={onOpen}>
         <TeamplayIcon name="events" />
-        <div>
-          <BroadcastCopy entry={latest} />
-        </div>
-      </div>
+        <span className="tp-visually-hidden">{t('teamplay.events')}</span>
+        <span role="status">
+          {state.phase === 'opening' ? t('teamplay.openingSignal') : <strong>{headline}</strong>}
+        </span>
+        <span className="tp-chevron" aria-hidden="true" />
+      </button>
       <CyclePath phase={state.phase} />
     </section>
   )
@@ -132,79 +131,97 @@ export function TribeRoster({
   expanded?: boolean
 }) {
   const { t } = useI18n()
-  const home = tribeOf(state, state.humanId)
-  const [picked, setPicked] = useState<string | null>(null)
-  const tribe = state.tribes.find((entry) => entry.id === picked) ?? home ?? state.tribes[0]
-  const currentTribes = !['reserveResult', 'capture', 'merge', 'recap', 'fusion'].includes(
-    state.phase
-  )
+  const currentTribes =
+    state.stage !== 'individual' &&
+    !['reserveResult', 'capture', 'merge', 'recap', 'fusion'].includes(state.phase)
   const immune = currentTribes ? state.teamResults[0]?.tribeId : undefined
-  const members = tribe?.members ?? state.individualIds
+  const bands = state.tribes.length
+    ? state.tribes.map((tribe) => ({ tribe, members: tribe.members }))
+    : [{ tribe: undefined, members: state.individualIds }]
+  const reserve = state.contestants.find((player) => player.id === state.reserveId)
   return (
-    <section className="tp-roster" style={tribeAccent(tribe)} aria-label={t('teamplay.roster')}>
-      <div className="tp-roster-head">
-        {expanded ? (
-          <h2 tabIndex={-1} data-view-title>
-            {t(state.stage === 'individual' ? 'teamplay.individual.roster' : 'teamplay.tribes')}
-          </h2>
-        ) : (
-          <h3>
-            {t(state.stage === 'individual' ? 'teamplay.individual.roster' : 'teamplay.roster')}
-          </h3>
-        )}
-        {tribe && tribe.id === home?.id && <span>{t('teamplay.yourTribe')}</span>}
-      </div>
-      {!!state.tribes.length && (
-        <ul className="tp-tribe-tabs" aria-label={t('teamplay.tribes')}>
-          {state.tribes.map((entry) => (
-            <li key={entry.id} style={tribeAccent(entry)}>
-              <button
-                type="button"
-                aria-pressed={entry.id === tribe?.id}
-                onClick={() => setPicked(entry.id)}
+    <section className="tp-roster" aria-label={t('teamplay.roster')}>
+      {expanded && (
+        <h2 tabIndex={-1} data-view-title>
+          {t(state.stage === 'individual' ? 'teamplay.individual.roster' : 'teamplay.tribes')}
+        </h2>
+      )}
+      <ul
+        className="tp-roster-bands"
+        aria-label={t('teamplay.tribes')}
+        data-count={state.tribes.length}
+      >
+        {bands.map(({ tribe, members }) => {
+          const home = !!tribe && members.includes(state.humanId)
+          const safe = !!tribe && tribe.id === immune
+          return (
+            <li
+              key={tribe?.id ?? 'individual'}
+              className="tp-tribe-band"
+              data-tribe={tribe?.id}
+              data-home={home || undefined}
+              style={tribeAccent(tribe)}
+            >
+              {tribe && (
+                <div className="tp-tribe-name">
+                  <span className="tp-tribe-sigil" aria-hidden="true" />
+                  <strong>{tribe.name}</strong>
+                  {home && <span className="tp-visually-hidden">{t('teamplay.yourTribe')}</span>}
+                  {safe && (
+                    <span className="tp-tribe-immune" title={t('teamplay.roster.immunity')}>
+                      {t('teamplay.roster.safe')}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div
+                className="tp-lineup"
+                role="group"
+                aria-label={tribe?.name ?? t('teamplay.individual.roster')}
               >
-                <span className="tp-tribe-flag" aria-hidden="true" />
-                {entry.name}
-                <small aria-label={t('teamplay.memberCount', { count: entry.members.length })}>
-                  {entry.members.length}
-                </small>
-              </button>
+                {members.map((id) => {
+                  const captain = tribe?.captainId === id
+                  const nominee = currentTribes && state.nominees.includes(id)
+                  const status = [
+                    id === state.humanId ? t('teamplay.you') : '',
+                    captain ? t('teamplay.captain') : '',
+                    nominee ? t('teamplay.nominee') : '',
+                  ]
+                    .filter(Boolean)
+                    .join(', ')
+                  return (
+                    <button
+                      type="button"
+                      key={id}
+                      className="tp-roster-person"
+                      aria-label={t('teamplay.roster.pick', { name: nameOf(state, id) })}
+                      aria-description={status || undefined}
+                      onClick={() => onInspect(id)}
+                    >
+                      <ContestantPortrait
+                        state={state}
+                        id={id}
+                        captain={captain}
+                        nominee={nominee}
+                      />
+                    </button>
+                  )
+                })}
+              </div>
             </li>
-          ))}
-        </ul>
-      )}
-      {tribe && tribe.id === immune && (
-        <p className="tp-tribe-immune">{t('teamplay.roster.immunity')}</p>
-      )}
-      <div className="teamplay-home-lineup tp-lineup">
-        {members.map((id) => (
-          <button
-            type="button"
-            key={id}
-            className="tp-roster-person"
-            aria-label={t('teamplay.roster.pick', { name: nameOf(state, id) })}
-            onClick={() => onInspect(id)}
-          >
-            <ContestantPortrait
-              state={state}
-              id={id}
-              mark={tribe?.captainId === id ? t('teamplay.roster.captainMark') : undefined}
-              detail={
-                currentTribes && state.nominees.includes(id) ? t('teamplay.nominee') : undefined
-              }
-            />
-          </button>
-        ))}
-      </div>
-      {state.reserveId && (
+          )
+        })}
+      </ul>
+      {reserve && (
         <button
           className="tp-reserve-seat tp-quiet"
           type="button"
-          onClick={() => onInspect(state.reserveId!)}
+          onClick={() => onInspect(reserve.id)}
         >
-          <span>{t('teamplay.reserve')}</span>
-          <strong>{nameOf(state, state.reserveId)}</strong>
-          <span aria-hidden="true">›</span>
+          <img src={reserve.avatar} alt="" />
+          <strong>{reserve.name}</strong>
+          <span className="tp-reserve-label">{t('teamplay.reserve')}</span>
+          <span className="tp-chevron" aria-hidden="true" />
         </button>
       )}
       {expanded &&
@@ -221,7 +238,7 @@ export function TribeRoster({
                 {ids.map((id) => (
                   <li key={id}>
                     <button type="button" className="tp-quiet" onClick={() => onInspect(id)}>
-                      {nameOf(state, id)} <span aria-hidden="true">›</span>
+                      {nameOf(state, id)} <span className="tp-chevron" aria-hidden="true" />
                     </button>
                   </li>
                 ))}

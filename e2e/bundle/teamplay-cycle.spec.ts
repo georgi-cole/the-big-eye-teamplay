@@ -44,19 +44,20 @@ test('Teamplay completes a cycle after a real race and a saved Social 1 reload',
   await expect(page.getByRole('heading', { name: 'Meet your tribes' })).toBeVisible()
   await expect(page.getByRole('list', { name: 'Tribes' }).getByRole('listitem')).toHaveCount(3)
   await expect(page.locator('.teamplay-cycle-path [aria-current="step"]')).toHaveText('Tribes')
-  await expect(page.locator('.teamplay-home-lineup .teamplay-portrait')).toHaveCount(5)
+  const roster = page.getByRole('region', { name: 'Tribe roster' })
+  for (const tribe of ['Ember', 'Tide', 'Iris']) {
+    const lineup = roster.getByRole('group', { name: tribe, exact: true })
+    await expect(lineup.getByRole('button', { name: /^Inspect / })).toHaveCount(5)
+    await expect(lineup).toBeInViewport({ ratio: 1 })
+  }
   await expect(page.getByRole('region', { name: 'The Big Eye broadcast' })).toBeInViewport()
   await expect(page.getByRole('region', { name: 'Tribe roster' })).toBeInViewport({ ratio: 1 })
   const dock = page.getByRole('navigation', { name: 'Game modules' })
   await expect(dock).toBeInViewport({ ratio: 1 })
   await expect(page.locator('.teamplay-screen select, .teamplay-screen details')).toHaveCount(0)
   await dock.getByRole('button', { name: 'Tribes' }).click()
-  await page.getByRole('list', { name: 'Tribes' }).getByRole('button', { name: /Tide/ }).click()
-  await expect(
-    page.getByRole('list', { name: 'Tribes' }).getByRole('button', { name: /Tide/ })
-  ).toHaveAttribute('aria-pressed', 'true')
-  await page
-    .getByRole('region', { name: 'Tribe roster' })
+  await roster
+    .getByRole('group', { name: 'Tide', exact: true })
     .getByRole('button', { name: /^Inspect / })
     .first()
     .click()
@@ -164,7 +165,7 @@ test('Teamplay completes a cycle after a real race and a saved Social 1 reload',
   await expect(page.getByRole('heading', { name: 'Cycle recap', exact: true })).toBeVisible()
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.getByRole('heading', { name: 'Cycle recap', exact: true })).toBeVisible()
-  await expect(page.locator('.teamplay-count')).toHaveText('Cycle 1 · 14 active · 15 contenders')
+  await expect(page.locator('.teamplay-count')).toHaveText('Cycle 1 · 14 active')
   await expect(page.getByRole('region', { name: 'The Big Eye broadcast' })).toContainText(
     'leaves the house'
   )

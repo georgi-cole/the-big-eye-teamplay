@@ -519,7 +519,6 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
                   : t('teamplay.cycle', {
                       cycle: live.cycle,
                       active: activeIds(live).length,
-                      contenders: live.contestants.length - live.eliminated.length,
                     })}
               </p>
             )}
@@ -574,7 +573,8 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
           <div className="tp-bank-strip">
             <ul className="tp-bank" aria-label={t('teamplay.resources')}>
               {(['energy', 'influence', 'info'] as const).map((resource) => (
-                <li key={resource}>
+                <li key={resource} data-resource={resource}>
+                  <span className="tp-resource-sigil" aria-hidden="true" />
                   <span>{t(`teamplay.resource.${resource}`)}</span>
                   <b>{human.bank[resource]}</b>
                 </li>
