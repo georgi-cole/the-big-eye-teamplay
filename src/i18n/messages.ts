@@ -1,6 +1,8 @@
 import type { AppLanguage } from './languages'
+import { TEAMPLAY_MESSAGES } from '../teamplay/messages'
 
 export const EN_US_MESSAGES = {
+  ...TEAMPLAY_MESSAGES,
   'settings.weekends': 'Weekends',
   'settings.weekendsDescription':
     'Take a weekend break with the Hub after Days 5, 10 and 15. Turn off to keep playing straight through.',
@@ -172,8 +174,11 @@ export type TranslationKey = keyof typeof EN_US_MESSAGES
 export type TranslationParams = Readonly<Record<string, string | number>>
 export type Translate = (key: TranslationKey, params?: TranslationParams) => string
 
-type MessageCatalog = Record<TranslationKey, string>
-type PartialMessageCatalog = Partial<MessageCatalog>
+// Teamplay ships English first. Keep every established translation mandatory
+// while allowing the new namespace to use the normal English fallback.
+type MessageCatalog = Record<Exclude<TranslationKey, keyof typeof TEAMPLAY_MESSAGES>, string> &
+  Partial<Record<keyof typeof TEAMPLAY_MESSAGES, string>>
+type PartialMessageCatalog = Partial<Record<TranslationKey, string>>
 
 const EN_GB_MESSAGES = {
   'settings.vipUnlock': 'Unlock premium modes and advert-free play',

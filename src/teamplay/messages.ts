@@ -1,0 +1,145 @@
+/** English-first development slice. Other locales use the existing English
+ * fallback; their established translation coverage remains mandatory. */
+export const TEAMPLAY_MESSAGES = {
+  'teamplay.title': 'The Big Eye Teamplay',
+  'teamplay.play': 'Play Teamplay',
+  'teamplay.development': 'Teamplay development',
+  'teamplay.scope': 'Tribe-stage prototype · Quick Tap Race · Classic endgame comes next',
+  'teamplay.loading': 'Opening your saved season…',
+  'teamplay.saved': 'Saved',
+  'teamplay.saving': 'Saving…',
+  'teamplay.home': 'Home',
+  'teamplay.newSeason': 'New season',
+  'teamplay.chooseContestant': 'Your contestant',
+  'teamplay.begin': 'Create season',
+  'teamplay.restartWarning': 'Start a new season? Your previous season will be archived.',
+  'teamplay.confirmRestart': 'Archive and start new season',
+  'teamplay.cancel': 'Cancel',
+  'teamplay.continue': 'Continue',
+  'teamplay.cycle': 'Cycle {cycle} · {active} active · {contenders} contenders',
+  'teamplay.reserve': 'Neutral reserve',
+  'teamplay.skipDefence': 'Skip to my next defence',
+  'teamplay.history': 'Public cycle recap',
+  'teamplay.you': 'You',
+  'teamplay.captain': 'Captain',
+  'teamplay.immune': 'Immune',
+  'teamplay.nominee': 'Nominee',
+  'teamplay.challenger': 'Challenger',
+  'teamplay.eliminated': 'Permanently eliminated',
+  'teamplay.bank': 'Energy {energy} · Influence {influence} · Info {info}',
+  'teamplay.priority': 'Season priority {priority}',
+  'teamplay.flagPriority': 'Flag priority: Ember 1 · Tide 2 · Iris 3',
+  'teamplay.historyItem': '{exit} left permanently · continuing reserve: {reserve}',
+  'teamplay.openingHelp':
+    'Three tribes of five. One neutral reserve. Team averages decide immunity; each losing tribe nominates one teammate. The two duels create exactly one permanent departure.',
+  'teamplay.competitionHelp':
+    'Quick Tap Race · 30 seconds · higher score wins. Tribe results use every active member’s effective score. The reserve does not compete.',
+  'teamplay.tieHelp':
+    'An exact duel tie replays once with the next saved seed. If it ties again, the better published season priority wins.',
+  'teamplay.replayHelp':
+    'The first attempt tied. This is the one allowed replay; its challenge was fixed when the season began.',
+  'teamplay.priorityApplied':
+    'Both attempts tied. {name} wins by published season priority {priority}.',
+  'teamplay.raceStart': 'Play the 30-second race',
+  'teamplay.raceRestart': 'Restart the same attempt',
+  'teamplay.raceRecovery':
+    'An interrupted attempt restarts with the same challenge and opponents’ saved performances. No score or forfeit is invented.',
+  'teamplay.raceUnavailable':
+    'The race could not start. No result was submitted. Retry the same attempt.',
+  'teamplay.raceInterrupted':
+    'Race paused by an interruption. Restart the same saved attempt when ready.',
+  'teamplay.tap': 'Tap',
+  'teamplay.booster': 'Collect visible booster',
+  'teamplay.raceScore': '{score} points · {seconds}s remaining',
+  'teamplay.delegateRace': 'Delegate this performance',
+  'teamplay.delegatePreview':
+    'Delegate to your contestant’s existing AI skill model? Its saved performance will be {score} points. This will count as your result.',
+  'teamplay.confirmDelegate': 'Use this performance',
+  'teamplay.spectator': 'Reveal AI competition',
+  'teamplay.teamArithmetic': '{total} total ÷ {count} players = {mean} points',
+  'teamplay.rankingHelp':
+    'Ties: team’s best performance, previous team rank, then published flag priority. Captain ties: previous individual rank, then season priority. Display rounding never decides the outcome.',
+  'teamplay.socialHelp':
+    'Only current teammates can interact. Continue whenever you are ready. Social 2 cannot change the locked nominations.',
+  'teamplay.noSocial':
+    'Reserve and eliminated contestants have no social turn. Continue to watch the public results.',
+  'teamplay.secondWind':
+    'Second wind: {spent}/4 Energy spent in Social 1. Spending at least four earns +3 Energy in Social 2.',
+  'teamplay.target': 'Choose a teammate',
+  'teamplay.action': 'Social action',
+  'teamplay.actionCost': 'Submit · {energy} Energy · {influence} Influence · {info} Info',
+  'teamplay.socialOutcome': '{actor} → {target}: affinity change {delta}',
+  'teamplay.voteHelp':
+    'One secret non-self ballot per member. Your captain’s ballot weighs two. In three tribes, each losing tribe nominates one; in two tribes, the losing tribe nominates two.',
+  'teamplay.voteLocked':
+    'Your ballot is locked. Other contestants’ ballot identities remain private.',
+  'teamplay.noVote': 'No ballot is required from you this cycle.',
+  'teamplay.lockVote': 'Lock secret ballot',
+  'teamplay.cutoffHelp':
+    'Captain decision: choose exactly {count} nominee(s) from this tied cutoff pool. You may choose yourself. This choice is free.',
+  'teamplay.confirmChoice': 'Confirm choice',
+  'teamplay.autoChoice': 'Delegate this choice',
+  'teamplay.autoChoiceHelp':
+    'This explicitly delegates the pending choice to the existing relationship strategy. Your selection will be saved before it is shown.',
+  'teamplay.nominationTotal': '{name}: {votes} weighted votes',
+  'teamplay.automaticPair':
+    'The losing tribe has two members. Both are nominated automatically; no ballots are cast.',
+  'teamplay.nomineeResult':
+    '{winner} stays in their tribe. {challenger} now challenges the reserve. Nobody has been permanently eliminated by this duel.',
+  'teamplay.reserveResult':
+    '{reserve} is the continuing neutral reserve. {exit} is permanently eliminated. The challenger’s old tribe is one member smaller.',
+  'teamplay.captureHelp':
+    '{recipient} captures one current member from {donor}. The recipient captain chooses. Relationships and resources are preserved.',
+  'teamplay.mergeHelp':
+    '{retired} retires its flag. Surviving tribes draft to four members each. {tribe} picks next.',
+  'teamplay.recap':
+    'One permanent departure: {exit}. Continuing reserve: {reserve}. The next cycle starts only when you continue.',
+  'teamplay.milestoneEight':
+    'At eight active contestants: third place retires its flag and two tribes of four remain.',
+  'teamplay.milestoneFour':
+    'At four active contestants: the surviving reserve joins them for individual Final Five, after the last reserve defence.',
+  'teamplay.fusionHelp':
+    'These five have qualified for individual play. Tribe powers are retired and the reserve’s bank is preserved. Connecting the Classic Final Five endgame is the next package.',
+  'teamplay.recovered':
+    'Recovered the last valid checkpoint. The damaged original save was retained. Retry the same pending event.',
+  'teamplay.export': 'Export saved season',
+  'teamplay.receipts': 'Your resource history',
+  'teamplay.resource.energy': 'Energy',
+  'teamplay.resource.influence': 'Influence',
+  'teamplay.resource.info': 'Info',
+  'teamplay.resourceChange':
+    '{resource}: {before} → {after} · requested {requested} · applied {credited} · overflow {overflow}',
+  'teamplay.grant.socialOne': 'Social 1 refill',
+  'teamplay.grant.secondWind': 'Social 2 second wind',
+  'teamplay.grant.podium1': 'Competition first place',
+  'teamplay.grant.podium2': 'Competition second place',
+  'teamplay.grant.podium3': 'Competition third place',
+  'teamplay.grant.nomination': 'Nomination grant',
+  'teamplay.grant.nomineeSurvival': 'Survived the nominee duel',
+  'teamplay.socialCost': '{action} · cost',
+  'teamplay.socialYield': '{action} · outcome',
+  'teamplay.receipt': '{reason}: Energy {energy}, Influence {influence}, Info {info}',
+  'teamplay.recoveryHelp':
+    'Progression is paused. The saved checkpoint is retained. Export it for diagnosis or retry loading.',
+  'teamplay.retry': 'Retry loading',
+  'teamplay.preview': 'Teamplay test page',
+  'teamplay.previewHelp':
+    'Review scenes using the real engine and explicit delegated performances. Test saves are separate from your playable season.',
+  'teamplay.scenario': 'Jump to a scene',
+  'teamplay.phase.opening': 'Meet your tribes',
+  'teamplay.phase.teamCompetition': 'Team competition',
+  'teamplay.phase.teamResults': 'Team results & captains',
+  'teamplay.phase.socialOne': 'Social 1',
+  'teamplay.phase.ballots': 'Secret nominations',
+  'teamplay.phase.nominationTies': 'Captain cutoff decision',
+  'teamplay.phase.nominations': 'Nomination reveal',
+  'teamplay.phase.socialTwo': 'Social 2',
+  'teamplay.phase.nomineeDuel': 'Nominee duel',
+  'teamplay.phase.nomineeResult': 'Nominee duel result',
+  'teamplay.phase.reserveDuel': 'Reserve duel',
+  'teamplay.phase.reserveResult': 'Reserve duel result',
+  'teamplay.phase.capture': 'Capture window',
+  'teamplay.phase.merge': 'Two-tribe merger',
+  'teamplay.phase.recap': 'Cycle recap',
+  'teamplay.phase.fusion': 'Individual Final Five',
+} as const

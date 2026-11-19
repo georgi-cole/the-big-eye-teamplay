@@ -55,6 +55,12 @@ store listings or change configured prices.
 
 ## Review log
 
+- 2026-11-17: Reviewed the Teamplay tribe-cycle controller, isolated save slots,
+  Classic Quick Tap adapter and accessible engine controls. The first prototype
+  uses the existing free Classic rules for both score and duel contexts. Billing,
+  advertising and the original catalog remain disabled for Teamplay. No original
+  VIP entitlement, paid feature, product price or Premium Challenges rule changes.
+
 - 2026-11-14: Reviewed automatic TestFlight delivery and signed Android upload
   bundles. Builds preserve production account services, disable development
   entitlements, and use existing signing identities. Store offers, products,

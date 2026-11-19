@@ -103,7 +103,8 @@ export default function App() {
       // A fresh install creates the initial Season 1 state before the async
       // live-config request returns. Attach the Director only while that season
       // is still untouched; active/saved seasons keep their original snapshot.
-      store.dispatch(refreshSeasonDirectorPlan())
+      if (!router.state.location.pathname.startsWith('/teamplay'))
+        store.dispatch(refreshSeasonDirectorPlan())
     }
 
     const handleVisibilityChange = () => {
@@ -140,19 +141,23 @@ export default function App() {
   return (
     <Provider store={store}>
       <I18nProvider>
-        <VipAmbushDirector />
+        {!hash.startsWith('#/teamplay') && <VipAmbushDirector />}
         {IS_PUBLIC_QA_BUILD && (
           <div className="public-qa-banner" role="status">
             QA
           </div>
         )}
         {EXTERNAL_SERVICES_ENABLED && <LiveOpsController />}
-        <FauxTvProgrammingController />
-        <WeatherController />
-        <WeatherBulletinOverlay />
-        <WeatherRosterReveal active={/^#\/game(?:[/?]|$)/.test(hash)} />
-        <SeasonStartOnboardingController />
-        <DepressionShockController />
+        {!hash.startsWith('#/teamplay') && (
+          <>
+            <FauxTvProgrammingController />
+            <WeatherController />
+            <WeatherBulletinOverlay />
+            <WeatherRosterReveal active={/^#\/game(?:[/?]|$)/.test(hash)} />
+            <SeasonStartOnboardingController />
+            <DepressionShockController />
+          </>
+        )}
         <AudioStateSync hash={hash} />
         <RouteLoopAudioSync hash={hash} />
         {EXTERNAL_SERVICES_ENABLED && <VipEntitlementSync />}
