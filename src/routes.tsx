@@ -153,6 +153,11 @@ const teamplayRoute = {
 
 const appRoutes: RouteObject[] = [
   teamplayRoute,
+  {
+    path: '/teamplay-hub',
+    element: load(<TeamplayIntroHub />),
+    errorElement: <RouteErrorBoundary />,
+  },
   ...(twistsQaEnabled
     ? [
         {

@@ -828,6 +828,7 @@ function isGameOverHash(hash: string): boolean {
 
 const INTRO_HUB_ROUTE_PATHS = new Set([
   '/',
+  '/teamplay-hub',
   '/rules',
   '/vox-populi-rules',
   '/profile',

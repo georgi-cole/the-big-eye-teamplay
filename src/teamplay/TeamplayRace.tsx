@@ -86,6 +86,8 @@ export default function TeamplayRace({
           {interrupted && <p role="status">{t('teamplay.raceInterrupted')}</p>}
           {error && <p role="alert">{t('teamplay.raceUnavailable')}</p>}
           <button
+            className="tp-primary"
+            type="button"
             disabled={busy}
             onClick={async () => {
               setError(false)
@@ -99,7 +101,7 @@ export default function TeamplayRace({
         </>
       ) : (
         <>
-          <p role="status">
+          <p role={snapshot?.phase === 'countdown' ? 'status' : 'timer'}>
             {snapshot?.phase === 'countdown'
               ? snapshot.countdown || 'GO'
               : t('teamplay.raceScore', {
@@ -133,6 +135,8 @@ export default function TeamplayRace({
             onPointerCancel={(event) => engine.current?.handlePointerUp(event.pointerId)}
           />
           <button
+            className="tp-quiet"
+            type="button"
             disabled={!snapshot?.visibleBooster}
             onClick={() => engine.current?.handleKeyboardBooster()}
           >
