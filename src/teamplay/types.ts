@@ -1,5 +1,6 @@
 import type { CompetitionSkillProfile, CompetitionSeasonState } from '../ai/competition/types'
 import type { RealityDomainState } from '../social/reality/types'
+import type { CompetitionIntent } from '../social/intelligenceSystem'
 
 export type TeamplayPhase =
   | 'opening'
@@ -112,6 +113,8 @@ export interface Attempt {
   winnerId?: string
   tied?: boolean
   priorityFallback?: boolean
+  /** Private, pinned at preparation. Scores are the only public performance record. */
+  aiIntents?: Record<string, CompetitionIntent>
 }
 export interface TeamResult {
   tribeId: string
@@ -205,6 +208,14 @@ export interface TeamplayState {
   /** Absent in tribe-stage saves and in existing saves at the fusion screen. */
   endgame?: TeamplayEndgame
 }
+export type TribeSocialDecision =
+  | { kind: 'pact'; targetId: string }
+  | { kind: 'found'; memberIds: string[] }
+  | { kind: 'respond'; requestId: string; accept: boolean }
+  | { kind: 'withdraw'; requestId: string }
+  | { kind: 'leave'; allianceId: string }
+  | { kind: 'meet'; allianceId: string; targetId: string }
+
 export type TeamplayAction =
   | { type: 'skip_to_defence' }
   | { type: 'continue' }
@@ -213,6 +224,7 @@ export type TeamplayAction =
   | { type: 'delegate_attempt' }
   | { type: 'resolve_attempt' }
   | { type: 'social'; actorId: string; actionId: string; targetId?: string }
+  | { type: 'tribe_social'; decision: TribeSocialDecision }
   | { type: 'vote'; voterId: string; targetId: string }
   | { type: 'cutoff'; tribeId: string; selectedIds: string[] }
   | { type: 'capture'; playerId: string }

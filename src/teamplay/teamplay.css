@@ -228,6 +228,18 @@
   border-left: 2px solid #7ec3cb;
   padding-left: 10px;
 }
+.teamplay-commitments {
+  border-top: 1px solid #414b65;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+.teamplay-commitment {
+  background: #151e30;
+  border: 1px solid #414b65;
+  border-radius: 12px;
+  margin: 8px 0;
+  padding: 10px;
+}
 .teamplay-footer {
   background: #111827;
   border-top: 1px solid #45516c;

@@ -1,4 +1,6 @@
 import { getMinigameAiModel, simulateMinigameAiScore } from '../ai/competition'
+import { applyCompetitionIntentToScore } from '../social/intelligenceSystem'
+import { teamCompetitionIntents } from './tribeStrategy'
 import type {
   Attempt,
   IndividualCompetitionKind,
@@ -103,8 +105,18 @@ function freezeAttempt(
     status: 'ready',
     delegated: false,
   }
+  const intents = teamCompetitionIntents(state, attempt)
+  if (Object.keys(intents).length) attempt.aiIntents = intents
+  const model = getMinigameAiModel('quickTap')
   for (const id of attempt.participants)
-    if (id !== state.humanId) attempt.scores[id] = simulatedScore(state, attempt, id)
+    if (id !== state.humanId)
+      attempt.scores[id] = applyCompetitionIntentToScore(
+        simulatedScore(state, attempt, id),
+        model,
+        intents[id] ?? 'compete',
+        attempt.seed,
+        id
+      )
   state.attempts[attempt.id] = attempt
   state.currentAttemptId = attempt.id
   return attempt

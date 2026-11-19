@@ -32,7 +32,9 @@ The product launcher opens `/teamplay`; `/teamplay-preview` is a development/exp
 
 The prototype now runs from first competition to a saved champion. Teamplay uses its own controller with shared Classic eligibility rules, competition skill simulation, and Reality ceremony and Tribunal scoring. Its individual scenes use the Teamplay interface and retain the same profile save. Previous seasons can be reopened from the Teamplay archive, including an incomplete run with a pending Tribunal ballot.
 
-Only Compliment, Reassure, Clear the Air, Whisper and Watch Room are exposed. Their prices, affinity changes, repetition/backfire handling and nomination strategy reuse the source policies. Full pacts, groups, romance, political actions, conversations, incoming requests and their transfer cleanup need their own Teamplay adapters. The source action catalog retained by the audit is not a claim that all 61 actions are enabled.
+Direct social actions include Compliment, Reassure, Clear the Air, Whisper and Watch Room. Teamplay also supports personal pact proposals, incoming AI pact offers, founding an alliance by unanimous consent, local nomination meetings and unilateral departures. Existing group limits apply, including dormant memberships. Transfer preserves bonds and silently invalidates outstanding proposals that have lost their local audience. The vote strategy protects eligible pact members first, tracks local meeting plans, and uses observed performance evidence. A transferred AI can use the source competition intent model when its strongest personal pact is with the other tribe. Broader social actions such as romance remain outside this slice.
+
+TTP-032–034 are covered by the reachable roster traversal, exhaustive weighted ballot patterns, and saved command tests. The traversal exercises every achievable size progression by folding equivalent openings with the same flag sizes, while checking every rank order, eligible loss, capture selection and draft branch at each opening. The ballot suite checks 2,227 size-and-slot patterns plus the automatic two-person block. Save tests cover a captain choosing themself in a tie, repeated reserve defences, interrupted attempts, transfer and merger choices, and final reserve qualification.
 
 One existing game serves both contexts for this prototype. R067's commercial minimum of two independently qualified team games and two duel games is still open, including native device and human/AI parity evidence. Any change to this adapter/game contract must change the persisted manifest version; incompatible saves remain retained instead of being silently reinterpreted.
 
@@ -40,4 +42,4 @@ New copy uses the existing localization provider with an English-first namespace
 
 ## Next work
 
-Expand the qualified game pools and social adapters, including formal pact/group creation and pending interaction cleanup. Schedule device playtests and release preparation after those changes.
+Expand the qualified game pools and schedule native device playtests.

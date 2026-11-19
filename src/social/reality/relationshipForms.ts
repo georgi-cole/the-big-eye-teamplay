@@ -417,6 +417,8 @@ export function removeRealityAllianceMember(
     /** Specific automatic ending; manual and eviction exits keep the existing reason. */
     endReason?: string
     deferSuccession?: boolean
+    /** Where a member can leave without notifying remote group members. */
+    noticeActorIds?: readonly string[]
   }
 ): RealityAlliance {
   const alliance = state.alliances[input.allianceId]
@@ -451,6 +453,9 @@ export function removeRealityAllianceMember(
 
   rememberAllianceRoster(alliance)
   const formerMemberIds = [...alliance.memberIds]
+  const informedIds = formerMemberIds.filter(
+    (id) => !input.noticeActorIds || input.noticeActorIds.includes(id)
+  )
   const justifyingBetrayal =
     input.kind === 'VOLUNTARY' || input.kind === 'DEFECTION'
       ? [...state.events]
@@ -478,8 +483,8 @@ export function removeRealityAllianceMember(
     allianceId: alliance.id,
     actorId: input.actorId,
     targetIds: [input.memberId],
-    participantIds: formerMemberIds,
-    witnessIds: formerMemberIds.filter((id) => id !== input.memberId),
+    participantIds: informedIds,
+    witnessIds: informedIds.filter((id) => id !== input.memberId),
     visibility: 'GROUP_VISIBLE',
     outcome: 'SUCCESS',
     reason: `${input.kind.toLowerCase()}:${alliance.id}:${input.sourceEventId ?? 'manual'}`,
@@ -492,7 +497,7 @@ export function removeRealityAllianceMember(
   })
 
   // Keep the complete roster available to a member who later leaves or is removed.
-  preserveRealityAllianceRosterForMembers(state, alliance.id, input.at, event.id, formerMemberIds)
+  preserveRealityAllianceRosterForMembers(state, alliance.id, input.at, event.id, informedIds)
 
   alliance.memberIds = alliance.memberIds.filter((id) => id !== input.memberId)
   alliance.rosterRevision = (alliance.rosterRevision ?? 0) + 1
@@ -524,6 +529,7 @@ export function removeRealityAllianceMember(
     })
   } else if (input.kind !== 'ELIMINATED' && !(justifyingBetrayal && input.kind === 'VOLUNTARY')) {
     for (const memberId of alliance.memberIds) {
+      if (!informedIds.includes(memberId)) continue
       const independentAgreement = Object.values(state.alliances).some(
         (other) =>
           other.id !== alliance.id &&
@@ -568,8 +574,8 @@ export function removeRealityAllianceMember(
       allianceId: alliance.id,
       actorId: input.actorId,
       targetIds: [input.memberId],
-      participantIds: formerMemberIds,
-      witnessIds: formerMemberIds.filter((id) => id !== input.memberId),
+      participantIds: informedIds,
+      witnessIds: informedIds.filter((id) => id !== input.memberId),
       visibility: 'GROUP_VISIBLE',
       outcome: 'SUCCESS',
       reason: `management:${alliance.id}`,
@@ -596,7 +602,7 @@ export function removeRealityAllianceMember(
       rememberAllianceRoster(alliance)
     }
   }
-  if (!input.deferSuccession)
+  if (!input.deferSuccession && informedIds.length === formerMemberIds.length)
     reconcileConvergedAllianceRosters(state, input.at, preferredSurvivorIds)
   refreshRealityAllianceOverlaps(state)
   return alliance
@@ -1475,14 +1481,18 @@ export function holdRealityAllianceMeeting(
     /** Defaults preserve legacy meeting behavior. Strategy wrappers may tune these. */
     attendeeCommitmentDelta?: number
     absentCommitmentDelta?: number
+    /** A local chapter may meet without overwriting a split group's shared plan. */
+    keepSharedTargets?: boolean
   }
 ): RealityAlliance {
   const alliance = state.alliances[input.allianceId]
   if (!alliance || alliance.status === 'DISSOLVED') throw new Error('Alliance is not active')
   const attendees = input.attendeeIds.filter((id) => alliance.memberIds.includes(id))
   if (attendees.length < 2) throw new Error('An alliance meeting needs two members')
-  alliance.currentTargetIds = [...new Set(input.targetIds)]
-  alliance.fallbackTargetIds = [...new Set(input.fallbackTargetIds ?? [])]
+  if (!input.keepSharedTargets) {
+    alliance.currentTargetIds = [...new Set(input.targetIds)]
+    alliance.fallbackTargetIds = [...new Set(input.fallbackTargetIds ?? [])]
+  }
   alliance.lastMeeting = input.at
   alliance.status = alliance.status === 'PROBATIONARY' ? 'ACTIVE' : alliance.status
   const attendeeCommitmentDelta = input.attendeeCommitmentDelta ?? 0.05
@@ -1526,6 +1536,7 @@ export function holdRealityAllianceStrategyMeeting(
     excusedAbsentIds?: string[]
     /** Optional attendee-specific reads preserve real disagreement inside the coalition. */
     memberPlanBeliefs?: Record<string, string[]>
+    keepSharedTargets?: boolean
   }
 ): RealityAlliance {
   const priorMeeting = state.events.some(
@@ -1543,6 +1554,7 @@ export function holdRealityAllianceStrategyMeeting(
     planIds: input.planIds,
     at: input.at,
     excusedAbsentIds: input.excusedAbsentIds,
+    keepSharedTargets: input.keepSharedTargets,
     attendeeCommitmentDelta: priorMeeting ? 0 : 0.015,
     absentCommitmentDelta: priorMeeting ? 0 : -0.01,
   })

@@ -35,6 +35,20 @@ jobs:
         env:
           VITE_ENABLE_QA_ROUTES: 'true'
       - run: npx playwright test --config=playwright.teamplay-qa.config.ts
+      - name: Package the browser test build
+        run: |
+          cp scripts/teamplay-inspect.mjs scripts/teamplay-inspect.cmd dist/
+          node dist/teamplay-inspect.mjs &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          curl --fail --silent --show-error --retry 5 --retry-connrefused --retry-delay 1 \
+            --connect-timeout 2 --max-time 8 --output /dev/null http://127.0.0.1:4198/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamplay-browser-test
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
 
   android-native:
     runs-on: ubuntu-24.04
