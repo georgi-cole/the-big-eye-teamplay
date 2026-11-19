@@ -1,6 +1,16 @@
 import { expect, test } from '@playwright/test'
 import { bundleOrigin, serveBundle } from '../bundle/assets'
 
+const sceneArtwork = [
+  'tribe-stage',
+  'game-studio',
+  'broadcast-aperture',
+  'challenge-arena',
+  'duel-threshold',
+  'transfer-corridor',
+  'tribunal-chamber',
+]
+
 test('the Pages intro hub starts and resumes a real game under the repository base path', async ({
   page,
 }) => {
@@ -23,6 +33,22 @@ test('the Pages intro hub starts and resumes a real game under the repository ba
   const utilities = page.getByRole('group', { name: 'Lobby utilities' })
   await expect(utilities).toBeInViewport({ ratio: 1 })
   if (test.info().project.name === 'phone') {
+    const artworkSizes = await page.evaluate(
+      async ({ site, sceneArtwork }) => {
+        return Promise.all(
+          sceneArtwork.map(async (name) => {
+            const image = new Image()
+            image.src = `${site}assets/teamplay/${name}.webp`
+            await image.decode()
+            return { name, width: image.naturalWidth, height: image.naturalHeight }
+          })
+        )
+      },
+      { site, sceneArtwork }
+    )
+    for (const { name, width, height } of artworkSizes) {
+      expect(height, `${name} uses portrait artwork`).toBeGreaterThan(width)
+    }
     await page.setViewportSize({ width: 320, height: 640 })
     await expect(page.getByRole('link', { name: 'Play Teamplay' })).toBeInViewport({ ratio: 1 })
     await expect(utilities).toBeInViewport({ ratio: 1 })

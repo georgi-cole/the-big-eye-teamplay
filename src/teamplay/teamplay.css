@@ -900,8 +900,8 @@
   border-radius: 11px;
   padding: 9px 10px 8px;
   background:
-    linear-gradient(90deg, #110f1deb, #16102018 90%),
-    url('/assets/teamplay/broadcast-aperture.webp') right center / cover #14101e;
+    linear-gradient(90deg, #14101e 51%, #14101ebd 69%, #14101e0d 94%),
+    url('/assets/teamplay/broadcast-aperture.webp') right center / auto 172% no-repeat #14101e;
   box-shadow:
     inset 0 1px #ffffff15,
     0 6px 18px #09060c55;
