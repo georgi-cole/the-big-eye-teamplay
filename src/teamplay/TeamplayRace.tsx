@@ -69,6 +69,8 @@ export default function TeamplayRace({
     }
     document.addEventListener('visibilitychange', interrupt)
     current.start()
+    node.focus({ preventScroll: true })
+    node.scrollIntoView({ block: 'nearest' })
     return () => {
       current.destroy()
       engine.current = null
@@ -81,7 +83,6 @@ export default function TeamplayRace({
     <div className="teamplay-race">
       {!playing ? (
         <>
-          <p>{t('teamplay.raceRecovery')}</p>
           {interrupted && <p role="status">{t('teamplay.raceInterrupted')}</p>}
           {error && <p role="alert">{t('teamplay.raceUnavailable')}</p>}
           <button
@@ -94,6 +95,7 @@ export default function TeamplayRace({
           >
             {t(attempt.status === 'running' ? 'teamplay.raceRestart' : 'teamplay.raceStart')}
           </button>
+          {attempt.status === 'running' && <p>{t('teamplay.raceRecovery')}</p>}
         </>
       ) : (
         <>

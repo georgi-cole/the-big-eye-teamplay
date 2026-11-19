@@ -5,6 +5,31 @@ export const TEAMPLAY_MESSAGES = {
   'teamplay.play': 'Play Teamplay',
   'teamplay.development': 'Teamplay development',
   'teamplay.scope': 'Tribes, reserve duels, and an individual finale',
+  'teamplay.introPitch':
+    'Win immunity with your tribe. Survive the reserve duel. Outlast the house.',
+  'teamplay.tribes': 'Tribes',
+  'teamplay.yourTribe': 'Your tribe',
+  'teamplay.memberCount': '{count} players',
+  'teamplay.cyclePath': 'Cycle progress',
+  'teamplay.path.tribes': 'Tribes',
+  'teamplay.path.race': 'Race',
+  'teamplay.path.social': 'Social',
+  'teamplay.path.vote': 'Vote',
+  'teamplay.path.duel': 'Duel',
+  'teamplay.path.reserve': 'Reserve',
+  'teamplay.path.recap': 'Recap',
+  'teamplay.rules': 'How Teamplay works',
+  'teamplay.cast': 'Full cast',
+  'teamplay.scoreBreakdown': 'Individual scores',
+  'teamplay.voteTotals': 'All nomination totals',
+  'teamplay.weightedVotes': '{votes} weighted votes',
+  'teamplay.quickTap': 'Quick Tap Race',
+  'teamplay.duelRace': 'Quick Tap Race lasts 30 seconds. The highest score wins.',
+  'teamplay.duelWinner': 'Winner',
+  'teamplay.nomineeStakes': 'Win to stay with your tribe. Lose and face the reserve.',
+  'teamplay.reserveStakes': 'Win to claim or keep the reserve seat. The loser leaves the season.',
+  'teamplay.resetScene': 'Reset scene',
+  'teamplay.introScene': 'Intro screen',
   'teamplay.loading': 'Opening your saved season…',
   'teamplay.saved': 'Saved',
   'teamplay.saving': 'Saving…',
@@ -59,8 +84,9 @@ export const TEAMPLAY_MESSAGES = {
   'teamplay.teamArithmetic': '{total} total ÷ {count} players = {mean} points',
   'teamplay.rankingHelp':
     'Ties: team’s best performance, previous team rank, then published flag priority. Captain ties: previous individual rank, then season priority. Display rounding never decides the outcome.',
-  'teamplay.socialHelp':
-    'Only current teammates can interact. Continue whenever you are ready. Social 2 cannot change the locked nominations.',
+  'teamplay.socialHelp': 'Talk to your tribemates and build trust before the secret ballot.',
+  'teamplay.socialAfterVote':
+    'Nominations are locked. You can still talk to your tribemates before the duel.',
   'teamplay.noSocial':
     'Reserve and eliminated contestants have no social turn. Continue to watch the public results.',
   'teamplay.secondWind':

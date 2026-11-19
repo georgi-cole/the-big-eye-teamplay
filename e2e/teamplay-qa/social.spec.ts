@@ -25,4 +25,8 @@ test('Teamplay social preview offers local pact and alliance choices and restore
   await panel.getByRole('button', { name: 'Send founding request' }).click()
   await expect(response).toHaveCount(2)
   await page.screenshot({ path: test.info().outputPath('teamplay-pacts-and-alliances.png') })
+  await page.getByLabel('Jump to a scene').selectOption('intro')
+  await expect(page.getByRole('heading', { name: 'The Big Eye Teamplay' })).toBeVisible()
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(response).toHaveCount(2)
 })
