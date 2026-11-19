@@ -30,6 +30,8 @@ export function tribeOf(state: TeamplayState, playerId: string) {
 }
 
 export function socialTargets(state: TeamplayState, actorId: string): string[] {
+  if (state.endgame?.step === 'social' && state.individualIds.includes(actorId))
+    return state.individualIds.filter((id) => id !== actorId)
   if (!['socialOne', 'socialTwo'].includes(state.phase)) return []
   return (tribeOf(state, actorId)?.members ?? []).filter((id) => id !== actorId)
 }
@@ -81,13 +83,15 @@ export function performSocial(
 ): void {
   const targets = socialTargets(state, actorId)
   if (!targets.length)
-    throw new Error('Social actions require an active actor in an open tribe window')
+    throw new Error('Social actions require an active contestant in an open social window')
   const action = TEAMPLAY_SOCIAL_ACTIONS.find((entry) => entry.id === actionId)
   if (!action) throw new Error('This social action is not enabled for Teamplay')
   if (
     action.targetMode === 'none' ? targetId !== undefined : !targetId || !targets.includes(targetId)
   )
-    throw new Error('Choose a current teammate')
+    throw new Error(
+      state.stage === 'individual' ? 'Choose a remaining contender' : 'Choose a current teammate'
+    )
   const cost = normalizeActionCosts(action, targetId ? 1 : 0)
   const player = state.contestants.find((entry) => entry.id === actorId)!
   if (Object.entries(cost).some(([key, value]) => player.bank[key as keyof Bank] < value))
@@ -120,13 +124,14 @@ export function performSocial(
           didBackfire: false,
         }
   if (targetId) {
+    const day = state.phase === 'finalFive' ? 12 : state.phase === 'finalFour' ? 13 : state.cycle
     applyLegacyRelationshipUpdateToReality(
       state.reality,
       actorId,
       targetId,
       result.delta,
       [],
-      state.cycle,
+      day,
       state.phase
     )
     applyLegacyRelationshipUpdateToReality(
@@ -135,7 +140,7 @@ export function performSocial(
       actorId,
       result.delta,
       [],
-      state.cycle,
+      day,
       state.phase
     )
   }
@@ -167,7 +172,8 @@ export function resolveAiSocial(state: TeamplayState): void {
     )
     const budget = 1 + Math.floor(random() * 4)
     for (let index = 0; index < budget; index++) {
-      const members = tribeOf(state, actorId)!.members
+      const members =
+        state.stage === 'individual' ? state.individualIds : tribeOf(state, actorId)!.members
       const relationships = Object.fromEntries(
         members.map((id) => [
           id,
@@ -212,6 +218,18 @@ export function resolveAiSocial(state: TeamplayState): void {
   }
 }
 
+export function realityDecisionView(state: TeamplayState, actorId: string) {
+  // The source scorer also consults a reciprocal reliability edge. Other
+  // contestants' private feelings are not an observation available to this AI.
+  // Give it only its own relationship row; missing reciprocal reads use the
+  // source's neutral default rather than another tribe's private history.
+  return {
+    ...state.reality,
+    relationships: { [actorId]: structuredClone(state.reality.relationships[actorId] ?? {}) },
+    beliefsByOwner: { [actorId]: state.reality.beliefsByOwner[actorId] ?? {} },
+  }
+}
+
 export function strategicChoice(
   state: TeamplayState,
   actorId: string,
@@ -219,15 +237,7 @@ export function strategicChoice(
   recruit = false
 ): string {
   if (!pool.length) throw new Error('Empty legal choice pool')
-  // The source scorer also consults a reciprocal reliability edge. Other
-  // contestants' private feelings are not an observation available to this AI.
-  // Give it only its own relationship row; missing reciprocal reads use the
-  // source's neutral default rather than another tribe's private history.
-  const decisionView = {
-    ...state.reality,
-    relationships: { [actorId]: structuredClone(state.reality.relationships[actorId] ?? {}) },
-    beliefsByOwner: { [actorId]: state.reality.beliefsByOwner[actorId] ?? {} },
-  }
+  const decisionView = realityDecisionView(state, actorId)
   const hasPact = (id: string) =>
     getRealityProtectionAlliances(state.reality, actorId, id).some(
       (alliance) => allianceKind(alliance) === 'PACT'

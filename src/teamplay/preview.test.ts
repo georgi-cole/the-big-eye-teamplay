@@ -13,6 +13,11 @@ describe('Teamplay preview scenes', () => {
     'capture',
     'merge',
     'fusion',
+    'finalFive',
+    'finalFour',
+    'finalThree',
+    'tribunal',
+    'seasonComplete',
   ])(
     'reaches %s through real engine commands',
     async (phase) => {

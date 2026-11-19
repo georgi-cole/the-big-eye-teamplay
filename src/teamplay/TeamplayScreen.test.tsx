@@ -15,6 +15,8 @@ vi.mock('../store/hooks', () => ({
 vi.mock('./persistence', () => ({
   loadTeamplay: vi.fn(),
   saveTeamplay: vi.fn(),
+  listTeamplayArchives: () => [],
+  readTeamplayArchive: vi.fn(),
   exportTeamplaySave: () => '{}',
 }))
 

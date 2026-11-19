@@ -1,4 +1,11 @@
 import type { TeamplayState } from './types'
+import {
+  individualAttemptId,
+  individualAttemptSeed,
+  isIndividualCompetition,
+  rankIndividualAttempt,
+} from './competition'
+import { validateTeamplayEndgame } from './endgameValidation'
 
 function requireState(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Teamplay checkpoint: ${message}`)
@@ -20,7 +27,13 @@ const phases = [
   'merge',
   'recap',
   'fusion',
+  'finalFive',
+  'finalFour',
+  'finalThree',
+  'tribunal',
+  'seasonComplete',
 ]
+const individualPhases = ['finalFive', 'finalFour', 'finalThree', 'tribunal', 'seasonComplete']
 
 export function validateTeamplay(input: unknown): asserts input is TeamplayState {
   requireState(input && typeof input === 'object', 'save is not an object')
@@ -155,14 +168,20 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
   )
   if (state.stage === 'individual')
     requireState(
-      state.phase === 'fusion' &&
-        active.length === 5 &&
-        state.reserveId === null &&
-        state.tribes.length === 0 &&
-        state.eliminated.length === 11,
+      state.endgame
+        ? individualPhases.includes(state.phase)
+        : state.phase === 'fusion' &&
+            active.length === 5 &&
+            state.reserveId === null &&
+            state.tribes.length === 0 &&
+            state.eliminated.length === 11,
       'invalid Final Five fusion'
     )
   else {
+    requireState(
+      !state.endgame && state.phase !== 'fusion' && !individualPhases.includes(state.phase),
+      'individual phase before fusion'
+    )
     requireState(
       state.reserveId && state.reserveId !== (state.phase === 'opening' ? state.humanId : ''),
       'missing/invalid reserve'
@@ -229,7 +248,7 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
   )
   requireState(
     Array.isArray(state.history) &&
-      state.history.length === state.eliminated.length &&
+      state.history.length === Math.min(11, state.eliminated.length) &&
       state.history.every(
         (entry, index) => entry.exitId === state.eliminated[index] && entry.cycle === index + 1
       ),
@@ -242,7 +261,7 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
       'displayed exit differs from the committed departure'
     )
   requireState(
-    state.eliminated.length === state.cycle - (afterExit ? 0 : 1),
+    state.endgame || state.eliminated.length === state.cycle - (afterExit ? 0 : 1),
     'cycle/departure count mismatch'
   )
   requireState(
@@ -273,9 +292,9 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
       Array.isArray(state.cutoffs),
     'missing gameplay records'
   )
-  for (const attempt of Object.values(state.attempts)) {
+  for (const [id, attempt] of Object.entries(state.attempts)) {
     requireState(
-      attempt.id &&
+      attempt.id === id &&
         attempt.game === 'quickTap' &&
         attempt.duration === 30 &&
         [0, 1].includes(attempt.replay) &&
@@ -300,6 +319,23 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
         attempt.participants.every((id) => Object.hasOwn(attempt.scores, id)),
         'incomplete saved competition result'
       )
+    if (isIndividualCompetition(attempt.kind)) {
+      requireState(
+        state.endgame &&
+          attempt.replay === 0 &&
+          attempt.id === individualAttemptId(state, attempt.kind) &&
+          attempt.seed === individualAttemptSeed(state, attempt.kind) &&
+          attempt.participants.length >= 2 &&
+          attempt.participants.every(
+            (id) => id === state.humanId || Object.hasOwn(attempt.scores, id)
+          ) &&
+          (attempt.status === 'complete'
+            ? attempt.winnerId === rankIndividualAttempt(state, attempt)[0]
+            : !attempt.winnerId && !Object.hasOwn(attempt.scores, state.humanId)),
+        'invalid saved individual competition'
+      )
+      continue
+    }
     const cycle = Number(attempt.id.split(':').at(-3))
     const context = state.plan[cycle - 1]?.[attempt.kind]
     requireState(
@@ -330,6 +366,26 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
           'saved duel winner differs from its scores/tie rule'
         )
       }
+    }
+  }
+  if (state.stage === 'individual') {
+    for (const cycle of state.history) {
+      const contest = state.attempts[`${state.id}:${cycle.cycle}:team:0`]
+      const roster = cycle.teamResults.flatMap((result) => result.members)
+      requireState(
+        contest?.kind === 'team' &&
+          contest.status === 'complete' &&
+          roster.length === contest.participants.length &&
+          new Set(roster).size === roster.length &&
+          roster.every((id) => contest.participants.includes(id)) &&
+          cycle.nominees.length === 2 &&
+          cycle.nomineeWinnerId !== cycle.challengerId &&
+          cycle.nominees.includes(cycle.nomineeWinnerId) &&
+          cycle.nominees.includes(cycle.challengerId) &&
+          ids.includes(cycle.reserveId) &&
+          cycle.reserveId !== cycle.exitId,
+        'invalid team evidence at fusion'
+      )
     }
   }
   if (state.currentAttemptId)
@@ -398,4 +454,5 @@ export function validateTeamplay(input: unknown): asserts input is TeamplayState
         ),
       'invalid merger draft'
     )
+  if (state.endgame) validateTeamplayEndgame(state)
 }

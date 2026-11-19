@@ -1,5 +1,24 @@
 import { getMinigameAiModel, simulateMinigameAiScore } from '../ai/competition'
-import type { Attempt, CompetitionKind, TeamplayState } from './types'
+import type {
+  Attempt,
+  IndividualCompetitionKind,
+  TeamCompetitionKind,
+  TeamplayState,
+} from './types'
+
+export const INDIVIDUAL_COMPETITIONS = [
+  'fiveLoh',
+  'fivePos',
+  'fourLoh',
+  'fourPos',
+  'partOne',
+  'partTwo',
+  'partThree',
+] as const
+
+export function isIndividualCompetition(kind: Attempt['kind']): kind is IndividualCompetitionKind {
+  return INDIVIDUAL_COMPETITIONS.some((entry) => entry === kind)
+}
 
 export function seedFor(seed: number, label: string): number {
   let hash = seed >>> 0
@@ -23,7 +42,7 @@ export function simulatedScore(state: TeamplayState, attempt: Attempt, playerId:
 
 export function prepareAttempt(
   state: TeamplayState,
-  kind: CompetitionKind,
+  kind: TeamCompetitionKind,
   replay: 0 | 1 = 0
 ): Attempt {
   const participants =
@@ -41,23 +60,61 @@ export function prepareAttempt(
   if (kind !== 'team' && participants.length !== 2)
     throw new Error('A duel requires exactly two contestants')
   const context = state.plan[state.cycle - 1][kind]
-  const attempt: Attempt = {
+  return freezeAttempt(state, {
     id: `${state.id}:${state.cycle}:${kind}:${replay}`,
     kind,
-    game: 'quickTap',
     seed: replay ? context.replaySeed : context.seed,
-    duration: 30,
     replay,
     participants,
+  })
+}
+
+export function individualAttemptId(state: TeamplayState, kind: IndividualCompetitionKind) {
+  return `${state.id}:individual:${kind}:0`
+}
+
+export function individualAttemptSeed(state: TeamplayState, kind: IndividualCompetitionKind) {
+  return seedFor(state.seed, `classic-endgame-v1:${kind}`)
+}
+
+export function prepareIndividualAttempt(
+  state: TeamplayState,
+  kind: IndividualCompetitionKind,
+  participants: string[]
+): void {
+  freezeAttempt(state, {
+    id: individualAttemptId(state, kind),
+    kind,
+    seed: individualAttemptSeed(state, kind),
+    replay: 0,
+    participants: [...participants],
+  })
+}
+
+function freezeAttempt(
+  state: TeamplayState,
+  context: Pick<Attempt, 'id' | 'kind' | 'seed' | 'replay' | 'participants'>
+): Attempt {
+  const attempt: Attempt = {
+    ...context,
+    game: 'quickTap',
+    duration: 30,
     scores: {},
     status: 'ready',
     delegated: false,
   }
-  for (const id of participants)
+  for (const id of attempt.participants)
     if (id !== state.humanId) attempt.scores[id] = simulatedScore(state, attempt, id)
   state.attempts[attempt.id] = attempt
   state.currentAttemptId = attempt.id
   return attempt
+}
+
+export function rankIndividualAttempt(state: TeamplayState, attempt: Attempt): string[] {
+  const priorities = new Map(state.contestants.map((player) => [player.id, player.priority]))
+  return [...attempt.participants].sort(
+    (a, b) => attempt.scores[b] - attempt.scores[a] || priorities.get(a)! - priorities.get(b)!
+  )
 }
 
 export function rankIndividuals(state: TeamplayState, attempt: Attempt): string[] {

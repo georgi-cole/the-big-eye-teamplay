@@ -18,7 +18,64 @@ export type TeamplayPhase =
   | 'merge'
   | 'recap'
   | 'fusion'
-export type CompetitionKind = 'team' | 'nominee' | 'reserve'
+  | 'finalFive'
+  | 'finalFour'
+  | 'finalThree'
+  | 'tribunal'
+  | 'seasonComplete'
+export type TeamCompetitionKind = 'team' | 'nominee' | 'reserve'
+export type IndividualCompetitionKind =
+  | 'fiveLoh'
+  | 'fivePos'
+  | 'fourLoh'
+  | 'fourPos'
+  | 'partOne'
+  | 'partTwo'
+  | 'partThree'
+export type CompetitionKind = TeamCompetitionKind | IndividualCompetitionKind
+export type EndgameStep =
+  | 'social'
+  | 'loh'
+  | 'nominate'
+  | 'pos'
+  | 'safety'
+  | 'replace'
+  | 'ballots'
+  | 'tie'
+  | 'soleVote'
+  | 'departure'
+  | 'partOne'
+  | 'partTwoReady'
+  | 'partTwo'
+  | 'partThreeReady'
+  | 'partThree'
+  | 'cut'
+  | 'juryVote'
+  | 'finished'
+
+export interface PowerRound {
+  size: 5 | 4
+  entrants: string[]
+  lohId: string | null
+  posId: string | null
+  initialNominees: string[]
+  savedId: string | null
+  replacementId: string | null
+  ballots: Record<string, string>
+  exitId: string | null
+}
+
+export interface TeamplayEndgame {
+  version: 1
+  step: EndgameStep
+  qualifiers: string[]
+  rounds: PowerRound[]
+  partWinners: string[]
+  thirdPlaceId: string | null
+  votes: Record<string, string>
+  championId: string | null
+  placements: string[]
+}
 export interface Bank {
   energy: number
   influence: number
@@ -107,7 +164,7 @@ export interface TeamplayState {
   jurors: string[]
   individualIds: string[]
   castOrder: string[]
-  plan: Array<Record<CompetitionKind, { seed: number; replaySeed: number }>>
+  plan: Array<Record<TeamCompetitionKind, { seed: number; replaySeed: number }>>
   attempts: Record<string, Attempt>
   currentAttemptId: string | null
   frozenRosters: Record<string, string[]>
@@ -145,6 +202,8 @@ export interface TeamplayState {
   receipts: string[]
   resources: ResourceReceipt[]
   history: CycleRecord[]
+  /** Absent in tribe-stage saves and in existing saves at the fusion screen. */
+  endgame?: TeamplayEndgame
 }
 export type TeamplayAction =
   | { type: 'skip_to_defence' }
@@ -158,6 +217,7 @@ export type TeamplayAction =
   | { type: 'cutoff'; tribeId: string; selectedIds: string[] }
   | { type: 'capture'; playerId: string }
   | { type: 'draft'; playerId: string }
+  | { type: 'individual_choice'; selectedIds: string[] }
   | { type: 'auto_choice' }
 export interface TeamplayCommand {
   id: string

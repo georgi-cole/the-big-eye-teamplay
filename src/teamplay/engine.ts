@@ -7,7 +7,15 @@ import { createInitialRealityDomainState } from '../social/reality/state'
 import { getRealityRelationship } from '../social/reality/relationships'
 import { mulberry32, seededPickN } from '../store/rng'
 import { resolveAvatar } from '../utils/avatar'
-import { prepareAttempt, resolveTeamOrder, seedFor, simulatedScore } from './competition'
+import {
+  isIndividualCompetition,
+  prepareAttempt,
+  resolveTeamOrder,
+  seedFor,
+  simulatedScore,
+} from './competition'
+import { chooseIndividual, completeIndividualAttempt, progressIndividual } from './endgame'
+import { competitionForStep } from './endgameRules'
 import {
   activeIds,
   performSocial,
@@ -274,6 +282,7 @@ function completeAttempt(state: TeamplayState, humanScore?: number, delegated = 
     throw new Error('Incomplete competition scores')
   attempt.delegated = delegated
   attempt.status = 'complete'
+  if (isIndividualCompetition(attempt.kind)) return completeIndividualAttempt(state, attempt)
   if (attempt.kind === 'team') {
     resolveTeamOrder(state, attempt)
     for (let index = 0; index < 3; index++)
@@ -485,6 +494,7 @@ function chooseAutomatic(state: TeamplayState): void {
 }
 
 function progress(state: TeamplayState): void {
+  if (state.stage === 'individual') return progressIndividual(state)
   switch (state.phase) {
     case 'opening':
       startCycle(state)
@@ -526,6 +536,7 @@ function progress(state: TeamplayState): void {
 }
 
 function execute(state: TeamplayState, action: TeamplayAction, eventId: string): void {
+  if (action.type === 'individual_choice') return chooseIndividual(state, action.selectedIds)
   if (action.type === 'skip_to_defence') {
     if (state.reserveId !== state.humanId || state.phase === 'reserveDuel')
       throw new Error('No AI-only interval before your defence')
@@ -576,8 +587,12 @@ function execute(state: TeamplayState, action: TeamplayAction, eventId: string):
     finishForcedDrafts(state)
     return
   }
-  if (action.type === 'auto_choice') return chooseAutomatic(state)
-  if (!['teamCompetition', 'nomineeDuel', 'reserveDuel'].includes(state.phase))
+  if (action.type === 'auto_choice')
+    return state.endgame ? chooseIndividual(state, undefined, true) : chooseAutomatic(state)
+  if (
+    !competitionForStep(state) &&
+    !['teamCompetition', 'nomineeDuel', 'reserveDuel'].includes(state.phase)
+  )
     throw new Error('No competition is pending')
   const attempt = currentAttempt(state)!
   if (action.type === 'start_attempt') {

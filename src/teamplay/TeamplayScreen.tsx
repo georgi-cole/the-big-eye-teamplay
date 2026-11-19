@@ -4,6 +4,7 @@ import { useAppSelector } from '../store/hooks'
 import { getAll } from '../data/houseguests'
 import { useI18n, type TranslationKey } from '../i18n'
 import { normalizeActionCosts } from '../social/smExecNormalize'
+import { tallyVotes } from '../utils/juryUtils'
 import {
   applyTeamplayCommand,
   createTeamplay,
@@ -13,8 +14,21 @@ import {
   humanBallotRequired,
 } from './engine'
 import { activeIds, socialTargets, TEAMPLAY_SOCIAL_ACTIONS, tribeOf } from './social'
-import { simulatedScore } from './competition'
-import { exportTeamplaySave, loadTeamplay, saveTeamplay } from './persistence'
+import { isIndividualCompetition, simulatedScore } from './competition'
+import {
+  canContinueIndividual,
+  competitionForStep,
+  currentRound,
+  finalNominees,
+  individualDecision,
+} from './endgameRules'
+import {
+  exportTeamplaySave,
+  listTeamplayArchives,
+  loadTeamplay,
+  readTeamplayArchive,
+  saveTeamplay,
+} from './persistence'
 import { createTeamplayPreview } from './preview'
 import TeamplayRace from './TeamplayRace'
 import type { TeamplayAction, TeamplayPhase, TeamplayState } from './types'
@@ -38,6 +52,11 @@ const previewPhases: TeamplayPhase[] = [
   'merge',
   'recap',
   'fusion',
+  'finalFive',
+  'finalFour',
+  'finalThree',
+  'tribunal',
+  'seasonComplete',
 ]
 
 function ChoicePanel({
@@ -96,14 +115,26 @@ function SocialPanel({ state, act, busy }: { state: TeamplayState; act: Act; bus
   )
   return (
     <>
-      <p>{t(targets.length ? 'teamplay.socialHelp' : 'teamplay.noSocial')}</p>
+      <p>
+        {t(
+          state.endgame
+            ? targets.length
+              ? 'teamplay.individual.social'
+              : 'teamplay.individual.spectator'
+            : targets.length
+              ? 'teamplay.socialHelp'
+              : 'teamplay.noSocial'
+        )}
+      </p>
       {targets.length > 0 && (
         <>
-          <p>
-            {t('teamplay.secondWind', {
-              spent: Math.min(4, state.socialOneSpent[state.humanId] ?? 0),
-            })}
-          </p>
+          {!state.endgame && (
+            <p>
+              {t('teamplay.secondWind', {
+                spent: Math.min(4, state.socialOneSpent[state.humanId] ?? 0),
+              })}
+            </p>
+          )}
           <label>
             {t('teamplay.action')}
             <select
@@ -120,7 +151,7 @@ function SocialPanel({ state, act, busy }: { state: TeamplayState; act: Act; bus
           </label>
           {action.targetMode !== 'none' && (
             <label>
-              {t('teamplay.target')}
+              {t(state.endgame ? 'teamplay.individual.target' : 'teamplay.target')}
               <select
                 value={target}
                 disabled={busy}
@@ -175,9 +206,18 @@ function CompetitionPanel({ state, act, busy }: { state: TeamplayState; act: Act
   const attempt = currentAttempt(state)!
   const [confirmDelegate, setConfirmDelegate] = useState(false)
   const hasHuman = attempt.participants.includes(state.humanId)
+  const individual = isIndividualCompetition(attempt.kind)
   return (
     <>
-      <p>{t(attempt.kind === 'team' ? 'teamplay.competitionHelp' : 'teamplay.tieHelp')}</p>
+      <p>
+        {t(
+          individual
+            ? 'teamplay.individual.race'
+            : attempt.kind === 'team'
+              ? 'teamplay.competitionHelp'
+              : 'teamplay.tieHelp'
+        )}
+      </p>
       {attempt.kind !== 'team' && (
         <p className="teamplay-duel-names">
           {attempt.participants.map((id) => nameOf(state, id)).join(' · ')}
@@ -287,6 +327,136 @@ function DuelResult({ state, reserve }: { state: TeamplayState; reserve: boolean
       </ul>
       {result.priorityFallback && (
         <p>{t('teamplay.priorityApplied', { name: winner.name, priority: winner.priority })}</p>
+      )}
+    </>
+  )
+}
+
+function IndividualScene({ state, act, busy }: { state: TeamplayState; act: Act; busy: boolean }) {
+  const { t } = useI18n()
+  const endgame = state.endgame!
+  const round = currentRound(state)!
+  const step = endgame.step
+  const attempt = currentAttempt(state)
+  const decision = individualDecision(state)
+  const tally = step === 'finished' ? tallyVotes(endgame.votes) : {}
+  if (step === 'social')
+    return <SocialPanel key={state.phase} state={state} act={act} busy={busy} />
+  if (step === 'finished') {
+    return (
+      <>
+        <h3 className="teamplay-champion">
+          {t('teamplay.individual.champion', { name: nameOf(state, endgame.championId) })}
+        </h3>
+        <ul className="teamplay-result">
+          {endgame.placements.slice(0, 2).map((id) => (
+            <li key={id}>
+              {nameOf(state, id)}{' '}
+              <span>{t('teamplay.individual.voteCount', { votes: tally[id] ?? 0 })}</span>
+            </li>
+          ))}
+        </ul>
+        <details>
+          <summary>{t('teamplay.individual.voteRecord')}</summary>
+          <ul>
+            {state.jurors.map((id) => (
+              <li key={id}>
+                {t('teamplay.individual.ballotRecord', {
+                  member: nameOf(state, id),
+                  finalist: nameOf(state, endgame.votes[id]),
+                })}
+              </li>
+            ))}
+          </ul>
+        </details>
+        <details>
+          <summary>{t('teamplay.individual.standings')}</summary>
+          <ol>
+            {endgame.placements.map((id) => (
+              <li key={id}>{nameOf(state, id)}</li>
+            ))}
+          </ol>
+        </details>
+      </>
+    )
+  }
+
+  const attemptKind = competitionForStep(state)
+  const competitionTitle =
+    attemptKind === 'fiveLoh' || attemptKind === 'fourLoh'
+      ? 'loh'
+      : attemptKind === 'fivePos' || attemptKind === 'fourPos'
+        ? 'pos'
+        : attemptKind
+  const isPowerRound = state.phase === 'finalFive' || state.phase === 'finalFour'
+  const nominees =
+    step === 'replace' || step === 'pos' ? round.initialNominees : finalNominees(round)
+  const showNominees = isPowerRound && !['loh', 'nominate', 'departure'].includes(step)
+  const decisionKey = step === 'juryVote' ? 'tribunalPrompt' : step
+  const help =
+    decision && !['ballots', 'juryVote'].includes(step)
+      ? t(`teamplay.individual.${decisionKey}` as TranslationKey, {
+          actor: nameOf(state, decision.actorId),
+          saved: nameOf(state, round.savedId),
+        })
+      : null
+  return (
+    <>
+      {competitionTitle && <h3>{t(`teamplay.individual.${competitionTitle}`)}</h3>}
+      {attempt?.status === 'complete' && !['departure', 'juryVote'].includes(step) && (
+        <p>
+          {t('teamplay.individual.scored', {
+            winner: nameOf(state, attempt.winnerId!),
+            score: attempt.scores[attempt.winnerId!],
+          })}
+        </p>
+      )}
+      {showNominees && (
+        <p>
+          {t('teamplay.individual.block', {
+            names: nominees.map((id) => nameOf(state, id)).join(' · '),
+          })}
+        </p>
+      )}
+      {attemptKind && <CompetitionPanel key={attempt!.id} state={state} act={act} busy={busy} />}
+      {step === 'ballots' && <p>{t('teamplay.individual.ballots')}</p>}
+      {step === 'juryVote' && (
+        <>
+          <p>{t('teamplay.individual.tribunal')}</p>
+          {decision && <p>{t('teamplay.individual.tribunalPrompt')}</p>}
+          {endgame.votes[state.humanId] && <p>{t('teamplay.voteLocked')}</p>}
+        </>
+      )}
+      {step === 'departure' && (
+        <p>
+          {t('teamplay.individual.departure', {
+            name: nameOf(state, state.lastExitId),
+            place: t(`teamplay.individual.place.${(state.individualIds.length + 1) as 3 | 4 | 5}`),
+          })}
+        </p>
+      )}
+      {help && <p>{help}</p>}
+      {decision?.actorId === state.humanId && (
+        <>
+          {!!decision.candidates.length && (
+            <ChoicePanel
+              key={`${state.phase}:${step}`}
+              state={state}
+              candidates={decision.candidates}
+              slots={decision.slots}
+              onChoose={(selectedIds) => void act({ type: 'individual_choice', selectedIds })}
+              busy={busy}
+            />
+          )}
+          {step === 'safety' && (
+            <button
+              disabled={busy}
+              onClick={() => void act({ type: 'individual_choice', selectedIds: [] })}
+            >
+              {t('teamplay.individual.decline')}
+            </button>
+          )}
+        </>
       )}
     </>
   )
@@ -433,6 +603,12 @@ function Scene({ state, act, busy }: { state: TeamplayState; act: Act; busy: boo
       )
     case 'fusion':
       return <p>{t('teamplay.fusionHelp')}</p>
+    case 'finalFive':
+    case 'finalFour':
+    case 'finalThree':
+    case 'tribunal':
+    case 'seasonComplete':
+      return <IndividualScene state={state} act={act} busy={busy} />
   }
 }
 
@@ -451,6 +627,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
   const [humanId, setHumanId] = useState('finn')
   const [scenario, setScenario] = useState<TeamplayPhase>('opening')
   const [confirmAuto, setConfirmAuto] = useState(false)
+  const [archives, setArchives] = useState<ReturnType<typeof listTeamplayArchives>>([])
 
   useEffect(() => {
     mounted.current = true
@@ -462,6 +639,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
         setState(loaded.state)
         setError(loaded.error)
         setRecovered(loaded.recovered)
+        if (!preview) setArchives(listTeamplayArchives(scope))
         setLoading(false)
       })
       .catch((failure: unknown) => {
@@ -474,7 +652,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
       cancelled = true
       mounted.current = false
     }
-  }, [scope, reload])
+  }, [scope, reload, preview])
 
   async function commit(next: TeamplayState): Promise<boolean> {
     await saveTeamplay(scope, next, latest.current)
@@ -483,6 +661,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
       setState(next)
       setError(null)
       setConfirmAuto(false)
+      if (!preview) setArchives(listTeamplayArchives(scope))
     }
     return true
   }
@@ -526,6 +705,20 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
     }
   }
 
+  async function resumeArchive(id: string) {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await commit(readTeamplayArchive(scope, id))
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      busyRef.current = false
+      if (mounted.current) setBusy(false)
+    }
+  }
+
   function exportSave() {
     const url = URL.createObjectURL(
       new Blob([exportTeamplaySave(scope)], { type: 'application/json' })
@@ -540,21 +733,25 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
   const human = state?.contestants.find((player) => player.id === state.humanId)
   const pendingChoice =
     state &&
-    (humanBallotRequired(state) || ['nominationTies', 'capture', 'merge'].includes(state.phase))
+    (humanBallotRequired(state) ||
+      ['nominationTies', 'capture', 'merge'].includes(state.phase) ||
+      (individualDecision(state)?.actorId === state.humanId &&
+        (preview || state.phase !== 'tribunal')))
   const canContinue =
     state &&
-    [
-      'opening',
-      'teamResults',
-      'socialOne',
-      'ballots',
-      'nominations',
-      'socialTwo',
-      'nomineeResult',
-      'reserveResult',
-      'recap',
-    ].includes(state.phase) &&
-    !humanBallotRequired(state)
+    (canContinueIndividual(state) ||
+      ([
+        'opening',
+        'teamResults',
+        'socialOne',
+        'ballots',
+        'nominations',
+        'socialTwo',
+        'nomineeResult',
+        'reserveResult',
+        'recap',
+      ].includes(state.phase) &&
+        !humanBallotRequired(state)))
   const immuneId =
     state && !['reserveResult', 'capture', 'merge', 'recap', 'fusion'].includes(state.phase)
       ? state.teamResults[0]?.tribeId
@@ -638,11 +835,16 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
         ) : (
           <>
             <p className="teamplay-count">
-              {t('teamplay.cycle', {
-                cycle: state.cycle,
-                active: activeIds(state).length,
-                contenders: 16 - state.eliminated.length,
-              })}
+              {state.stage === 'individual'
+                ? t('teamplay.individual.report', {
+                    count: state.individualIds.length,
+                    members: state.jurors.length,
+                  })
+                : t('teamplay.cycle', {
+                    cycle: state.cycle,
+                    active: activeIds(state).length,
+                    contenders: 16 - state.eliminated.length,
+                  })}
             </p>
             <section
               className="teamplay-panel teamplay-event"
@@ -720,12 +922,19 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
                 </section>
               )}
               {state.individualIds.length > 0 && (
-                <section className="teamplay-tribe">
-                  <h3>{t('teamplay.phase.fusion')}</h3>
+                <section className="teamplay-tribe teamplay-individual-roster">
+                  <h3>{t('teamplay.individual.roster')}</h3>
                   <ul>
-                    {state.individualIds.map((id) => (
-                      <li key={id}>{nameOf(state, id)}</li>
-                    ))}
+                    {state.individualIds.map((id) => {
+                      const player = state.contestants.find((entry) => entry.id === id)!
+                      return (
+                        <li key={id}>
+                          <img src={player.avatar} alt="" loading="lazy" />
+                          {player.name}
+                          {id === state.humanId ? ` · ${t('teamplay.you')}` : ''}
+                        </li>
+                      )
+                    })}
                   </ul>
                 </section>
               )}
@@ -838,6 +1047,33 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
             <button onClick={() => setRestart(false)}>{t('teamplay.cancel')}</button>
           </section>
         )}
+        {archives.some((entry) => entry.id !== state?.id) && (
+          <details className="teamplay-panel">
+            <summary>{t('teamplay.archive')}</summary>
+            <ul>
+              {archives
+                .filter((entry) => entry.id !== state?.id)
+                .map((entry) => (
+                  <li key={entry.id} className="teamplay-result">
+                    <p>
+                      {entry.champion
+                        ? t('teamplay.archiveChampion', {
+                            contestant: entry.contestant,
+                            champion: entry.champion,
+                          })
+                        : t('teamplay.archivePending', {
+                            contestant: entry.contestant,
+                            stage: t(`teamplay.phase.${entry.phase}`),
+                          })}
+                    </p>
+                    <button disabled={busy} onClick={() => void resumeArchive(entry.id)}>
+                      {t(entry.champion ? 'teamplay.archiveReview' : 'teamplay.archiveResume')}
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </details>
+        )}
       </div>
       {state && (
         <footer className="teamplay-footer">
@@ -851,7 +1087,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
           </p>
           {canContinue && (
             <button disabled={busy || !!error} onClick={() => void act({ type: 'continue' })}>
-              {t('teamplay.continue')}
+              {t(state.phase === 'tribunal' ? 'teamplay.individual.reveal' : 'teamplay.continue')}
             </button>
           )}
         </footer>
