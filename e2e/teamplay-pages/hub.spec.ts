@@ -16,14 +16,24 @@ test('the Pages intro hub starts and resumes a real game under the repository ba
       page.locator('.teamplay-intro-hero img').evaluate((img: HTMLImageElement) => img.naturalWidth)
     )
     .toBeGreaterThan(0)
-  await page.getByText('How Teamplay works', { exact: true }).click()
+  await page.screenshot({
+    animations: 'disabled',
+    path: test.info().outputPath('teamplay-pages-intro-hub.png'),
+  })
+  await page.getByRole('button', { name: 'How Teamplay works' }).click()
   await expect(page.getByText('Three tribes of five.', { exact: false })).toBeVisible()
-  await page.screenshot({ path: test.info().outputPath('teamplay-pages-intro-hub.png') })
+  await page.getByRole('button', { name: 'Home' }).click()
+  await page.getByRole('button', { name: 'Meet the cast' }).click()
+  await page
+    .getByRole('group', { name: 'Your contestant' })
+    .getByRole('button', { name: 'Finn' })
+    .click()
+  await expect(page.getByRole('button', { name: 'Finn' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Home' }).click()
   await page.getByRole('link', { name: 'Play Teamplay' }).click()
-  await page.getByLabel('Your contestant').selectOption('finn')
   await page.getByRole('button', { name: 'Create season', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Meet your tribes' })).toBeVisible()
-  await page.getByRole('button', { name: 'Continue', exact: true }).click()
+  await page.getByRole('button', { name: 'Enter the competition' }).click()
   await expect(page.getByRole('heading', { name: 'Team competition' })).toBeVisible()
   await page.getByRole('button', { name: 'Play the 30-second race' }).click()
   await expect(page.getByRole('button', { name: 'Tap', exact: true })).toBeVisible()

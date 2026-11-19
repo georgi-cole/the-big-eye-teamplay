@@ -1,15 +1,35 @@
+import { useId } from 'react'
 import { useI18n } from '../i18n'
+import { joinPublicAssetPath } from '../utils/avatar'
 import { currentAttempt } from './engine'
 import { teamplayEmblem, tribeAccent } from './presentationTheme'
 import { tribeOf } from './social'
 import type { TeamplayPhase, TeamplayState } from './types'
+
+const icons = {
+  hub: 'intro_hub_icons/campaign.svg',
+  tribes: 'side_utilities_button/housemates_v2.svg',
+  social: 'side_utilities_button/social_v2.svg',
+  events: 'side_utilities_button/news_v2.svg',
+  season: 'side_utilities_button/settings_v2.svg',
+  play: 'intro_hub_icons/play.svg',
+  rules: 'intro_hub_icons/rules.svg',
+  archive: 'intro_hub_icons/hall_of_fame.svg',
+} as const
+
+export function TeamplayIcon({ name }: { name: keyof typeof icons }) {
+  return <img className="tp-icon" src={joinPublicAssetPath(`assets/${icons[name]}`)} alt="" />
+}
 
 export function TeamplayIntroHero() {
   const { t } = useI18n()
   return (
     <div className="teamplay-intro-hero">
       <img src={teamplayEmblem} alt="" />
-      <h1>{t('teamplay.title')}</h1>
+      <h1 aria-label={t('teamplay.title')}>
+        <small>{t('teamplay.brand')}</small>
+        {t('teamplay.mode')}
+      </h1>
       <p>{t('teamplay.introPitch')}</p>
     </div>
   )
@@ -18,12 +38,12 @@ export function TeamplayIntroHero() {
 export function TeamplayRules() {
   const { t } = useI18n()
   return (
-    <details>
-      <summary>{t('teamplay.rules')}</summary>
+    <div className="tp-rulebook">
       <p>{t('teamplay.openingHelp')}</p>
       <p>{t('teamplay.milestoneEight')}</p>
       <p>{t('teamplay.milestoneFour')}</p>
-    </details>
+      <p>{t('teamplay.tieHelp')}</p>
+    </div>
   )
 }
 
@@ -32,18 +52,29 @@ export function ContestantPortrait({
   id,
   detail,
   score,
+  mark,
+  winner,
 }: {
   state: TeamplayState
   id: string
   detail?: string
   score?: number
+  mark?: string
+  winner?: boolean
 }) {
   const { t, formatNumber } = useI18n()
   const player = state.contestants.find((entry) => entry.id === id)!
   const tribe = tribeOf(state, id)
   return (
-    <span className="teamplay-portrait" style={tribeAccent(tribe ?? undefined)}>
-      <img src={player.avatar} alt="" />
+    <span
+      className="teamplay-portrait"
+      data-winner={winner || undefined}
+      style={tribeAccent(tribe)}
+    >
+      <span className="tp-portrait-art">
+        <img src={player.avatar} alt="" />
+        {mark && <span className="tp-portrait-mark">{mark}</span>}
+      </span>
       <span className="teamplay-portrait-caption">
         <strong>{player.name}</strong>
         {id === state.humanId && <small>{t('teamplay.you')}</small>}
@@ -51,6 +82,47 @@ export function ContestantPortrait({
         {score !== undefined && <b className="teamplay-portrait-score">{formatNumber(score)}</b>}
       </span>
     </span>
+  )
+}
+
+export function AvatarPicker({
+  state,
+  candidates,
+  label,
+  selected,
+  onPick,
+  disabled,
+  multiple = false,
+  limit = candidates.length,
+}: {
+  state: TeamplayState
+  candidates: string[]
+  label: string
+  selected: string[]
+  onPick: (id: string) => void
+  disabled?: boolean
+  multiple?: boolean
+  limit?: number
+}) {
+  const group = useId()
+  return (
+    <fieldset className="tp-avatar-picker" disabled={disabled}>
+      <legend>{label}</legend>
+      <div className="tp-avatar-options">
+        {candidates.map((id) => (
+          <label key={id}>
+            <input
+              type={multiple ? 'checkbox' : 'radio'}
+              name={group}
+              checked={selected.includes(id)}
+              disabled={multiple && !selected.includes(id) && selected.length >= limit}
+              onChange={() => onPick(id)}
+            />
+            <ContestantPortrait state={state} id={id} />
+          </label>
+        ))}
+      </div>
+    </fieldset>
   )
 }
 
@@ -83,23 +155,6 @@ export function CyclePath({ phase }: { phase: TeamplayPhase }) {
   )
 }
 
-export function TribeFlags({ state }: { state: TeamplayState }) {
-  const { t } = useI18n()
-  const home = tribeOf(state, state.humanId)
-  if (!state.tribes.length) return null
-  return (
-    <ul className="teamplay-flags" aria-label={t('teamplay.tribes')}>
-      {state.tribes.map((tribe) => (
-        <li key={tribe.id} style={tribeAccent(tribe)}>
-          <strong>{tribe.name}</strong>
-          <span>{t('teamplay.memberCount', { count: tribe.members.length })}</span>
-          {home?.id === tribe.id && <small>{t('teamplay.yourTribe')}</small>}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 export function DuelMatchup({ state, scores }: { state: TeamplayState; scores?: boolean }) {
   const { t } = useI18n()
   const attempt = currentAttempt(state)!
@@ -119,6 +174,7 @@ export function DuelMatchup({ state, scores }: { state: TeamplayState; scores?: 
             id={id}
             detail={scores && id === attempt.winnerId ? t('teamplay.duelWinner') : role}
             score={scores ? attempt.scores[id] : undefined}
+            winner={scores && id === attempt.winnerId}
           />
         )
       })}

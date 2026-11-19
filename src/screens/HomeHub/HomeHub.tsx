@@ -855,7 +855,7 @@ export default function HomeHub({ classicOnly = false }: { classicOnly?: boolean
           label: t('teamplay.play'),
           icon: <HomeHubButtonIcon name="campaign" />,
           variant: 'primary_large' as const,
-          onClick: () => navigate('/teamplay'),
+          onClick: () => navigate('/teamplay-hub'),
         },
         ...playSelectionButtons
           .filter(({ key }) => ['classic', 'continue-last', 'active-season', 'back'].includes(key))

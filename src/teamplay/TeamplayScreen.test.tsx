@@ -53,7 +53,7 @@ describe('Teamplay saved outcome presentation', () => {
       </StrictMode>
     )
     await screen.findByRole('heading', { name: 'Meet your tribes' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enter the competition' }))
     await screen.findByRole('heading', { name: 'Team competition' })
     await act(async () => obsolete(opening))
     expect(screen.getByRole('heading', { name: 'Team competition' })).toBeVisible()
@@ -101,8 +101,8 @@ describe('Teamplay saved outcome presentation', () => {
       </MemoryRouter>
     )
     await screen.findByRole('heading', { name: 'Meet your tribes' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enter the competition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enter the competition' }))
     expect(saveTeamplay).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('heading', { name: 'Team competition' })).toBeNull()
     await act(async () => complete())
@@ -117,7 +117,7 @@ describe('Teamplay saved outcome presentation', () => {
       </MemoryRouter>
     )
     await screen.findByRole('heading', { name: 'Meet your tribes' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enter the competition' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Disk full'))
     expect(screen.getByRole('heading', { name: 'Meet your tribes' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'Team competition' })).toBeNull()
