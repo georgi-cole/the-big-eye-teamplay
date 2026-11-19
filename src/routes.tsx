@@ -7,7 +7,7 @@
  *   3. Add a <Route> inside the AppShell layout route
  *   That's it — no other files need changing.
  */
-import { createHashRouter, Navigate } from 'react-router'
+import { createHashRouter, Navigate, type RouteObject } from 'react-router'
 
 import AppShell from './components/layout/AppShell'
 import RouteErrorBoundary from './components/RouteErrorBoundary/RouteErrorBoundary'
@@ -23,6 +23,7 @@ const lazy = lazyWithChunkRecovery
 
 const GameRoute = lazy(() => import('./routes/GameRoute'))
 const TeamplayEntry = lazy(() => import('./teamplay/TeamplayScreen'))
+const TeamplayIntroHub = lazy(() => import('./teamplay/TeamplayIntroHub'))
 const ConfessionalRoute = lazy(() => import('./screens/DiaryRoom/ConfessionalRoute'))
 const Houseguests = lazy(() => import('./screens/Houseguests/Houseguests'))
 const Profile = lazy(() => import('./screens/Profile/Profile'))
@@ -144,8 +145,14 @@ const MinigameTurnDemos = import.meta.env.DEV
   ? lazy(() => import('./screens/MinigameTurnDemos/MinigameTurnDemos'))
   : null
 
-export const router = createHashRouter([
-  { path: '/teamplay', element: load(<TeamplayEntry />), errorElement: <RouteErrorBoundary /> },
+const teamplayRoute = {
+  path: '/teamplay',
+  element: load(<TeamplayEntry />),
+  errorElement: <RouteErrorBoundary />,
+} satisfies RouteObject
+
+const appRoutes: RouteObject[] = [
+  teamplayRoute,
   ...(twistsQaEnabled
     ? [
         {
@@ -460,4 +467,14 @@ export const router = createHashRouter([
       { path: '*', element: <NotFound /> },
     ],
   },
-])
+]
+
+export const router = createHashRouter(
+  import.meta.env.VITE_TEAMPLAY_REVIEW === 'true'
+    ? [
+        { path: '/', element: load(<TeamplayIntroHub />), errorElement: <RouteErrorBoundary /> },
+        teamplayRoute,
+        { path: '*', element: <NotFound /> },
+      ]
+    : appRoutes
+)

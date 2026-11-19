@@ -21,13 +21,15 @@ const types: Record<string, string> = {
   '.mp4': 'video/mp4',
 }
 
-export async function serveBundle(page: Page): Promise<void> {
+export async function serveBundle(page: Page, mountPath = ''): Promise<void> {
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url())
     if (url.origin !== bundleOrigin) return route.abort()
+    if (!url.pathname.startsWith(`${mountPath}/`)) return route.fulfill({ status: 404 })
+    const pathname = url.pathname.slice(mountPath.length)
     const file = resolve(
       root,
-      '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname))
+      '.' + (pathname === '/' ? '/index.html' : decodeURIComponent(pathname))
     )
     if (!file.startsWith(root + sep)) return route.fulfill({ status: 403 })
     try {

@@ -5,6 +5,7 @@ import { getAll } from '../data/houseguests'
 import { useI18n, type TranslationKey } from '../i18n'
 import { normalizeActionCosts } from '../social/smExecNormalize'
 import { tallyVotes } from '../utils/juryUtils'
+import { resolveAvatar } from '../utils/avatar'
 import {
   applyTeamplayCommand,
   createTeamplay,
@@ -38,6 +39,15 @@ import {
 import { createTeamplayPreview } from './preview'
 import TeamplayRace from './TeamplayRace'
 import TribeSocialPanel from './TribeSocialPanel'
+import {
+  ContestantPortrait,
+  CyclePath,
+  DuelMatchup,
+  TeamplayIntroHero,
+  TeamplayRules,
+  TribeFlags,
+} from './TeamplayPresentation'
+import { teamplayEmblem, tribeAccent } from './presentationTheme'
 import type { TeamplayAction, TeamplayPhase, TeamplayState } from './types'
 import './teamplay.css'
 
@@ -46,6 +56,7 @@ const nameOf = (state: TeamplayState, id: string | null) =>
   state.contestants.find((player) => player.id === id)?.name ?? '—'
 const previewPhases: TeamplayPhase[] = [
   'opening',
+  'teamCompetition',
   'teamResults',
   'socialOne',
   'ballots',
@@ -129,7 +140,9 @@ function SocialPanel({ state, act, busy }: { state: TeamplayState; act: Act; bus
               ? 'teamplay.individual.social'
               : 'teamplay.individual.spectator'
             : targets.length
-              ? 'teamplay.socialHelp'
+              ? state.phase === 'socialTwo'
+                ? 'teamplay.socialAfterVote'
+                : 'teamplay.socialHelp'
               : 'teamplay.noSocial'
         )}
       </p>
@@ -223,16 +236,25 @@ function CompetitionPanel({ state, act, busy }: { state: TeamplayState; act: Act
   const individual = isIndividualCompetition(attempt.kind)
   return (
     <>
+      {!individual && attempt.kind !== 'team' && <DuelMatchup state={state} />}
+      {!individual && attempt.kind === 'team' && (
+        <div className="teamplay-race-banner">
+          <strong>{t('teamplay.quickTap')}</strong>
+          <img src={teamplayEmblem} alt="" />
+        </div>
+      )}
       <p>
         {t(
           individual
             ? 'teamplay.individual.race'
             : attempt.kind === 'team'
               ? 'teamplay.competitionHelp'
-              : 'teamplay.tieHelp'
+              : attempt.kind === 'reserve'
+                ? 'teamplay.reserveStakes'
+                : 'teamplay.nomineeStakes'
         )}
       </p>
-      {attempt.kind !== 'team' && (
+      {individual && (
         <p className="teamplay-duel-names">
           {attempt.participants.map((id) => nameOf(state, id)).join(' · ')}
         </p>
@@ -273,6 +295,13 @@ function CompetitionPanel({ state, act, busy }: { state: TeamplayState; act: Act
           {t('teamplay.spectator')}
         </button>
       )}
+      {!individual && attempt.kind !== 'team' && (
+        <details>
+          <summary>{t('teamplay.rules')}</summary>
+          <p>{t('teamplay.duelRace')}</p>
+          <p>{t('teamplay.tieHelp')}</p>
+        </details>
+      )}
     </>
   )
 }
@@ -286,20 +315,20 @@ function BallotPanel({ state, act, busy }: { state: TeamplayState; act: Act; bus
       <p>{t('teamplay.voteHelp')}</p>
       {humanBallotRequired(state) ? (
         <>
-          <label>
-            {t('teamplay.target')}
-            <select
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              disabled={busy}
-            >
-              {members.map((id) => (
-                <option key={id} value={id}>
-                  {nameOf(state, id)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <fieldset className="teamplay-ballot-grid" disabled={busy}>
+            <legend>{t('teamplay.target')}</legend>
+            {members.map((id) => (
+              <label key={id}>
+                <input
+                  type="radio"
+                  name="teamplay-ballot"
+                  checked={target === id}
+                  onChange={() => setTarget(id)}
+                />
+                <ContestantPortrait state={state} id={id} />
+              </label>
+            ))}
+          </fieldset>
           <button
             disabled={busy}
             onClick={() => void act({ type: 'vote', voterId: state.humanId, targetId: target })}
@@ -320,6 +349,7 @@ function DuelResult({ state, reserve }: { state: TeamplayState; reserve: boolean
   const winner = state.contestants.find((player) => player.id === result.winnerId)!
   return (
     <>
+      <DuelMatchup state={state} scores />
       <p>
         {reserve
           ? t('teamplay.reserveResult', {
@@ -331,14 +361,6 @@ function DuelResult({ state, reserve }: { state: TeamplayState; reserve: boolean
               challenger: nameOf(state, state.challengerId),
             })}
       </p>
-      <ul className="teamplay-result">
-        {result.participants.map((id) => (
-          <li key={id}>
-            {nameOf(state, id)}
-            <span>{result.scores[id]}</span>
-          </li>
-        ))}
-      </ul>
       {result.priorityFallback && (
         <p>{t('teamplay.priorityApplied', { name: winner.name, priority: winner.priority })}</p>
       )}
@@ -482,9 +504,8 @@ function Scene({ state, act, busy }: { state: TeamplayState; act: Act; busy: boo
     case 'opening':
       return (
         <>
-          <p>{t('teamplay.openingHelp')}</p>
-          <p>{t('teamplay.milestoneEight')}</p>
-          <p>{t('teamplay.milestoneFour')}</p>
+          <TribeFlags state={state} />
+          <TeamplayRules />
         </>
       )
     case 'teamCompetition':
@@ -496,29 +517,47 @@ function Scene({ state, act, busy }: { state: TeamplayState; act: Act; busy: boo
     case 'teamResults':
       return (
         <>
-          {state.teamResults.map((result, index) => (
-            <div className="teamplay-result" key={result.tribeId}>
-              <strong>
-                {index + 1}. {state.tribes.find((tribe) => tribe.id === result.tribeId)?.name}
-                {index === 0 ? ` · ${t('teamplay.immune')}` : ''}
-              </strong>
-              <p>
-                {t('teamplay.teamArithmetic', {
-                  total: result.total,
-                  count: result.divisor,
-                  mean: formatNumber(result.mean, { maximumFractionDigits: 2 }),
-                })}
-              </p>
-              <ul>
-                {result.members.map((id) => (
-                  <li key={id}>
-                    {nameOf(state, id)} <span>{currentAttempt(state)!.scores[id]}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          <p>{t('teamplay.rankingHelp')}</p>
+          {state.teamResults.map((result, index) => {
+            const tribe = state.tribes.find((entry) => entry.id === result.tribeId)!
+            return (
+              <div
+                className="teamplay-result teamplay-standing"
+                key={result.tribeId}
+                style={tribeAccent(tribe)}
+              >
+                <div className="teamplay-standing-head">
+                  <span>{index + 1}</span>
+                  <strong>{tribe.name}</strong>
+                  {index === 0 && <small>{t('teamplay.immune')}</small>}
+                  <b>{formatNumber(result.mean, { maximumFractionDigits: 2 })}</b>
+                </div>
+                <p>
+                  {t('teamplay.captain')} · {nameOf(state, tribe.captainId)}
+                </p>
+                <details>
+                  <summary>{t('teamplay.scoreBreakdown')}</summary>
+                  <p>
+                    {t('teamplay.teamArithmetic', {
+                      total: result.total,
+                      count: result.divisor,
+                      mean: formatNumber(result.mean, { maximumFractionDigits: 2 }),
+                    })}
+                  </p>
+                  <ul>
+                    {result.members.map((id) => (
+                      <li key={id}>
+                        {nameOf(state, id)} <span>{currentAttempt(state)!.scores[id]}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </div>
+            )
+          })}
+          <details>
+            <summary>{t('teamplay.rules')}</summary>
+            <p>{t('teamplay.rankingHelp')}</p>
+          </details>
         </>
       )
     case 'socialOne':
@@ -549,12 +588,34 @@ function Scene({ state, act, busy }: { state: TeamplayState; act: Act; busy: boo
     case 'nominations':
       return (
         <>
-          <p className="teamplay-duel-names">
-            {state.nominees.map((id) => nameOf(state, id)).join(' · ')}
-          </p>
-          {Object.entries(state.totals).map(([id, votes]) => (
-            <p key={id}>{t('teamplay.nominationTotal', { name: nameOf(state, id), votes })}</p>
-          ))}
+          <div className="teamplay-matchup" data-arena="nominations">
+            {state.nominees.map((id) => (
+              <ContestantPortrait
+                key={id}
+                state={state}
+                id={id}
+                detail={[
+                  tribeOf(state, id)?.name,
+                  state.totals[id] !== undefined &&
+                    t('teamplay.weightedVotes', { votes: state.totals[id] }),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              />
+            ))}
+          </div>
+          {Object.keys(state.totals).length > 0 && (
+            <details>
+              <summary>{t('teamplay.voteTotals')}</summary>
+              <ul className="teamplay-result">
+                {Object.entries(state.totals).map(([id, votes]) => (
+                  <li key={id}>
+                    {t('teamplay.nominationTotal', { name: nameOf(state, id), votes })}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {state.stage === 'twoTribes' && !Object.keys(state.totals).length && (
             <p>{t('teamplay.automaticPair')}</p>
           )}
@@ -630,6 +691,8 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
   const { t } = useI18n()
   const [state, setState] = useState<TeamplayState | null>(null)
   const latest = useRef<TeamplayState | null>(null)
+  const scroll = useRef<HTMLDivElement>(null)
+  const sceneHeading = useRef<HTMLHeadingElement>(null)
   const busyRef = useRef(false)
   const mounted = useRef(true)
   const [busy, setBusy] = useState(false)
@@ -639,10 +702,19 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
   const [restart, setRestart] = useState(false)
   const [reload, setReload] = useState(0)
   const [humanId, setHumanId] = useState('finn')
-  const [scenario, setScenario] = useState<TeamplayPhase>('opening')
+  const [scenario, setScenario] = useState<TeamplayPhase | 'intro' | ''>('')
   const [confirmAuto, setConfirmAuto] = useState(false)
   const [socialNotice, setSocialNotice] = useState<string | null>(null)
   const [archives, setArchives] = useState<ReturnType<typeof listTeamplayArchives>>([])
+  const showIntro = preview && scenario === 'intro'
+  const sceneKey =
+    state && !showIntro ? `${state.id}:${state.cycle}:${state.phase}:${state.endgame?.step}` : null
+
+  useEffect(() => {
+    if (!sceneKey) return
+    if (scroll.current) scroll.current.scrollTop = 0
+    sceneHeading.current?.focus({ preventScroll: true })
+  }, [sceneKey])
 
   useEffect(() => {
     mounted.current = true
@@ -721,6 +793,7 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
         : createTeamplay(crypto.getRandomValues(new Uint32Array(1))[0], humanId)
       await commit(next)
       setRestart(false)
+      if (!scene) setScenario('')
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     } finally {
@@ -780,43 +853,55 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
     state && !['reserveResult', 'capture', 'merge', 'recap', 'fusion'].includes(state.phase)
       ? state.teamResults[0]?.tribeId
       : undefined
+  const ownTribe = state && tribeOf(state, state.humanId)
+  const contestant = getAll().find((entry) => entry.id === humanId)!
 
   return (
     <main className="teamplay-screen">
       <header className="teamplay-header">
-        <Link to="/">{t('teamplay.home')}</Link>
-        <span>{t(preview ? 'teamplay.preview' : 'teamplay.development')}</span>
-        <span role="status">{busy ? t('teamplay.saving') : t('teamplay.saved')}</span>
-      </header>
-      <div className="teamplay-scroll">
-        <h1>{t('teamplay.title')}</h1>
-        <p className="teamplay-subtitle">{t('teamplay.scope')}</p>
+        <div className="teamplay-masthead">
+          <Link to="/">
+            <span aria-hidden="true">‹</span> {t('teamplay.home')}
+          </Link>
+          {state && !showIntro && <span className="teamplay-wordmark">{t('teamplay.title')}</span>}
+          {state && !showIntro && (
+            <span role="status">{busy ? t('teamplay.saving') : t('teamplay.saved')}</span>
+          )}
+        </div>
         {preview && (
-          <section className="teamplay-panel">
-            <p>{t('teamplay.previewHelp')}</p>
-            <label>
-              {t('teamplay.scenario')}
-              <select
-                value={scenario}
-                disabled={busy || loading}
-                onChange={(event) => {
-                  const phase = event.target.value as TeamplayPhase
-                  setScenario(phase)
-                  void create(phase)
-                }}
-              >
-                {previewPhases.map((phase) => (
-                  <option key={phase} value={phase}>
-                    {t(`teamplay.phase.${phase}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button disabled={busy || loading} onClick={() => void create(scenario)}>
-              {t('teamplay.confirmChoice')}
+          <section className="teamplay-preview-controls" aria-label={t('teamplay.preview')}>
+            <select
+              aria-label={t('teamplay.scenario')}
+              value={scenario}
+              disabled={busy || loading}
+              onChange={(event) => {
+                const phase = event.target.value as TeamplayPhase | 'intro'
+                setScenario(phase)
+                if (phase !== 'intro') void create(phase)
+              }}
+            >
+              <option value="" disabled>
+                {t('teamplay.scenario')}
+              </option>
+              <option value="intro">{t('teamplay.introScene')}</option>
+              {previewPhases.map((phase) => (
+                <option key={phase} value={phase}>
+                  {t(`teamplay.phase.${phase}`)}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={busy || loading || !scenario || scenario === 'intro'}
+              onClick={() => {
+                if (scenario && scenario !== 'intro') void create(scenario)
+              }}
+            >
+              {t('teamplay.resetScene')}
             </button>
           </section>
         )}
+      </header>
+      <div className="teamplay-scroll" ref={scroll}>
         {recovered && <p role="status">{t('teamplay.recovered')}</p>}
         {error && (
           <section className="teamplay-error" role="alert">
@@ -836,25 +921,36 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
         )}
         {loading ? (
           <p>{t('teamplay.loading')}</p>
-        ) : !state ? (
-          <section className="teamplay-panel">
-            <label>
-              {t('teamplay.chooseContestant')}
-              <select
-                value={humanId}
-                onChange={(event) => setHumanId(event.target.value)}
-                disabled={busy}
-              >
-                {getAll().map((player) => (
-                  <option value={player.id} key={player.id}>
-                    {player.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button disabled={busy} onClick={() => (error ? setRestart(true) : void create())}>
-              {t(error ? 'teamplay.newSeason' : 'teamplay.begin')}
-            </button>
+        ) : !state || showIntro ? (
+          <section className="teamplay-intro">
+            <TeamplayIntroHero />
+            <div className="teamplay-intro-setup">
+              <div className="teamplay-intro-contestant">
+                <img
+                  src={resolveAvatar({ ...contestant, avatar: contestant.avatar ?? '' })}
+                  alt=""
+                />
+                <label>
+                  {t('teamplay.chooseContestant')}
+                  <select
+                    value={humanId}
+                    onChange={(event) => setHumanId(event.target.value)}
+                    disabled={busy}
+                  >
+                    {getAll().map((player) => (
+                      <option value={player.id} key={player.id}>
+                        {player.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button disabled={busy} onClick={() => (error ? setRestart(true) : void create())}>
+                {t(error ? 'teamplay.newSeason' : 'teamplay.begin')}{' '}
+                <span aria-hidden="true">→</span>
+              </button>
+              <TeamplayRules />
+            </div>
           </section>
         ) : (
           <>
@@ -870,109 +966,148 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
                     contenders: 16 - state.eliminated.length,
                   })}
             </p>
-            <section
-              className="teamplay-panel teamplay-event"
-              aria-label={t(`teamplay.phase.${state.phase}`)}
-            >
-              <h2>{t(`teamplay.phase.${state.phase}`)}</h2>
-              {state.reserveId === state.humanId && state.phase !== 'reserveDuel' && (
-                <button
-                  disabled={busy || !!error}
-                  onClick={() => void act({ type: 'skip_to_defence' })}
-                >
-                  {t('teamplay.skipDefence')}
-                </button>
-              )}
-              <Scene state={state} act={act} busy={busy || !!error} />
-              {socialNotice && (
-                <p className="teamplay-note" role="status">
-                  {socialNotice}
-                </p>
-              )}
-              {pendingChoice && (
-                <details>
-                  <summary>{t('teamplay.autoChoice')}</summary>
-                  <p>{t('teamplay.autoChoiceHelp')}</p>
-                  <button disabled={busy || !!error} onClick={() => setConfirmAuto(true)}>
-                    {t('teamplay.autoChoice')}
+            <CyclePath phase={state.phase} />
+            <div className="teamplay-board">
+              <section
+                className="teamplay-panel teamplay-event"
+                data-phase={state.phase}
+                aria-label={t(`teamplay.phase.${state.phase}`)}
+              >
+                <h2 ref={sceneHeading} tabIndex={-1}>
+                  {t(`teamplay.phase.${state.phase}`)}
+                </h2>
+                {state.reserveId === state.humanId && state.phase !== 'reserveDuel' && (
+                  <button
+                    disabled={busy || !!error}
+                    onClick={() => void act({ type: 'skip_to_defence' })}
+                  >
+                    {t('teamplay.skipDefence')}
                   </button>
-                  {confirmAuto && (
-                    <button disabled={busy} onClick={() => void act({ type: 'auto_choice' })}>
-                      {t('teamplay.confirmChoice')}
-                    </button>
-                  )}
-                </details>
-              )}
-            </section>
-            <div className="teamplay-roster" aria-label={t('teamplay.phase.opening')}>
-              {state.tribes.map((tribe) => (
-                <section
-                  className="teamplay-tribe"
-                  key={tribe.id}
-                  style={{ borderColor: tribe.color }}
-                >
-                  <h3>
-                    {tribe.name}{' '}
-                    <span>
-                      {tribe.members.length}
-                      {immuneId === tribe.id ? ` · ${t('teamplay.immune')}` : ''}
-                    </span>
-                  </h3>
-                  <ul>
-                    {tribe.members.map((id) => {
-                      const player = state.contestants.find((entry) => entry.id === id)!
-                      return (
-                        <li key={id}>
-                          <img src={player.avatar} alt="" loading="lazy" />
-                          <span>
-                            {player.name}
-                            {id === state.humanId ? ` · ${t('teamplay.you')}` : ''}
-                            <small>
-                              {tribe.captainId === id ? t('teamplay.captain') : ''}
-                              {state.nominees.includes(id) &&
-                              !['reserveResult', 'capture', 'merge', 'recap'].includes(state.phase)
-                                ? ` ${t('teamplay.nominee')}`
-                                : ''}
-                            </small>
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
-              ))}
-              {state.reserveId && (
-                <section className="teamplay-tribe teamplay-reserve">
-                  <h3>{t('teamplay.reserve')}</h3>
-                  <p>
-                    {nameOf(state, state.reserveId)}
-                    {state.reserveId === state.humanId ? ` · ${t('teamplay.you')}` : ''}
+                )}
+                <Scene state={state} act={act} busy={busy || !!error} />
+                {socialNotice && (
+                  <p className="teamplay-note" role="status">
+                    {socialNotice}
                   </p>
-                </section>
-              )}
-              {state.individualIds.length > 0 && (
-                <section className="teamplay-tribe teamplay-individual-roster">
-                  <h3>{t('teamplay.individual.roster')}</h3>
-                  <ul>
-                    {state.individualIds.map((id) => {
-                      const player = state.contestants.find((entry) => entry.id === id)!
-                      return (
-                        <li key={id}>
-                          <img src={player.avatar} alt="" loading="lazy" />
-                          {player.name}
-                          {id === state.humanId ? ` · ${t('teamplay.you')}` : ''}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
-              )}
-              {state.merge?.pool.length ? (
-                <section className="teamplay-tribe">
-                  <h3>{t('teamplay.phase.merge')}</h3>
-                  <p>{state.merge.pool.map((id) => nameOf(state, id)).join(' · ')}</p>
-                </section>
-              ) : null}
+                )}
+                {pendingChoice && (
+                  <details>
+                    <summary>{t('teamplay.autoChoice')}</summary>
+                    <p>{t('teamplay.autoChoiceHelp')}</p>
+                    <button disabled={busy || !!error} onClick={() => setConfirmAuto(true)}>
+                      {t('teamplay.autoChoice')}
+                    </button>
+                    {confirmAuto && (
+                      <button disabled={busy} onClick={() => void act({ type: 'auto_choice' })}>
+                        {t('teamplay.confirmChoice')}
+                      </button>
+                    )}
+                  </details>
+                )}
+              </section>
+              <aside className="teamplay-cast">
+                {ownTribe && (
+                  <section
+                    className="teamplay-panel teamplay-home-tribe"
+                    style={tribeAccent(ownTribe)}
+                  >
+                    <h3>
+                      {ownTribe.name} <span>{t('teamplay.yourTribe')}</span>
+                    </h3>
+                    <div className="teamplay-home-lineup">
+                      {ownTribe.members.map((id) => (
+                        <ContestantPortrait
+                          key={id}
+                          state={state}
+                          id={id}
+                          detail={ownTribe.captainId === id ? t('teamplay.captain') : undefined}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )}
+                {state.reserveId && (
+                  <div className="teamplay-panel teamplay-reserve-summary">
+                    <img
+                      src={state.contestants.find((entry) => entry.id === state.reserveId)!.avatar}
+                      alt=""
+                    />
+                    <div>
+                      <small>{t('teamplay.reserve')}</small>
+                      <strong>
+                        {nameOf(state, state.reserveId)}
+                        {state.reserveId === state.humanId ? ` · ${t('teamplay.you')}` : ''}
+                      </strong>
+                    </div>
+                  </div>
+                )}
+                <details className="teamplay-panel">
+                  <summary>{t('teamplay.cast')}</summary>
+                  <div className="teamplay-roster">
+                    {state.tribes.map((tribe) => (
+                      <section
+                        className="teamplay-tribe"
+                        key={tribe.id}
+                        style={{ borderColor: tribe.color }}
+                      >
+                        <h3>
+                          {tribe.name}{' '}
+                          <span>
+                            {tribe.members.length}
+                            {immuneId === tribe.id ? ` · ${t('teamplay.immune')}` : ''}
+                          </span>
+                        </h3>
+                        <ul>
+                          {tribe.members.map((id) => {
+                            const player = state.contestants.find((entry) => entry.id === id)!
+                            return (
+                              <li key={id}>
+                                <img src={player.avatar} alt="" loading="lazy" />
+                                <span>
+                                  {player.name}
+                                  {id === state.humanId ? ` · ${t('teamplay.you')}` : ''}
+                                  <small>
+                                    {tribe.captainId === id ? t('teamplay.captain') : ''}
+                                    {state.nominees.includes(id) &&
+                                    !['reserveResult', 'capture', 'merge', 'recap'].includes(
+                                      state.phase
+                                    )
+                                      ? ` ${t('teamplay.nominee')}`
+                                      : ''}
+                                  </small>
+                                </span>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </section>
+                    ))}
+                    {state.individualIds.length > 0 && (
+                      <section className="teamplay-tribe teamplay-individual-roster">
+                        <h3>{t('teamplay.individual.roster')}</h3>
+                        <ul>
+                          {state.individualIds.map((id) => {
+                            const player = state.contestants.find((entry) => entry.id === id)!
+                            return (
+                              <li key={id}>
+                                <img src={player.avatar} alt="" loading="lazy" />
+                                {player.name}
+                                {id === state.humanId ? ` · ${t('teamplay.you')}` : ''}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </section>
+                    )}
+                    {state.merge?.pool.length ? (
+                      <section className="teamplay-tribe">
+                        <h3>{t('teamplay.phase.merge')}</h3>
+                        <p>{state.merge.pool.map((id) => nameOf(state, id)).join(' · ')}</p>
+                      </section>
+                    ) : null}
+                  </div>
+                </details>
+              </aside>
             </div>
             <details className="teamplay-panel">
               <summary>{t('teamplay.priority', { priority: human!.priority })}</summary>
@@ -1103,21 +1238,24 @@ function TeamplayScreen({ scope, preview }: { scope: string; preview: boolean })
           </details>
         )}
       </div>
-      {state && (
+      {state && !showIntro && (
         <footer className="teamplay-footer">
-          <p>
-            {t('teamplay.bank', { ...human!.bank })}
-            {state.reserveId === state.humanId
-              ? ` · ${t('teamplay.reserve')}`
-              : state.eliminated.includes(state.humanId)
-                ? ` · ${t('teamplay.eliminated')}`
-                : ''}
-          </p>
-          {canContinue && (
-            <button disabled={busy || !!error} onClick={() => void act({ type: 'continue' })}>
-              {t(state.phase === 'tribunal' ? 'teamplay.individual.reveal' : 'teamplay.continue')}
-            </button>
-          )}
+          <div className="teamplay-footer-inner">
+            <p>
+              {t('teamplay.bank', { ...human!.bank })}
+              {state.reserveId === state.humanId
+                ? ` · ${t('teamplay.reserve')}`
+                : state.eliminated.includes(state.humanId)
+                  ? ` · ${t('teamplay.eliminated')}`
+                  : ''}
+            </p>
+            {canContinue && (
+              <button disabled={busy || !!error} onClick={() => void act({ type: 'continue' })}>
+                {t(state.phase === 'tribunal' ? 'teamplay.individual.reveal' : 'teamplay.continue')}{' '}
+                <span aria-hidden="true">→</span>
+              </button>
+            )}
+          </div>
         </footer>
       )}
     </main>
